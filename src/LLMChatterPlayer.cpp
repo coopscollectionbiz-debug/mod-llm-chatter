@@ -39,47 +39,104 @@
 #include <string>
 #include <vector>
 
-void EnsureBotInGeneralChannel(
-    Player* bot)
+Channel* EnsureBotInChatChannel(
+    Player* bot, uint32 channelId)
 {
     if (!bot || !bot->IsInWorld())
-        return;
-
-    uint32 zoneId = bot->GetZoneId();
-    AreaTableEntry const* area =
-        sAreaTableStore.LookupEntry(zoneId);
-    if (!area)
-        return;
-
-    uint8 locale = sWorld->GetDefaultDbcLocale();
-    char const* n = area->area_name[locale];
-    std::string zoneName = n ? n : "";
-    if (zoneName.empty())
-    {
-        n = area->area_name[LOCALE_enUS];
-        zoneName = n ? n : "";
-    }
-    if (zoneName.empty())
-        return;
+        return nullptr;
 
     ChatChannelsEntry const* chEntry =
-        sChatChannelsStore.LookupEntry(
-            ChatChannelId::GENERAL);
+        sChatChannelsStore.LookupEntry(channelId);
     if (!chEntry)
-        return;
+        return nullptr;
 
-    char nameBuf[100];
-    std::snprintf(
-        nameBuf,
-        sizeof(nameBuf),
-        chEntry->pattern[locale],
-        zoneName.c_str());
-    std::string newChanName(nameBuf);
+    uint8 locale = sWorld->GetDefaultDbcLocale();
+
+    char const* pattern = chEntry->pattern[locale];
+    if (!pattern || !*pattern)
+        pattern = chEntry->pattern[LOCALE_enUS];
+    if (!pattern || !*pattern)
+        return nullptr;
+
+    std::string newChanName;
+
+    if (channelId == ChatChannelId::GENERAL
+        || channelId == ChatChannelId::LOCAL_DEFENSE)
+    {
+        AreaTableEntry const* area =
+            sAreaTableStore.LookupEntry(
+                bot->GetZoneId());
+        if (!area)
+            return nullptr;
+
+        char const* n = area->area_name[locale];
+        std::string zoneName = n ? n : "";
+        if (zoneName.empty())
+        {
+            n = area->area_name[LOCALE_enUS];
+            zoneName = n ? n : "";
+        }
+        if (zoneName.empty())
+            return nullptr;
+
+        char nameBuf[100];
+        std::snprintf(
+            nameBuf,
+            sizeof(nameBuf),
+            pattern,
+            zoneName.c_str());
+
+        newChanName = nameBuf;
+    }
+    else if (channelId == ChatChannelId::TRADE
+        || channelId
+            == ChatChannelId::GUILD_RECRUITMENT)
+    {
+        AreaTableEntry const* cityArea =
+            sAreaTableStore.LookupEntry(3459);
+        if (!cityArea)
+            return nullptr;
+
+        char const* n =
+            cityArea->area_name[locale];
+        std::string cityName = n ? n : "";
+        if (cityName.empty())
+        {
+            n = cityArea->area_name[LOCALE_enUS];
+            cityName = n ? n : "";
+        }
+        if (cityName.empty())
+            return nullptr;
+
+        char nameBuf[100];
+        std::snprintf(
+            nameBuf,
+            sizeof(nameBuf),
+            pattern,
+            cityName.c_str());
+
+        newChanName = nameBuf;
+    }
+    else if (
+        channelId
+            == ChatChannelId::LOOKING_FOR_GROUP
+        || channelId
+            == ChatChannelId::WORLD_DEFENSE)
+    {
+        newChanName = pattern;
+    }
+    else
+    {
+        return nullptr;
+    }
+
+    if (newChanName.empty())
+        return nullptr;
 
     ChannelMgr* cMgr =
         ChannelMgr::forTeam(bot->GetTeamId());
     if (!cMgr)
-        return;
+        return nullptr;
 
     static std::mutex channelsLock;
     std::lock_guard<std::mutex> guard(
@@ -91,9 +148,10 @@ void EnsureBotInGeneralChannel(
         if (!channel)
             continue;
         if (channel->GetChannelId()
-            != ChatChannelId::GENERAL)
+            != channelId)
             continue;
-        if (channel->GetName() == newChanName)
+        if (channel->GetName()
+            == newChanName)
             continue;
 
         channel->LeaveChannel(bot, false);
@@ -103,9 +161,20 @@ void EnsureBotInGeneralChannel(
     Channel* joinChan =
         cMgr->GetJoinChannel(
             newChanName,
-            ChatChannelId::GENERAL);
+            channelId);
+
     if (joinChan)
         joinChan->JoinChannel(bot, "");
+
+    return joinChan;
+}
+
+void EnsureBotInGeneralChannel(
+    Player* bot)
+{
+    EnsureBotInChatChannel(
+        bot,
+        ChatChannelId::GENERAL);
 }
 
 static std::map<uint32, time_t> _generalChatCooldowns;
@@ -769,6 +838,7 @@ public:
               {PLAYERHOOK_ON_LOGIN,
                PLAYERHOOK_ON_UPDATE,
                PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
+               PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
                PLAYERHOOK_ON_UPDATE_ZONE,
                PLAYERHOOK_ON_UPDATE_AREA,
                PLAYERHOOK_ON_PVP_KILL}) {}
@@ -847,6 +917,230 @@ public:
                  player->GetGUID().GetCounter(),
                  time(nullptr)});
         }
+    }
+
+    // -------------------------------------------------
+    // Private player -> PlayerBot whisper conversation.
+    //
+    // Explicit PlayerBots control commands are ignored here
+    // so mod-playerbots can continue handling things such as:
+    //   invite, follow, stay, attack, etc.
+    //
+    // Explicit guild-join intent is also ignored because
+    // mod-playerbots handles those phrases by sending the
+    // genuine guild invitation.
+    // -------------------------------------------------
+    bool OnPlayerCanUseChat(
+        Player* player, uint32 type,
+        uint32 language, std::string& msg,
+        Player* receiver) override
+    {
+        if (!sLLMChatterConfig
+            || !sLLMChatterConfig->IsEnabled())
+        {
+            return true;
+        }
+
+        if (type != CHAT_MSG_WHISPER)
+            return true;
+
+        if (!player
+            || !receiver
+            || player == receiver)
+        {
+            return true;
+        }
+
+        // Sender must be a real player and recipient must be
+        // an actual PlayerBot.
+        if (IsPlayerBot(player)
+            || !IsPlayerBot(receiver))
+        {
+            return true;
+        }
+
+        // Addon payloads are not conversational speech.
+        if (language == LANG_ADDON)
+        {
+            LogIgnoredAddonChat(
+                player, type, msg, "whisper");
+            return true;
+        }
+
+        if (msg.empty())
+            return true;
+
+        std::string safeMsg = msg;
+
+        size_t firstChar =
+            safeMsg.find_first_not_of(" \t\n\r");
+
+        if (firstChar == std::string::npos)
+            return true;
+
+        if (firstChar > 0)
+            safeMsg = safeMsg.substr(firstChar);
+
+        size_t lastChar =
+            safeMsg.find_last_not_of(" \t\n\r");
+
+        if (lastChar != std::string::npos)
+        {
+            safeMsg =
+                safeMsg.substr(0, lastChar + 1);
+        }
+
+        safeMsg = NormalizeChatTextForDb(
+            safeMsg,
+            sLLMChatterConfig->_maxMessageLength);
+
+        if (safeMsg.empty())
+            return true;
+
+        // Existing PlayerBots commands stay entirely inside
+        // mod-playerbots and never consume LLM tokens.
+        if (IsLikelyPlayerbotControlCommand(safeMsg))
+            return true;
+
+        // Normalize a copy for guild-join intent matching.
+        std::string guildIntent = safeMsg;
+
+        std::transform(
+            guildIntent.begin(),
+            guildIntent.end(),
+            guildIntent.begin(),
+            [](unsigned char c)
+            {
+                return static_cast<char>(
+                    std::tolower(c));
+            });
+
+        while (!guildIntent.empty()
+            && std::isspace(
+                static_cast<unsigned char>(
+                    guildIntent.front())))
+        {
+            guildIntent.erase(
+                guildIntent.begin());
+        }
+
+        while (!guildIntent.empty()
+            && std::isspace(
+                static_cast<unsigned char>(
+                    guildIntent.back())))
+        {
+            guildIntent.pop_back();
+        }
+
+        while (!guildIntent.empty()
+            && (
+                guildIntent.back() == '?'
+                || guildIntent.back() == '!'
+                || guildIntent.back() == '.'
+                || guildIntent.back() == ','
+            ))
+        {
+            guildIntent.pop_back();
+        }
+
+        bool wantsGuildInvite =
+            guildIntent == "guild invite"
+            || guildIntent == "invite guild"
+            || guildIntent == "invite to guild"
+            || guildIntent == "invite me to guild"
+            || guildIntent == "guild invite me"
+            || guildIntent == "ginvite"
+            || guildIntent == "guild me"
+            || guildIntent == "send guild invite"
+            || guildIntent == "send me a guild invite"
+            || guildIntent == "can i join the guild"
+            || guildIntent == "can i join your guild"
+            || guildIntent == "i want to join the guild"
+            || guildIntent == "i want to join your guild"
+            || guildIntent == "i wanna join the guild"
+            || guildIntent == "i wanna join your guild"
+            || guildIntent == "i'll join"
+            || guildIntent == "ill join"
+            || guildIntent == "i will join"
+            || guildIntent == "i wanna join"
+            || guildIntent == "i want to join"
+            || guildIntent == "can i join"
+            || guildIntent == "let me join"
+            || guildIntent == "sign me up"
+            || guildIntent == "i'm in"
+            || guildIntent == "im in"
+            || guildIntent == "count me in";
+
+        if (wantsGuildInvite)
+            return true;
+
+        // A bot actively replying to a real player's conversational
+        // whisper should no longer present itself as AFK.
+        if (receiver->isAFK())
+            receiver->ToggleAFK();
+
+        uint32 playerGuid =
+            player->GetGUID().GetCounter();
+
+        uint32 botGuid =
+            receiver->GetGUID().GetCounter();
+
+        std::string playerName =
+            player->GetName();
+
+        std::string botName =
+            receiver->GetName();
+
+        std::string extraData =
+            "{"
+            "\"player_guid\":" +
+                std::to_string(playerGuid) + ","
+            "\"player_name\":\"" +
+                JsonEscape(playerName) + "\","
+            "\"player_message\":\"" +
+                JsonEscape(safeMsg) + "\","
+            "\"bot_guid\":" +
+                std::to_string(botGuid) + ","
+            "\"bot_name\":\"" +
+                JsonEscape(botName) + "\","
+            + BuildBotStateJson(receiver)
+            + "}";
+
+        extraData = EscapeString(extraData);
+
+        QueueChatterEvent(
+            "bot_player_whisper",
+            "player",
+            receiver->GetZoneId(),
+            receiver->GetMapId(),
+
+            // Player-directed whispers should be treated
+            // at the same priority level as other direct
+            // player-message responses.
+            GetChatterEventPriority(
+                "guild_player_message"),
+
+            "",
+            botGuid,
+            botName,
+            playerGuid,
+            playerName,
+            0,
+            extraData,
+            0,
+            120,
+            false
+        );
+
+        LOG_DEBUG(
+            "module",
+            "LLMChatter: queued private whisper "
+            "player={} bot={} message='{}'",
+            playerName,
+            botName,
+            safeMsg);
+
+        return true;
     }
 
     bool OnPlayerCanUseChat(
@@ -1097,21 +1391,39 @@ public:
 
         std::string botGuids = "[";
         std::string botNames = "[";
+        std::string botStates = "{";
+
         for (uint32 i = 0; i < pickCount; ++i)
         {
             Player* bot = zoneBots[i];
+
             if (i > 0)
             {
                 botGuids += ",";
                 botNames += ",";
+                botStates += ",";
             }
-            botGuids += std::to_string(
-                bot->GetGUID().GetCounter());
+
+            uint32 botGuid =
+                bot->GetGUID().GetCounter();
+
+            botGuids += std::to_string(botGuid);
+
             botNames += "\"" +
                 JsonEscape(bot->GetName()) + "\"";
+
+            // Capture the authoritative live PlayerBots
+            // state at the exact moment the real player
+            // sends the General message.
+            botStates += "\"" +
+                std::to_string(botGuid) + "\":{";
+            botStates += BuildBotStateJson(bot);
+            botStates += "}";
         }
+
         botGuids += "]";
         botNames += "]";
+        botStates += "}";
 
         std::string extraData = "{"
             "\"player_name\":\"" +
@@ -1125,7 +1437,8 @@ public:
             "\"zone_name\":\"" +
                 JsonEscape(zoneName) + "\","
             "\"bot_guids\":" + botGuids + ","
-            "\"bot_names\":" + botNames +
+            "\"bot_names\":" + botNames + ","
+            "\"bot_states\":" + botStates +
             "}";
 
         extraData = EscapeString(extraData);

@@ -4,6 +4,9 @@
 
 #include "LLMChatterShared.h"
 
+#include "Guild.h"
+#include "GuildMgr.h"
+
 #include "LLMChatterConfig.h"
 #include "Channel.h"
 #include "ChannelMgr.h"
@@ -1041,11 +1044,11 @@ bool IsPlayerBot(Player* player)
     // During playerbot login, the synthetic bot
     // WorldSession exists before PlayerbotAI master
     // state is always available. Session::IsBot()
-    // handles that timing window. A user-controlled
-    // self-bot uses a real client session and sets
-    // master == bot, so IsRealPlayer() keeps it in
-    // the real-player side of chatter ownership.
-    return !ai->IsRealPlayer();
+    // handles that timing window. Real players and
+    // user-controlled self-bots must remain outside
+    // chatter ownership.
+    return !IsRealPlayer(player) &&
+           !IsSelfBot(player);
 }
 
 Creature* FindCreatureBySpawnId(
@@ -1711,54 +1714,1060 @@ std::string GetTextEmoteName(uint32 emoteId)
     return (it != reverseMap.end())
         ? it->second : "wave";
 }
+std::string BuildBotIdentityStateJson(Player* player)
+{
+    if (!player)
+        return "\"identity\":{}";
+
+    uint32 zoneId = player->GetZoneId();
+    uint32 areaId = player->GetAreaId();
+
+    std::string zoneName = GetZoneName(zoneId);
+    std::string areaName;
+
+    if (AreaTableEntry const* area =
+            sAreaTableStore.LookupEntry(areaId))
+    {
+        areaName = area->area_name[0];
+    }
+
+    std::string gender =
+        player->getGender() == GENDER_MALE
+            ? "male"
+            : "female";
+
+    std::string json = "\"identity\":{";
+
+    json += "\"name\":\"" +
+        JsonEscape(player->GetName()) + "\",";
+
+    json += "\"level\":" +
+        std::to_string(player->GetLevel()) + ",";
+
+    json += "\"race\":\"" +
+        JsonEscape(GetRaceName(player->getRace())) + "\",";
+
+    json += "\"class\":\"" +
+        JsonEscape(GetChatterClassName(player->getClass())) + "\",";
+
+    json += "\"gender\":\"" +
+        gender + "\",";
+
+    json += "\"zone_id\":" +
+        std::to_string(zoneId) + ",";
+
+    json += "\"zone\":\"" +
+        JsonEscape(zoneName) + "\",";
+
+    json += "\"area_id\":" +
+        std::to_string(areaId) + ",";
+
+    json += "\"subzone\":\"" +
+        JsonEscape(areaName) + "\"";
+
+    json += "}";
+
+    return json;
+}
+std::string BuildBotProgressionStateJson(Player* player)
+{
+    if (!player)
+        return "\"progression\":{}";
+
+    uint32 currentXp = player->GetUInt32Value(PLAYER_XP);
+    uint32 nextLevelXp =
+        player->GetUInt32Value(PLAYER_NEXT_LEVEL_XP);
+
+    int xpPct = 0;
+
+    if (nextLevelXp > 0)
+    {
+        xpPct = static_cast<int>(
+            (static_cast<double>(currentXp) /
+             static_cast<double>(nextLevelXp)) * 100.0);
+
+        if (xpPct > 100)
+            xpPct = 100;
+    }
+
+    uint32 money = player->GetMoney();
+
+    std::string json = "\"progression\":{";
+
+    json += "\"xp\":" +
+        std::to_string(currentXp) + ",";
+
+    json += "\"xp_to_next_level\":" +
+        std::to_string(nextLevelXp) + ",";
+
+    json += "\"xp_pct\":" +
+        std::to_string(xpPct) + ",";
+
+    json += "\"money_copper\":" +
+        std::to_string(money);
+
+    json += "}";
+
+    return json;
+}
+std::string BuildBotEquipmentStateJson(Player* player)
+{
+    if (!player)
+        return "\"equipment\":[]";
+
+    static const char* slotNames[] =
+    {
+        "head",
+        "neck",
+        "shoulders",
+        "shirt",
+        "chest",
+        "waist",
+        "legs",
+        "feet",
+        "wrists",
+        "hands",
+        "finger_1",
+        "finger_2",
+        "trinket_1",
+        "trinket_2",
+        "back",
+        "main_hand",
+        "off_hand",
+        "ranged",
+        "tabard"
+    };
+
+    std::string json = "\"equipment\":[";
+    bool first = true;
+
+    for (uint8 slot = EQUIPMENT_SLOT_START;
+         slot < EQUIPMENT_SLOT_END;
+         ++slot)
+    {
+        Item* item =
+            player->GetItemByPos(
+                INVENTORY_SLOT_BAG_0,
+                slot);
+
+        if (!item)
+            continue;
+
+        ItemTemplate const* proto =
+            item->GetTemplate();
+
+        if (!proto)
+            continue;
+
+        if (!first)
+            json += ",";
+
+        first = false;
+
+        std::string slotName = "unknown";
+
+        if (slot <
+            sizeof(slotNames) / sizeof(slotNames[0]))
+        {
+            slotName = slotNames[slot];
+        }
+
+        json += "{";
+
+        json += "\"slot\":\"" +
+            slotName + "\",";
+
+        json += "\"entry\":" +
+            std::to_string(proto->ItemId) + ",";
+
+        json += "\"name\":\"" +
+            JsonEscape(proto->Name1) + "\",";
+
+        json += "\"count\":" +
+            std::to_string(item->GetCount()) + ",";
+
+        json += "\"quality\":" +
+            std::to_string(proto->Quality) + ",";
+
+        json += "\"item_level\":" +
+            std::to_string(proto->ItemLevel) + ",";
+
+        json += "\"link_token\":\"[[item:" +
+            std::to_string(proto->ItemId) + ":" +
+            JsonEscape(proto->Name1) + ":" +
+            std::to_string(proto->Quality) +
+            "]]\"";
+
+        json += "}";
+    }
+
+    json += "]";
+
+    return json;
+}
+std::string BuildBotInventoryStateJson(Player* player)
+{
+    if (!player)
+        return "\"inventory\":{}";
+
+    struct InventoryEntry
+    {
+        uint32 entry = 0;
+        std::string name;
+        uint32 count = 0;
+    };
+
+    std::map<uint32, InventoryEntry> items;
+
+    uint32 usedSlots = 0;
+    uint32 freeSlots = 0;
+
+    auto addItem = [&](Item* item)
+    {
+        if (!item)
+            return;
+
+        ItemTemplate const* proto =
+            item->GetTemplate();
+
+        if (!proto)
+            return;
+
+        ++usedSlots;
+
+        InventoryEntry& entry =
+            items[proto->ItemId];
+
+        entry.entry = proto->ItemId;
+        entry.name = proto->Name1;
+        entry.count += item->GetCount();
+    };
+
+    // Main backpack inventory.
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START;
+         slot < INVENTORY_SLOT_ITEM_END;
+         ++slot)
+    {
+        Item* item =
+            player->GetItemByPos(
+                INVENTORY_SLOT_BAG_0,
+                slot);
+
+        if (item)
+            addItem(item);
+        else
+            ++freeSlots;
+    }
+
+    // Equipped bags and their contents.
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START;
+         bagSlot < INVENTORY_SLOT_BAG_END;
+         ++bagSlot)
+    {
+        Bag* bag = static_cast<Bag*>(
+            player->GetItemByPos(
+                INVENTORY_SLOT_BAG_0,
+                bagSlot));
+
+        if (!bag)
+            continue;
+
+        for (uint32 slot = 0;
+             slot < bag->GetBagSize();
+             ++slot)
+        {
+            Item* item =
+                bag->GetItemByPos(slot);
+
+            if (item)
+                addItem(item);
+            else
+                ++freeSlots;
+        }
+    }
+
+    std::string json = "\"inventory\":{";
+
+    json += "\"used_slots\":" +
+        std::to_string(usedSlots) + ",";
+
+    json += "\"free_slots\":" +
+        std::to_string(freeSlots) + ",";
+
+    json += "\"items\":[";
+
+    bool first = true;
+
+    for (auto const& pair : items)
+    {
+        InventoryEntry const& entry =
+            pair.second;
+
+        if (!first)
+            json += ",";
+
+        first = false;
+
+        json += "{";
+
+        json += "\"entry\":" +
+            std::to_string(entry.entry) + ",";
+
+        json += "\"name\":\"" +
+            JsonEscape(entry.name) + "\",";
+
+        json += "\"count\":" +
+            std::to_string(entry.count) + ",";
+
+        ItemTemplate const* proto =
+            sObjectMgr->GetItemTemplate(
+                entry.entry);
+
+        uint32 quality =
+            proto ? proto->Quality : 0;
+
+        json += "\"link_token\":\"[[item:" +
+            std::to_string(entry.entry) + ":" +
+            JsonEscape(entry.name) + ":" +
+            std::to_string(quality) +
+            "]]\"";
+
+        json += "}";
+    }
+
+    json += "]";
+    json += "}";
+
+    return json;
+}
+std::string BuildBotProfessionStateJson(Player* player)
+{
+    if (!player)
+        return "\"professions\":[]";
+
+    struct ProfessionInfo
+    {
+        uint32 skill;
+        const char* name;
+    };
+
+    static const ProfessionInfo professions[] =
+    {
+        {SKILL_ALCHEMY, "Alchemy"},
+        {SKILL_BLACKSMITHING, "Blacksmithing"},
+        {SKILL_ENCHANTING, "Enchanting"},
+        {SKILL_ENGINEERING, "Engineering"},
+        {SKILL_HERBALISM, "Herbalism"},
+        {SKILL_INSCRIPTION, "Inscription"},
+        {SKILL_JEWELCRAFTING, "Jewelcrafting"},
+        {SKILL_LEATHERWORKING, "Leatherworking"},
+        {SKILL_MINING, "Mining"},
+        {SKILL_SKINNING, "Skinning"},
+        {SKILL_TAILORING, "Tailoring"}
+    };
+
+    std::string json = "\"professions\":[";
+    bool first = true;
+
+    for (ProfessionInfo const& profession :
+         professions)
+    {
+        uint16 value =
+            player->GetSkillValue(
+                profession.skill);
+
+        if (!value)
+            continue;
+
+        uint16 maxValue =
+            player->GetMaxSkillValue(
+                profession.skill);
+
+        if (!first)
+            json += ",";
+
+        first = false;
+
+        json += "{";
+
+        json += "\"skill_id\":" +
+            std::to_string(
+                profession.skill) + ",";
+
+        json += "\"name\":\"" +
+            std::string(profession.name) + "\",";
+
+        json += "\"current\":" +
+            std::to_string(value) + ",";
+
+        json += "\"max\":" +
+            std::to_string(maxValue);
+
+        json += "}";
+    }
+
+    json += "]";
+
+    return json;
+}
+std::string BuildBotQuestStateJson(Player* player)
+{
+    if (!player)
+        return "\"quests\":[]";
+
+    std::string json = "\"quests\":[";
+    bool firstQuest = true;
+
+    for (uint16 slot = 0;
+         slot < MAX_QUEST_LOG_SIZE;
+         ++slot)
+    {
+        uint32 questId =
+            player->GetQuestSlotQuestId(slot);
+
+        if (!questId)
+            continue;
+
+        Quest const* quest =
+            sObjectMgr->GetQuestTemplate(questId);
+
+        if (!quest)
+            continue;
+
+        QuestStatus status =
+            player->GetQuestStatus(questId);
+
+        if (status != QUEST_STATUS_INCOMPLETE &&
+            status != QUEST_STATUS_COMPLETE)
+        {
+            continue;
+        }
+
+        auto statusIt =
+            player->getQuestStatusMap().find(questId);
+
+        if (statusIt ==
+            player->getQuestStatusMap().end())
+        {
+            continue;
+        }
+
+        QuestStatusData const& questStatus =
+            statusIt->second;
+
+        if (!firstQuest)
+            json += ",";
+
+        firstQuest = false;
+
+        std::string statusName =
+            status == QUEST_STATUS_COMPLETE
+                ? "complete"
+                : "incomplete";
+
+        json += "{";
+
+        json += "\"id\":" +
+            std::to_string(questId) + ",";
+
+        json += "\"name\":\"" +
+            JsonEscape(quest->GetTitle()) + "\",";
+
+        json += "\"level\":" +
+            std::to_string(quest->GetQuestLevel()) + ",";
+
+        json += "\"status\":\"" +
+            statusName + "\",";
+
+        json += "\"rewarded\":" +
+            std::string(
+                player->GetQuestRewardStatus(questId)
+                    ? "true"
+                    : "false") + ",";
+
+        // Exact quest-link token understood by the existing
+        // ConvertQuestLinks() output pipeline.
+        // The LLM may copy this token verbatim when it wants
+        // to ping the quest in chat.
+        json += "\"link_token\":\"[[quest:" +
+            std::to_string(questId) + ":" +
+            JsonEscape(quest->GetTitle()) + ":" +
+            std::to_string(quest->GetQuestLevel()) +
+            "]]\",";
+
+        json += "\"objectives\":[";
+
+        bool firstObjective = true;
+
+        for (uint32 i = 0;
+             i < QUEST_OBJECTIVES_COUNT;
+             ++i)
+        {
+            uint32 requiredItemId =
+                quest->RequiredItemId[i];
+
+            uint32 requiredItemCount =
+                quest->RequiredItemCount[i];
+
+            if (requiredItemId &&
+                requiredItemCount > 0)
+            {
+                ItemTemplate const* item =
+                    sObjectMgr->GetItemTemplate(
+                        requiredItemId);
+
+                uint32 current =
+                    questStatus.ItemCount[i];
+
+                if (!firstObjective)
+                    json += ",";
+
+                firstObjective = false;
+
+                json += "{";
+
+                json += "\"type\":\"item\",";
+
+                json += "\"entry\":" +
+                    std::to_string(
+                        requiredItemId) + ",";
+
+                json += "\"name\":\"" +
+                    JsonEscape(
+                        item
+                            ? item->Name1
+                            : std::string()) +
+                    "\",";
+
+                json += "\"current\":" +
+                    std::to_string(current) + ",";
+
+                json += "\"required\":" +
+                    std::to_string(
+                        requiredItemCount) + ",";
+
+                json += "\"complete\":" +
+                    std::string(
+                        current >= requiredItemCount
+                            ? "true"
+                            : "false");
+
+                json += "}";
+            }
+
+            int32 npcOrGoEntry =
+                quest->RequiredNpcOrGo[i];
+
+            uint32 requiredNpcOrGoCount =
+                quest->RequiredNpcOrGoCount[i];
+
+            if (npcOrGoEntry != 0 &&
+                requiredNpcOrGoCount > 0)
+            {
+                uint32 current =
+                    questStatus.CreatureOrGOCount[i];
+
+                if (!firstObjective)
+                    json += ",";
+
+                firstObjective = false;
+
+                json += "{";
+
+                if (npcOrGoEntry < 0)
+                {
+                    uint32 goEntry =
+                        static_cast<uint32>(
+                            -npcOrGoEntry);
+
+                    GameObjectTemplate const* go =
+                        sObjectMgr
+                            ->GetGameObjectTemplate(
+                                goEntry);
+
+                    json +=
+                        "\"type\":\"gameobject\",";
+
+                    json += "\"entry\":" +
+                        std::to_string(goEntry) + ",";
+
+                    json += "\"name\":\"" +
+                        JsonEscape(
+                            go
+                                ? go->name
+                                : std::string()) +
+                        "\",";
+                }
+                else
+                {
+                    uint32 creatureEntry =
+                        static_cast<uint32>(
+                            npcOrGoEntry);
+
+                    CreatureTemplate const* creature =
+                        sObjectMgr
+                            ->GetCreatureTemplate(
+                                creatureEntry);
+
+                    json +=
+                        "\"type\":\"creature\",";
+
+                    json += "\"entry\":" +
+                        std::to_string(
+                            creatureEntry) + ",";
+
+                    json += "\"name\":\"" +
+                        JsonEscape(
+                            creature
+                                ? creature->Name
+                                : std::string()) +
+                        "\",";
+                }
+
+                json += "\"current\":" +
+                    std::to_string(current) + ",";
+
+                json += "\"required\":" +
+                    std::to_string(
+                        requiredNpcOrGoCount) + ",";
+
+                json += "\"complete\":" +
+                    std::string(
+                        current >=
+                            requiredNpcOrGoCount
+                            ? "true"
+                            : "false");
+
+                json += "}";
+            }
+
+            std::string objectiveText =
+                quest->ObjectiveText[i];
+
+            if (!objectiveText.empty())
+            {
+                bool alreadyRepresented =
+                    requiredItemId != 0 ||
+                    npcOrGoEntry != 0;
+
+                if (!alreadyRepresented)
+                {
+                    if (!firstObjective)
+                        json += ",";
+
+                    firstObjective = false;
+
+                    json += "{";
+                    json +=
+                        "\"type\":\"objective_text\",";
+                    json += "\"text\":\"" +
+                        JsonEscape(objectiveText) +
+                        "\"";
+                    json += "}";
+                }
+            }
+        }
+
+        json += "]";
+        json += "}";
+    }
+
+    json += "]";
+
+    return json;
+}
+std::string BuildBotActivityStateJson(Player* player)
+{
+    if (!player)
+        return "\"activity\":{}";
+
+    PlayerbotAI* ai =
+        GET_PLAYERBOT_AI(player);
+
+    std::string json = "\"activity\":{";
+
+    if (!ai)
+    {
+        json += "\"available\":false";
+        json += "}";
+        return json;
+    }
+
+    AiObjectContext* context =
+        ai->GetAiObjectContext();
+
+    if (!context)
+    {
+        json += "\"available\":false";
+        json += "}";
+        return json;
+    }
+
+    TravelTarget* target =
+        context
+            ->GetValue<TravelTarget*>(
+                "travel target")
+            ->Get();
+
+    if (!target)
+    {
+        json += "\"available\":true,";
+        json += "\"has_travel_target\":false";
+        json += "}";
+        return json;
+    }
+
+    json += "\"available\":true,";
+
+    TravelDestination* destination =
+        target->getDestination();
+
+    json += "\"has_travel_target\":" +
+        std::string(
+            destination ? "true" : "false") +
+        ",";
+
+    json += "\"traveling\":" +
+        std::string(
+            target->isTraveling()
+                ? "true"
+                : "false");
+
+    if (!destination)
+    {
+        json += "}";
+        return json;
+    }
+
+    std::string destinationType =
+        destination->getName();
+
+    std::string destinationTitle =
+        destination->getTitle();
+
+    json += ",\"destination_type\":\"" +
+        JsonEscape(destinationType) + "\"";
+
+    json += ",\"destination\":\"" +
+        JsonEscape(destinationTitle) + "\"";
+
+    if (target->getPosition())
+    {
+        WorldPosition botPosition(player);
+
+        float distance =
+            target->getPosition()->distance(
+                botPosition);
+
+        json += ",\"distance\":" +
+            std::to_string(
+                static_cast<int>(distance));
+    }
+
+    if (destinationType ==
+            "QuestRelationTravelDestination" ||
+        destinationType ==
+            "QuestObjectiveTravelDestination")
+    {
+        QuestTravelDestination*
+            questDestination =
+                static_cast<
+                    QuestTravelDestination*>(
+                        destination);
+
+        Quest const* quest =
+            questDestination
+                ->GetQuestTemplate();
+
+        if (quest)
+        {
+            json += ",\"activity_type\":\"";
+
+            if (destinationType ==
+                "QuestObjectiveTravelDestination")
+            {
+                json += "quest_objective";
+            }
+            else
+            {
+                json += "quest_relation";
+            }
+
+            json += "\"";
+
+            json += ",\"quest_id\":" +
+                std::to_string(
+                    quest->GetQuestId());
+
+            json += ",\"quest_name\":\"" +
+                JsonEscape(
+                    quest->GetTitle()) +
+                "\"";
+
+            json += ",\"quest_level\":" +
+                std::to_string(
+                    quest->GetQuestLevel());
+        }
+    }
+
+    json += "}";
+
+    return json;
+}
+static std::string BuildBotGuildStateJson(
+    Player* player)
+{
+    if (!player)
+        return "\"guild\":{}";
+
+    uint32 guildId = player->GetGuildId();
+
+    Guild* guild =
+        guildId
+            ? sGuildMgr->GetGuildById(guildId)
+            : nullptr;
+
+    uint32 memberCount =
+        guild
+            ? guild->GetMemberCount()
+            : 0;
+
+    uint32 memberLimit =
+        sWorld->getIntConfig(
+            CONFIG_GUILD_MEMBER_LIMIT);
+
+    bool hasSpace =
+        guild
+        && (
+            memberLimit == 0
+            || memberCount < memberLimit
+        );
+
+    std::string guildName =
+        guild
+            ? guild->GetName()
+            : "";
+
+    std::string json = "\"guild\":{";
+
+    json += "\"id\":" +
+        std::to_string(guildId) + ",";
+
+    json += "\"name\":\"" +
+        JsonEscape(guildName) + "\",";
+
+    json += "\"member_count\":" +
+        std::to_string(memberCount) + ",";
+
+    json += "\"member_limit\":" +
+        std::to_string(memberLimit) + ",";
+
+    json += "\"has_space\":" +
+        std::string(
+            hasSpace
+                ? "true"
+                : "false");
+
+    json += "}";
+
+    return json;
+}
+
 
 std::string BuildBotStateJson(Player* player)
 {
     if (!player)
         return "";
 
-    float healthPct = player->GetHealthPct();
-    bool inCombat = player->IsInCombat();
+    float healthPct =
+        player->GetHealthPct();
+
+    uint32 currentHealth =
+        player->GetHealth();
+
+    uint32 maxHealth =
+        player->GetMaxHealth();
 
     int manaPctInt = -1;
-    if (player->GetMaxPower(POWER_MANA) > 0)
-        manaPctInt =
-            static_cast<int>(player->GetPowerPct(POWER_MANA));
+    uint32 currentMana = 0;
+    uint32 maxMana = 0;
 
-    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+    if (player->GetMaxPower(POWER_MANA) > 0)
+    {
+        currentMana =
+            player->GetPower(POWER_MANA);
+
+        maxMana =
+            player->GetMaxPower(POWER_MANA);
+
+        manaPctInt =
+            static_cast<int>(
+                player->GetPowerPct(
+                    POWER_MANA));
+    }
+
+    PlayerbotAI* ai =
+        GET_PLAYERBOT_AI(player);
 
     std::string targetName;
-    Unit* victim = player->GetVictim();
+
+    Unit* victim =
+        player->GetVictim();
+
     if (victim)
         targetName = victim->GetName();
 
-    std::string botState = "non_combat";
+    std::string botState =
+        "non_combat";
+
     if (ai)
     {
-        BotState state = ai->GetState();
+        BotState state =
+            ai->GetState();
+
         if (state == BOT_STATE_COMBAT)
             botState = "combat";
         else if (state == BOT_STATE_DEAD)
             botState = "dead";
     }
 
-    return
-        "\"bot_state\":{"
-        "\"health_pct\":" +
-            std::to_string(static_cast<int>(healthPct)) + ","
-        "\"mana_pct\":" +
-            std::to_string(manaPctInt) + ","
-        "\"role\":\"" + GetBotRoleName(player) + "\","
-        "\"in_combat\":" +
-            std::string(
-                inCombat ? "true" : "false")
-            + ","
-        "\"target\":\"" +
-            JsonEscape(targetName) + "\","
-        "\"bot_ai_state\":\"" + botState + "\","
-        + BuildBotTravelStateJson(player) + "}";
-}
+    std::string json = "\"bot_state\":{";
 
+    // Authoritative live location grounding.
+    uint32 zoneId = player->GetZoneId();
+    uint32 areaId = player->GetAreaId();
+    uint32 mapId = player->GetMapId();
+
+    std::string zoneName =
+        GetZoneName(zoneId);
+
+    std::string areaName;
+
+    if (AreaTableEntry const* area =
+            sAreaTableStore.LookupEntry(areaId))
+    {
+        uint8 locale =
+            sWorld->GetDefaultDbcLocale();
+
+        char const* n =
+            area->area_name[locale];
+
+        areaName = n ? n : "";
+
+        if (areaName.empty())
+        {
+            n = area->area_name[LOCALE_enUS];
+            areaName = n ? n : "";
+        }
+    }
+
+    json += "\"location\":{";
+
+    json += "\"map_id\":" +
+        std::to_string(mapId) + ",";
+
+    json += "\"zone_id\":" +
+        std::to_string(zoneId) + ",";
+
+    json += "\"zone_name\":\"" +
+        JsonEscape(zoneName) + "\",";
+
+    json += "\"area_id\":" +
+        std::to_string(areaId) + ",";
+
+    json += "\"area_name\":\"" +
+        JsonEscape(areaName) +
+        "\"";
+
+    json += "},";
+
+    json +=
+        BuildBotIdentityStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotProgressionStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotGuildStateJson(player) +
+        ",";
+
+    json += "\"vitals\":{";
+
+    json += "\"health\":" +
+        std::to_string(currentHealth) + ",";
+
+    json += "\"max_health\":" +
+        std::to_string(maxHealth) + ",";
+
+    json += "\"health_pct\":" +
+        std::to_string(
+            static_cast<int>(
+                healthPct)) + ",";
+
+    json += "\"mana\":" +
+        std::to_string(currentMana) + ",";
+
+    json += "\"max_mana\":" +
+        std::to_string(maxMana) + ",";
+
+    json += "\"mana_pct\":" +
+        std::to_string(manaPctInt);
+
+    json += "},";
+
+    json += "\"combat\":{";
+
+    json += "\"role\":\"" +
+        JsonEscape(
+            GetBotRoleName(player)) +
+        "\",";
+
+    json += "\"in_combat\":" +
+        std::string(
+            player->IsInCombat()
+                ? "true"
+                : "false") +
+        ",";
+
+    json += "\"target\":\"" +
+        JsonEscape(targetName) +
+        "\",";
+
+    json += "\"bot_ai_state\":\"" +
+        botState +
+        "\"";
+
+    json += "},";
+
+    json +=
+        BuildBotEquipmentStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotInventoryStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotProfessionStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotQuestStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotActivityStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotTravelStateJson(player);
+
+    json += "}";
+
+    return json;
+}
 std::string GetBotTravelMode(Player* player)
 {
     if (!player)
@@ -2051,6 +3060,11 @@ void UpdateGroupBotTravelState(Player* player, uint32 groupId)
             transportName = goInfo->name;
     }
 
+    // Build the authoritative live PlayerBots state
+    // snapshot for Python/LLM factual grounding.
+    std::string botStateJson =
+        "{" + BuildBotStateJson(player) + "}";
+
     CharacterDatabase.Execute(
         "UPDATE llm_group_bot_traits "
         "SET zone = {}, area = {}, map = {}, "
@@ -2058,7 +3072,9 @@ void UpdateGroupBotTravelState(Player* player, uint32 groupId)
         "is_mounted = {}, is_flying = {}, "
         "is_taxi_flying = {}, is_on_transport = {}, "
         "mount_display_id = {}, transport_name = '{}', "
-        "travel_updated_at = NOW() "
+        "travel_updated_at = NOW(), "
+        "bot_state_json = '{}', "
+        "bot_state_updated_at = NOW() "
         "WHERE group_id = {} AND bot_guid = {}",
         player->GetZoneId(),
         player->GetAreaId(),
@@ -2071,6 +3087,7 @@ void UpdateGroupBotTravelState(Player* player, uint32 groupId)
         isOnTransport ? 1 : 0,
         player->GetMountID(),
         EscapeString(transportName),
+        EscapeString(botStateJson),
         resolvedGroupId,
         player->GetGUID().GetCounter());
 }
@@ -2154,6 +3171,12 @@ void AppendRaidContext(
         Player* member = itr->GetSource();
         if (!member || !IsPlayerBot(member))
             continue;
+
+        // Refresh this bot's authoritative state immediately
+        // before Raid/BG chatter selects a responder.
+        UpdateGroupBotTravelState(
+            member,
+            group->GetGUID().GetCounter());
 
         uint8 sg = group->GetMemberGroup(
             member->GetGUID());

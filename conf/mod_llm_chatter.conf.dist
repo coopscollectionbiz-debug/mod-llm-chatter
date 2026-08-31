@@ -588,6 +588,17 @@ LLMChatter.GroupChatter.PreCacheEnable = 1
 LLMChatter.TriggerIntervalSeconds = 30
 
 #
+#   LLMChatter.CapitalTriggerMinSeconds
+#   LLMChatter.CapitalTriggerMaxSeconds
+#       Capital cities use a separate randomized ambient General
+#       chatter timer. Normal zones still use TriggerIntervalSeconds.
+#       A fresh interval is selected after every capital trigger.
+#       Default: 3 / 8
+#
+LLMChatter.CapitalTriggerMinSeconds = 3
+LLMChatter.CapitalTriggerMaxSeconds = 8
+
+#
 #   LLMChatter.TriggerChance
 #       Chance (0-100) per zone per interval that ambient General
 #       channel chatter fires. Bots talk unprompted about their

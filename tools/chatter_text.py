@@ -288,17 +288,48 @@ def cleanup_message(
     # Fix {[Name]} -> [Name]
     result = re.sub(r'\{\[([^\]]+)\]\}', r'[\1]', result)
 
-    # Fix [[Name]] -> [Name]
-    result = re.sub(r'\[\[([^\]]+)\]\]', r'[\1]', result)
-
-    # Fix {Name} when not a known placeholder
-    # Preserve pre-cache placeholders: {target},
-    # {caster}, {spell} and WoW link prefixes
+    # Fix ordinary [[Name]] -> [Name], but preserve
+    # authoritative WoW link tokens for C++ conversion.
     result = re.sub(
-        r'\{(?!quest:|item:|spell:|'
-        r'target\}|caster\}|spell\})'
+        r'\[\[(?!(?:quest|item):)([^\]]+)\]\]',
+        r'[\1]',
+        result,
+    )
+
+    # Never allow unresolved legacy link placeholders
+    # to leak into player-visible chat. Valid placeholders
+    # should already have been resolved by
+    # replace_placeholders() before cleanup_message().
+    #
+    # Preserve authoritative [[quest:...]] / [[item:...]]
+    # tokens: those use square brackets and are converted
+    # later by the C++ delivery layer.
+    result = re.sub(
+        r'\{quest:([^}]+)\}',
+        r'\1',
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(
+        r'\{item:([^}]+)\}',
+        r'\1',
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(
+        r'\{spell:([^}]+)\}',
+        r'\1',
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    # Fix {Name} when not a known pre-cache placeholder.
+    # Preserve {target}, {caster}, and {spell}.
+    result = re.sub(
+        r'\{(?!target\}|caster\}|spell\})'
         r'([^}]+)\}',
-        r'\1', result
+        r'\1',
+        result,
     )
 
     return result

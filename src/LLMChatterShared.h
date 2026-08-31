@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 
+class Channel;
 class Creature;
 class Group;
 class Map;
@@ -46,6 +47,13 @@ std::string GetRaceName(uint8 raceId);
 std::string BuildBotIdentityFields(
     Player* player, bool includeRoles = false);
 std::string BuildBotStateJson(Player* player);
+std::string BuildBotIdentityStateJson(Player* player);
+std::string BuildBotProgressionStateJson(Player* player);
+std::string BuildBotEquipmentStateJson(Player* player);
+std::string BuildBotInventoryStateJson(Player* player);
+std::string BuildBotProfessionStateJson(Player* player);
+std::string BuildBotQuestStateJson(Player* player);
+std::string BuildBotActivityStateJson(Player* player);
 std::string BuildBotTravelStateJson(Player* player);
 std::string GetBotTravelContext(Player* player);
 std::string GetBotTravelMode(Player* player);
@@ -72,6 +80,8 @@ void RecordPartyChatGateActivity(
     uint32 groupId,
     const std::string& deliveryPolicy,
     const std::string& deliveryReason);
+Channel* EnsureBotInChatChannel(
+    Player* bot, uint32 channelId);
 void EnsureBotInGeneralChannel(Player* bot);
 bool CanSpeakInGeneralChannel(Player* bot);
 bool IsEventOnCooldown(

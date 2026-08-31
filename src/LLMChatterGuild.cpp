@@ -359,20 +359,29 @@ std::string BuildGuildCandidatesJson(
     std::vector<Player*> const& bots)
 {
     std::string candidates = "[";
+
     for (uint32 index = 0;
          index < bots.size(); ++index)
     {
         Player* bot = bots[index];
+
         if (index)
             candidates += ",";
+
+        std::string botStateJson =
+            "{" + BuildBotStateJson(bot) + "}";
+
         candidates += fmt::format(
             R"({{"guid":{},"name":"{}",)"
-            R"("zone_id":{},"map_id":{}}})",
+            R"("zone_id":{},"map_id":{},)"
+            R"("bot_state":{}}})",
             bot->GetGUID().GetCounter(),
             JsonEscape(bot->GetName()),
             bot->GetZoneId(),
-            bot->GetMapId());
+            bot->GetMapId(),
+            botStateJson);
     }
+
     candidates += "]";
     return candidates;
 }

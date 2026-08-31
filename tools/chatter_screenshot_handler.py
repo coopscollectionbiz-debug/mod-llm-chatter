@@ -48,6 +48,7 @@ from chatter_shared import (
     run_single_reaction,
     append_json_instruction,
     strip_conversation_actions,
+    get_chatter_mode,
 )
 from chatter_prompts import build_environmental_context_lines
 from chatter_text import cleanup_message, strip_speaker_prefix
@@ -210,14 +211,27 @@ def handle_screenshot_observation(db, client, config, event):
 
 def _build_location_block(
     bot_name, context_str, zone_flavor,
+    chatter_mode='roleplay',
 ):
     """Build the location/flavor header for prompts."""
-    block = (
-        f"You are {bot_name}, travelling through "
-        f"{context_str} with your group.\n")
-    if zone_flavor:
-        block += f"About this place: {zone_flavor}\n"
-    return block
+    is_rp = (chatter_mode == 'roleplay')
+
+    if is_rp:
+        block = (
+            f"You are {bot_name}, travelling through "
+            f"{context_str} with your group.\n"
+        )
+        if zone_flavor:
+            block += (
+                f"About this place: {zone_flavor}\n"
+            )
+        return block
+
+    return (
+        f"You are {bot_name}, a real WoW player. "
+        f"Your character is currently at "
+        f"{context_str} with the group.\n"
+    )
 
 
 def _get_bot_identity(db, bot_guid, bot_name):
@@ -279,64 +293,120 @@ def _screenshot_single(
     travel_meta=None,
 ):
     """Single-bot statement about the screenshot."""
-    style = random.choice(_REACTION_STYLES)
-    identity = _get_bot_identity(db, bot_guid, bot_name)
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
 
-    # Fetch personality traits
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT trait1, trait2, trait3, tone
-        FROM llm_group_bot_traits
-        WHERE group_id = %s AND bot_name = %s
-    """, (group_id, bot_name))
-    traits_row = cursor.fetchone()
-    cursor.close()
-    traits = ''
-    if traits_row:
-        t = [traits_row[k] for k in
-             ('trait1', 'trait2', 'trait3') if traits_row[k]]
-        if t:
-            traits = f"Your personality: {', '.join(t)}\n"
-    tone = ''
-    if traits_row and traits_row.get('tone'):
-        tone = f"Your tone: {traits_row['tone']}\n"
+    if is_rp:
+        style = random.choice(_REACTION_STYLES)
+        identity = _get_bot_identity(
+            db, bot_guid, bot_name)
 
-    location_block = _build_location_block(
-        bot_name, context_str, zone_flavor)
+        # Fetch personality traits
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT trait1, trait2, trait3, tone
+            FROM llm_group_bot_traits
+            WHERE group_id = %s AND bot_name = %s
+        """, (group_id, bot_name))
+        traits_row = cursor.fetchone()
+        cursor.close()
 
-    prompt = (
-        f"{identity} {traits}{tone}"
-        f"Travelling through {context_str} "
-        f"with your group.\n"
-        + (f"About this place: {zone_flavor}\n"
-           if zone_flavor else '')
-        + f"\nYou look around and notice:\n"
-        f"{observation}\n\n"
-        f"Style: {style}\n"
-        "One or two sentences, 80-150 characters.\n\n"
-        "DO NOT:\n"
-        "- Narrate or describe actions "
-        "(no *looks around*)\n"
-        "- Mention any people, players, or "
-        "humanoid NPCs\n"
-        "- Recite lore or history unless it comes "
-        "naturally\n"
-        "- Comment on UI, health bars, or game "
-        "mechanics\n"
-        "You are physically in the scene — convey "
-        "what stands out to you as if you were really "
-        "there. You can connect what you see to what "
-        "you know about this place. "
-        "Speak naturally and briefly.\n"
-    )
+        traits = ''
+        if traits_row:
+            t = [
+                traits_row[k]
+                for k in ('trait1', 'trait2', 'trait3')
+                if traits_row[k]
+            ]
+            if t:
+                traits = (
+                    f"Your personality: "
+                    f"{', '.join(t)}\n"
+                )
+
+        tone = ''
+        if traits_row and traits_row.get('tone'):
+            tone = (
+                f"Your tone: "
+                f"{traits_row['tone']}\n"
+            )
+
+        prompt = (
+            f"{identity} {traits}{tone}"
+            f"Travelling through {context_str} "
+            f"with your group.\n"
+            + (
+                f"About this place: {zone_flavor}\n"
+                if zone_flavor else ''
+            )
+            + "\nYou look around and notice:\n"
+            f"{observation}\n\n"
+            f"Style: {style}\n"
+            "One or two sentences, "
+            "80-150 characters.\n\n"
+            "DO NOT:\n"
+            "- Narrate or describe actions "
+            "(no *looks around*)\n"
+            "- Mention any people, players, or "
+            "humanoid NPCs\n"
+            "- Recite lore or history unless it comes "
+            "naturally\n"
+            "- Comment on UI, health bars, or game "
+            "mechanics\n"
+            "You are physically in the scene — convey "
+            "what stands out to you as if you were really "
+            "there. You can connect what you see to what "
+            "you know about this place. "
+            "Speak naturally and briefly.\n"
+        )
+
+    else:
+        location_block = _build_location_block(
+            bot_name,
+            context_str,
+            zone_flavor,
+            chatter_mode,
+        )
+
+        prompt = (
+            f"{location_block}"
+            "\nThe game view currently shows:\n"
+            f"{observation}\n\n"
+            "Write something this player might actually "
+            "type in party chat after seeing this. "
+            "The screenshot is context, not a requirement "
+            "to describe the scenery. "
+            "The player can react to something visible, "
+            "ask a practical question, complain, joke, "
+            "mention where the group is going, seem "
+            "confused, or make a completely mundane "
+            "comment related to the situation. "
+            "If nothing deserves a big reaction, keep "
+            "the response low-key.\n"
+            "Usually use 1-10 words. One-word replies "
+            "and fragments are fine. Lowercase, missing "
+            "punctuation, shorthand, and occasional typos "
+            "are fine. Casual WoW/game terminology is fine. "
+            "Occasional 'lol', 'lmao', 'bruh', 'rip', "
+            "'tbh', or 'ngl' is fine when it naturally fits, "
+            "but do not force slang.\n"
+            "Do not narrate the scene. "
+            "Do not describe what the character is doing. "
+            "Do not turn the screenshot into travel writing. "
+            "Do not recite lore. "
+            "Do not force awe, curiosity, humor, or insight. "
+            "Do not write fantasy dialogue."
+        )
+
     if chat_block:
         prompt += chat_block + '\n'
     if anti_rep:
         prompt += anti_rep + '\n'
     if travel_context:
         prompt += travel_context + '\n'
+
     prompt = append_json_instruction(
-        prompt, allow_action=True)
+        prompt, allow_action=is_rp)
 
     result = run_single_reaction(
         db, client, config,
@@ -355,8 +425,11 @@ def _screenshot_single(
         metadata=travel_meta,
         group_id=group_id,
         delivery_policy='filler',
-        delivery_reason='bot_group_screenshot_observation',
+        delivery_reason=(
+            'bot_group_screenshot_observation'
+        ),
     )
+
     if not result['ok']:
         _mark_event(db, event_id, 'skipped')
         return False
@@ -376,23 +449,30 @@ def _screenshot_conversation(
     zone_flavor, chat_block, anti_rep,
     travel_context='', travel_meta=None,
 ):
-    """Multi-bot conversation about the screenshot.
-    Follows the same pattern as nearby object
-    conversations."""
+    """Multi-bot conversation about screenshot context."""
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
 
-    # Pick 2-3 random bots, ensure triggering bot
-    # is included
-    num_pick = random.randint(2, min(len(members), 3))
-    other_names = [m for m in members if m != bot_name]
+    # Pick 2-3 available bots and ensure the
+    # triggering bot is available.
+    num_pick = random.randint(
+        2, min(len(members), 3))
+    other_names = [
+        m for m in members if m != bot_name
+    ]
     random.shuffle(other_names)
-    picked = [bot_name] + other_names[:num_pick - 1]
+    picked = (
+        [bot_name]
+        + other_names[:num_pick - 1]
+    )
     random.shuffle(picked)
 
-    # Gather traits and character info
+    # Gather traits and character info.
     bots = []
     bot_guids = {}
     traits_map = {}
     tone_map = {}
+
     for name in picked:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
@@ -403,14 +483,20 @@ def _screenshot_conversation(
         """, (group_id, name))
         row = cursor.fetchone()
         cursor.close()
+
         if not row:
             continue
+
         guid = int(row['bot_guid'])
         bot_guids[name] = guid
+
         traits_map[name] = [
-            row['trait1'], row['trait2'], row['trait3'],
+            row['trait1'],
+            row['trait2'],
+            row['trait3'],
         ]
         tone_map[name] = row.get('tone') or ''
+
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT class, race, level, gender
@@ -418,14 +504,19 @@ def _screenshot_conversation(
         """, (guid,))
         char = cursor.fetchone()
         cursor.close()
+
         if not char:
             continue
+
         bots.append({
             'name': name,
-            'class': get_class_name(char['class']),
-            'race': get_race_name(char['race']),
+            'class': get_class_name(
+                char['class']),
+            'race': get_race_name(
+                char['race']),
             'level': char['level'],
-            'gender': get_gender_label(char['gender']),
+            'gender': get_gender_label(
+                char['gender']),
         })
 
     if len(bots) < 2:
@@ -434,52 +525,123 @@ def _screenshot_conversation(
 
     bot_names = [b['name'] for b in bots]
 
-    # Build bot identity descriptions
-    bot_lines = []
-    for b in bots:
-        traits = traits_map.get(b['name'], [])
-        trait_str = ', '.join(
-            t for t in traits if t) or 'adventurous'
-        gender_prefix = (
-            f"{b['gender']} " if b.get('gender') else ''
+    if is_rp:
+        # Preserve the original RP identities.
+        bot_lines = []
+
+        for b in bots:
+            traits = traits_map.get(
+                b['name'], [])
+            trait_str = ', '.join(
+                t for t in traits if t
+            ) or 'adventurous'
+
+            gender_prefix = (
+                f"{b['gender']} "
+                if b.get('gender') else ''
+            )
+
+            bot_lines.append(
+                f"- {b['name']}: "
+                f"{gender_prefix}"
+                f"{b['race']} {b['class']}, "
+                f"personality: {trait_str}"
+                + (
+                    f", tone: "
+                    f"{tone_map.get(b['name'], '')}"
+                    if tone_map.get(
+                        b['name'], '')
+                    else ""
+                )
+            )
+
+        bot_block = '\n'.join(bot_lines)
+
+        prompt = (
+            "The following party members are "
+            f"travelling through {context_str}:\n"
+            f"{bot_block}\n\n"
         )
-        bot_lines.append(
-            f"- {b['name']}: {gender_prefix}"
-            f"{b['race']} {b['class']}, "
-            f"personality: {trait_str}"
-            + (
-                f", tone: {tone_map.get(b['name'], '')}"
-                if tone_map.get(b['name'], '')
-                else ""
-            ))
-    bot_block = '\n'.join(bot_lines)
 
-    # Build conversation prompt
-    location_block = _build_location_block(
-        bot_names[0], context_str, zone_flavor)
+        if zone_flavor:
+            prompt += (
+                f"About this place: "
+                f"{zone_flavor}\n\n"
+            )
 
-    prompt = (
-        f"The following party members are travelling "
-        f"through {context_str}:\n{bot_block}\n\n"
-    )
-    if zone_flavor:
-        prompt += f"About this place: {zone_flavor}\n\n"
-    prompt += (
-        f"They look around and notice:\n"
-        f"{observation}\n\n"
-        "Write a short conversation (2-4 lines) where "
-        "the party members react to what they see. "
-        "Each character should respond differently "
-        "based on their personality and background.\n\n"
-        "Rules:\n"
-        "- Each line: 40-80 characters\n"
-        "- No narrator actions (no *looks around*)\n"
-        "- No mentions of people, players, or "
-        "humanoid NPCs\n"
-        "- Focus on the world: terrain, sky, "
-        "buildings, wildlife\n"
-        "- Each bot speaks once, naturally\n"
-    )
+        prompt += (
+            "They look around and notice:\n"
+            f"{observation}\n\n"
+            "Write a short conversation (2-4 lines) "
+            "where the party members react to what "
+            "they see. Each character should respond "
+            "differently based on their personality "
+            "and background.\n\n"
+            "Rules:\n"
+            "- Each line: 40-80 characters\n"
+            "- No narrator actions "
+            "(no *looks around*)\n"
+            "- No mentions of people, players, "
+            "or humanoid NPCs\n"
+            "- Focus on the world: terrain, sky, "
+            "buildings, wildlife\n"
+            "- Each bot speaks once, naturally\n"
+        )
+
+        message_count = len(bots)
+
+    else:
+        bot_lines = []
+
+        for b in bots:
+            bot_lines.append(
+                f"- {b['name']}: level "
+                f"{b['level']} {b['class']}"
+            )
+
+        bot_block = '\n'.join(bot_lines)
+
+        message_count = random.randint(
+            1, min(3, len(bots) + 1))
+
+        prompt = (
+            "These are real WoW players controlling "
+            "characters in the same party:\n"
+            f"{bot_block}\n\n"
+            f"Current location: {context_str}\n"
+            "The game view currently shows:\n"
+            f"{observation}\n\n"
+            f"Generate {message_count} short party-chat "
+            "message"
+            f"{'s' if message_count != 1 else ''}. "
+            "Treat the screenshot only as context for "
+            "what the players are currently seeing. "
+            "They do not all need to comment on it. "
+            "A player can ignore the scenery and say "
+            "something practical, confused, mundane, "
+            "annoyed, funny, or unrelated-but-plausible "
+            "for the immediate situation.\n"
+            "Do not require every available speaker "
+            "to talk. A speaker may talk more than once "
+            "if that is the natural exchange. "
+            "Do not force acknowledgement or agreement. "
+            "Do not build a beginning-middle-end "
+            "conversation. It can stop abruptly.\n"
+            "Messages should usually be 1-10 words. "
+            "One-word messages and fragments are fine. "
+            "Lowercase, shorthand, missing punctuation, "
+            "and occasional typos are fine. "
+            "Normal WoW/game terminology is fine. "
+            "Occasional casual internet slang is fine "
+            "when natural, but do not force it.\n"
+            "Do not narrate the scene. "
+            "Do not describe actions. "
+            "Do not recite lore. "
+            "Do not write fantasy dialogue. "
+            "Do not make every message clever, funny, "
+            "helpful, or observant.\n"
+        )
+
     if chat_block:
         prompt += chat_block + '\n'
     if anti_rep:
@@ -487,61 +649,69 @@ def _screenshot_conversation(
     if travel_context:
         prompt += travel_context + '\n'
 
-    num_bots = len(bots)
-
-    # JSON format for conversation
     prompt = append_conversation_json_instruction(
-        prompt, bot_names, num_bots,
-        allow_action=True,
+        prompt,
+        bot_names,
+        message_count,
+        allow_action=is_rp,
+        require_all_speakers=is_rp,
     )
 
-    max_tokens = min(80 * num_bots, 400)
+    max_tokens = min(
+        80 * message_count, 400)
 
     response = call_llm(
         client, prompt, config,
         max_tokens_override=max_tokens,
-        context=f"screenshot-conv:{','.join(bot_names)}",
+        context=(
+            f"screenshot-conv:"
+            f"{','.join(bot_names)}"
+        ),
         label='screenshot_vision',
         metadata=travel_meta,
     )
+
     if not response:
         _mark_event(db, event_id, 'skipped')
         return False
 
     messages = parse_conversation_response(
         response, bot_names)
+
     if not messages:
         _mark_event(db, event_id, 'skipped')
         return False
 
     strip_conversation_actions(
-        messages, label='screenshot_conv'
+        messages,
+        label='screenshot_conv',
     )
 
-    # Deliver with staggered delays
-    cumulative_delay = 2.0
+    cumulative_delay = 0
     prev_len = 0
-    for seq, msg in enumerate(messages):
-        text = strip_speaker_prefix(
-            msg['message'], msg['name'])
-        text = cleanup_message(
-            text, action=msg.get('action')
-        )
-        if not text:
-            continue
-        if len(text) > 255:
-            text = text[:252] + "..."
 
-        speaker_guid = bot_guids.get(msg['name'])
+    for msg in messages:
+        speaker_guid = bot_guids.get(
+            msg['name'], 0)
+
         if not speaker_guid:
             continue
 
-        if seq > 0:
-            delay = calculate_dynamic_delay(
-                len(text), config,
-                prev_message_length=prev_len,
+        text = cleanup_message(
+            strip_speaker_prefix(
+                msg.get('message', ''),
+                msg['name'],
             )
-            cumulative_delay += delay
+        )
+
+        if not text:
+            continue
+
+        cumulative_delay += calculate_dynamic_delay(
+            prev_len,
+            text,
+            config,
+        )
 
         insert_chat_message(
             db,
@@ -554,8 +724,11 @@ def _screenshot_conversation(
             config=config,
             group_id=group_id,
             delivery_policy='filler',
-            delivery_reason='bot_group_screenshot_observation',
+            delivery_reason=(
+                'bot_group_screenshot_observation'
+            ),
         )
+
         _store_chat(
             db, group_id, speaker_guid,
             msg['name'], True, text,

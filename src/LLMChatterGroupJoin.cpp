@@ -30,6 +30,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "WorldPacket.h"
 
 // ============================================================================
 // QueueBotGreetingEvent
@@ -671,29 +672,61 @@ public:
             || !sLLMChatterConfig->_useGroupChatter)
             return;
 
-        // Find the player who just joined
+        if (!group)
+            return;
+
+        // Find the player who just joined.
         Player* player =
             ObjectAccessor::FindPlayer(guid);
         if (!player)
             return;
 
-        // Only trigger for bots joining a group
-        // that has a real player
-        if (!IsPlayerBot(player))
-            return;
+        Player* registrationBot = nullptr;
 
-        if (!GroupHasRealPlayer(group))
-            return;
+        if (IsPlayerBot(player))
+        {
+            // Normal direction: a bot joins a group that
+            // already contains a real player.
+            if (!GroupHasRealPlayer(group))
+                return;
 
-        // Suppress greetings in raid/BG context
-        // (10-40 bots would flood chat)
-        Map* map = player->GetMap();
+            registrationBot = player;
+        }
+        else
+        {
+            // Reverse direction: a real player joins an
+            // already bot-populated group. QueueBotGreetingEvent
+            // gathers every bot in the group, so one bot is enough
+            // to bootstrap the complete LLM group session.
+            for (GroupReference* itr =
+                     group->GetFirstMember();
+                 itr != nullptr; itr = itr->next())
+            {
+                Player* member = itr->GetSource();
+
+                if (member
+                    && IsPlayerBot(member)
+                    && member->IsInWorld())
+                {
+                    registrationBot = member;
+                    break;
+                }
+            }
+
+            if (!registrationBot)
+                return;
+        }
+
+        // Suppress greetings/session chatter in raid/BG
+        // contexts where large groups would flood chat.
+        Map* map = registrationBot->GetMap();
         if (map
             && (map->IsRaid()
                 || map->IsBattleground()))
             return;
 
-        QueueBotGreetingEvent(player, group);
+        QueueBotGreetingEvent(
+            registrationBot, group);
     }
 
     void OnRemoveMember(

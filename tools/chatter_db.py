@@ -1,8 +1,8 @@
 """DB/query helpers extracted from chatter_shared (N15/N16)."""
 
 import logging
-import threading
 import time
+import threading
 from typing import Dict, List, Optional, Tuple
 
 import mysql.connector
@@ -224,6 +224,457 @@ def _get_zone_level_range(
         return ZONE_LEVELS[zone_id]
     return (max(1, bot_level - 5), bot_level + 5)
 
+
+
+def query_live_auction_market(
+    config: dict, limit: int = 40
+) -> List[dict]:
+    """
+    Return current live Auction House market data.
+
+    Prices are normalized to copper per individual item so
+    different stack sizes can be compared correctly.
+    """
+    try:
+        db = get_db_connection(config, 'acore_characters')
+        cursor = db.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                ii.itemEntry AS item_entry,
+                it.name,
+                MIN(it.Quality) AS item_quality,
+                COUNT(*) AS listings,
+                MIN(
+                    ROUND(
+                        a.buyoutprice /
+                        GREATEST(ii.count, 1)
+                    )
+                ) AS lowest_each,
+                ROUND(
+                    AVG(
+                        a.buyoutprice /
+                        GREATEST(ii.count, 1)
+                    )
+                ) AS average_each,
+                MIN(ii.count) AS smallest_stack,
+                MAX(ii.count) AS largest_stack
+            FROM auctionhouse a
+            JOIN item_instance ii
+                ON ii.guid = a.itemguid
+            JOIN acore_world.item_template it
+                ON it.entry = ii.itemEntry
+            WHERE a.buyoutprice > 0
+              AND ii.count > 0
+              AND it.name IS NOT NULL
+              AND it.name != ''
+              AND it.name NOT LIKE '<%%'
+            GROUP BY
+                ii.itemEntry,
+                it.name
+            HAVING COUNT(*) >= 2
+            ORDER BY RAND()
+            LIMIT %s
+        """, (max(1, int(limit)),))
+
+        rows = cursor.fetchall()
+        db.close()
+
+        return rows
+
+    except Exception as exc:
+        logger.warning(
+            "Live AH query failed: %s",
+            exc,
+        )
+        return []
+
+
+# Cached pool for ambient city Trade advertisements.
+_city_trade_item_cache = {
+    'expires_at': 0.0,
+    'items': [],
+}
+
+
+def query_city_trade_items(
+    config: dict,
+    limit: int = 300,
+) -> List[dict]:
+    """
+    Return items that plausibly justify direct Trade-channel
+    advertising rather than ordinary AH commodity shopping.
+
+    This intentionally favors valuable/rare/recipe/gem items
+    and avoids BoP/quest-bound inventory.
+
+    Results are cached because item_template changes rarely and
+    there is no reason to run a random world query every chat tick.
+    """
+    now = time.time()
+
+    cached_items = _city_trade_item_cache.get(
+        'items'
+    ) or []
+
+    if (
+        cached_items
+        and float(
+            _city_trade_item_cache.get(
+                'expires_at'
+            ) or 0
+        ) > now
+    ):
+        return cached_items
+
+    try:
+        db = get_db_connection(
+            config,
+            'acore_world',
+        )
+
+        cursor = db.cursor(
+            dictionary=True
+        )
+
+        cursor.execute(
+            """
+            SELECT
+                entry AS item_entry,
+                name AS item_name,
+                Quality AS item_quality,
+                class AS item_class,
+                subclass AS item_subclass,
+                SellPrice AS sell_price,
+                RequiredLevel AS required_level,
+                bonding
+            FROM item_template
+            WHERE name IS NOT NULL
+              AND name != ''
+              AND name NOT LIKE '<%%'
+
+              /* Exclude test/deprecated/internal DB entries. */
+              AND name NOT LIKE 'Test %%'
+              AND name NOT LIKE 'TEST %%'
+              AND name NOT LIKE 'zz%%'
+              AND name NOT LIKE 'ZZ%%'
+              AND name NOT LIKE 'Deprecated%%'
+              AND name NOT LIKE 'DEPRECATED%%'
+              AND name NOT LIKE 'Unused%%'
+              AND name NOT LIKE 'UNUSED%%'
+              AND name NOT LIKE '%%DEPRECATED%%'
+
+              /* Exclude BoP and quest-bound items. */
+              AND bonding IN (0, 2, 3)
+
+              /*
+               * Direct-trade-worthy item families:
+               *   2  weapons
+               *   3  gems
+               *   4  armor
+               *   7  trade goods
+               *   9  recipes
+               *   15 misc
+               */
+              AND class IN (
+                  2, 3, 4, 7, 9, 15
+              )
+
+              /*
+               * Equipment should generally be blue+.
+               * Gems/trade goods/recipes may be uncommon+.
+               */
+              AND (
+                  (class IN (2, 4)
+                   AND Quality >= 3)
+                  OR
+                  (class IN (3, 7, 9)
+                   AND Quality >= 2)
+                  OR
+                  (class = 15
+                   AND Quality >= 3)
+              )
+
+              AND Quality <= 4
+
+            ORDER BY RAND()
+            LIMIT %s
+            """,
+            (
+                max(
+                    50,
+                    int(limit),
+                ),
+            ),
+        )
+
+        rows = cursor.fetchall()
+        db.close()
+
+        _city_trade_item_cache[
+            'items'
+        ] = rows
+
+        _city_trade_item_cache[
+            'expires_at'
+        ] = now + (15 * 60)
+
+        return rows
+
+    except Exception as exc:
+        logger.warning(
+            "City Trade item query failed: %s",
+            exc,
+        )
+
+        # Retain stale cache if the DB has a transient problem.
+        return cached_items
+
+
+# Cached dynamic profession-advertisement service pools.
+_profession_service_cache = {
+    'expires_at': 0.0,
+    'services': {},
+}
+
+
+def query_profession_services(
+    config: dict,
+) -> dict:
+    """
+    Discover tradeable profession outputs dynamically.
+
+    Recipe items identify their profession through RequiredSkill.
+    Their Plans/Pattern/Recipe/Schematic/Design display names are
+    mapped back to matching crafted output items.
+
+    Enchanting uses actual Scroll of Enchant items and Inscription
+    uses actual glyph items.
+    """
+    now = time.time()
+
+    cached = _profession_service_cache.get(
+        'services'
+    ) or {}
+
+    if (
+        cached
+        and float(
+            _profession_service_cache.get(
+                'expires_at'
+            ) or 0
+        ) > now
+    ):
+        return cached
+
+    skill_names = {
+        164: 'blacksmithing',
+        165: 'leatherworking',
+        171: 'alchemy',
+        197: 'tailoring',
+        202: 'engineering',
+        333: 'enchanting',
+        755: 'jewelcrafting',
+        773: 'inscription',
+    }
+
+    result = {
+        name: []
+        for name in skill_names.values()
+    }
+
+    try:
+        db = get_db_connection(
+            config,
+            'acore_world',
+        )
+        cursor = db.cursor(dictionary=True)
+
+        # ----------------------------------------------------
+        # Recipe/design/pattern/plans/schematic ->
+        # actual crafted item with matching display name.
+        # ----------------------------------------------------
+        cursor.execute("""
+            SELECT DISTINCT
+                r.RequiredSkill AS skill_id,
+                r.RequiredSkillRank AS service_rank,
+                o.entry AS item_entry,
+                o.name AS item_name,
+                o.Quality AS item_quality,
+                o.class AS item_class,
+                o.subclass AS item_subclass,
+                o.RequiredLevel AS required_level,
+                o.bonding
+            FROM item_template r
+            JOIN item_template o
+                ON o.name = CASE
+                    WHEN r.name LIKE 'Plans: %%'
+                        THEN SUBSTRING(r.name, 8)
+                    WHEN r.name LIKE 'Pattern: %%'
+                        THEN SUBSTRING(r.name, 10)
+                    WHEN r.name LIKE 'Recipe: %%'
+                        THEN SUBSTRING(r.name, 9)
+                    WHEN r.name LIKE 'Schematic: %%'
+                        THEN SUBSTRING(r.name, 12)
+                    WHEN r.name LIKE 'Design: %%'
+                        THEN SUBSTRING(r.name, 9)
+                    ELSE ''
+                END
+            WHERE r.class = 9
+              AND r.RequiredSkill IN (
+                  164, 165, 171, 197,
+                  202, 755
+              )
+              AND r.name NOT LIKE 'ZZ%%'
+              AND r.name NOT LIKE 'zz%%'
+              AND r.name NOT LIKE '%%DEPRECATED%%'
+              AND o.name NOT LIKE 'ZZ%%'
+              AND o.name NOT LIKE 'zz%%'
+              AND o.name NOT LIKE '%%DEPRECATED%%'
+              AND o.bonding IN (0, 2, 3)
+              AND o.Quality BETWEEN 1 AND 4
+        """)
+
+        for row in cursor.fetchall():
+            try:
+                skill_id = int(
+                    row.get('skill_id') or 0
+                )
+            except (TypeError, ValueError):
+                continue
+
+            profession = skill_names.get(
+                skill_id
+            )
+
+            if profession:
+                result[profession].append(
+                    row
+                )
+
+        # ----------------------------------------------------
+        # Enchanting.
+        #
+        # Scrolls themselves are valid clickable representations
+        # of the enchant service. spellid_1 is retained as useful
+        # metadata even though we currently render the item link.
+        # ----------------------------------------------------
+        cursor.execute("""
+            SELECT DISTINCT
+                i.entry AS item_entry,
+                i.name AS item_name,
+                i.Quality AS item_quality,
+                i.class AS item_class,
+                i.subclass AS item_subclass,
+                i.RequiredLevel AS required_level,
+                i.bonding,
+                i.spellid_1 AS spell_id,
+                COALESCE(
+                    er.service_rank,
+                    0
+                ) AS service_rank
+            FROM item_template i
+            LEFT JOIN (
+                SELECT
+                    SpellId,
+                    MAX(ReqSkillRank) AS service_rank
+                FROM trainer_spell
+                WHERE ReqSkillLine = 333
+                GROUP BY SpellId
+            ) er
+                ON er.SpellId = i.spellid_1
+            WHERE i.name LIKE 'Scroll of Enchant %%'
+              AND i.name NOT LIKE '%%DEPRECATED%%'
+              AND i.name NOT LIKE 'ZZ%%'
+              AND i.name NOT LIKE 'zz%%'
+              AND i.bonding IN (0, 2, 3)
+            ORDER BY i.entry
+        """)
+
+        result['enchanting'].extend(
+            cursor.fetchall()
+        )
+
+        # ----------------------------------------------------
+        # Inscription.
+        #
+        # Item class 16 is the Wrath glyph family. These provide
+        # direct clickable representations of inscription work.
+        # ----------------------------------------------------
+        cursor.execute("""
+            SELECT DISTINCT
+                entry AS item_entry,
+                name AS item_name,
+                Quality AS item_quality,
+                class AS item_class,
+                subclass AS item_subclass,
+                RequiredLevel AS required_level,
+                bonding,
+                450 AS service_rank
+            FROM item_template
+            WHERE class = 16
+              AND name IS NOT NULL
+              AND name != ''
+              AND name NOT LIKE 'ZZ%%'
+              AND name NOT LIKE 'zz%%'
+              AND name NOT LIKE '%%DEPRECATED%%'
+              AND bonding IN (0, 2, 3)
+            ORDER BY entry
+        """)
+
+        result['inscription'].extend(
+            cursor.fetchall()
+        )
+
+        db.close()
+
+        # Remove accidental duplicate item entries.
+        for profession, rows in result.items():
+            seen = set()
+            clean = []
+
+            for row in rows:
+                try:
+                    entry = int(
+                        row.get('item_entry')
+                        or 0
+                    )
+                except (TypeError, ValueError):
+                    continue
+
+                if not entry or entry in seen:
+                    continue
+
+                name = str(
+                    row.get('item_name')
+                    or ''
+                ).strip()
+
+                if not name:
+                    continue
+
+                seen.add(entry)
+                clean.append(row)
+
+            result[profession] = clean
+
+        _profession_service_cache[
+            'services'
+        ] = result
+
+        _profession_service_cache[
+            'expires_at'
+        ] = now + (15 * 60)
+
+        return result
+
+    except Exception as exc:
+        logger.warning(
+            "Profession service query failed: %s",
+            exc,
+        )
+
+        return cached
 
 def query_zone_quests(
     config: dict, zone_id: int, bot_level: int
@@ -802,7 +1253,12 @@ def insert_chat_message(
             owner_subsystem = 'group'
         elif channel == 'battleground':
             owner_subsystem = 'bg'
-        elif channel == 'general':
+        elif channel in (
+            'general',
+            'trade',
+            'lookingforgroup',
+            'guild_recruitment',
+        ):
             owner_subsystem = 'general'
         elif channel in ('say', 'msay'):
             owner_subsystem = 'proximity'
@@ -1418,7 +1874,6 @@ def cleanup_stale_groups(db) -> int:
             exc_info=True,
         )
         return 0
-
 
 def get_zone_bot_candidates(
     cursor, zone_id=None, limit=10

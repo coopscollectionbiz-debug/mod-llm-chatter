@@ -30,6 +30,9 @@
 #include <string>
 #include <vector>
 
+static std::string BuildWorldEventBotStatesJson(
+    uint32 zoneId);
+
 static std::map<std::string, time_t> _ambientCooldownCache;
 static std::map<uint32, WeatherState> _zoneWeatherState;
 static std::mutex _zoneWeatherStateMutex;
@@ -140,8 +143,28 @@ static void QueueAmbientEvent(
     uint32 expirationSeconds =
         reactionDelay
         + sLLMChatterConfig->_eventExpirationSeconds;
+    std::string enrichedExtraData = extraData;
+
+    std::string botStatesJson =
+        BuildWorldEventBotStatesJson(zoneId);
+
+    if (botStatesJson != "{}"
+        && !enrichedExtraData.empty()
+        && enrichedExtraData.back() == '}')
+    {
+        enrichedExtraData.pop_back();
+
+        if (enrichedExtraData.size() > 1)
+            enrichedExtraData += ",";
+
+        enrichedExtraData +=
+            "\"bot_states\":"
+            + botStatesJson
+            + "}";
+    }
+
     std::string sqlSafeExtraData =
-        EscapeString(extraData);
+        EscapeString(enrichedExtraData);
 
     QueueChatterEvent(
         eventType,
@@ -884,6 +907,62 @@ static uint32 GetDominantFactionInZone(uint32 zoneId)
     return urand(0, 1);
 }
 
+static std::string BuildWorldEventBotStatesJson(
+    uint32 zoneId)
+{
+    if (!zoneId)
+        return "{}";
+
+    uint32 faction =
+        GetDominantFactionInZone(zoneId);
+
+    std::vector<Player*> bots =
+        GetBotsInZone(zoneId, faction);
+
+    bots.erase(
+        std::remove_if(
+            bots.begin(), bots.end(),
+            [](Player* bot)
+            {
+                return !bot
+                    || !CanSpeakInGeneralChannel(bot);
+            }),
+        bots.end());
+
+    if (bots.empty())
+        return "{}";
+
+    // We only need a small authoritative speaker pool.
+    // Python will choose the eventual world-event
+    // speakers from these GUIDs.
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::shuffle(bots.begin(), bots.end(), rng);
+
+    constexpr size_t maxSnapshotBots = 10;
+    if (bots.size() > maxSnapshotBots)
+        bots.resize(maxSnapshotBots);
+
+    std::string json = "{";
+
+    for (Player* bot : bots)
+    {
+        if (!bot)
+            continue;
+
+        if (json.size() > 1)
+            json += ",";
+
+        json += fmt::format(
+            "\"{}\":{{{}}}",
+            bot->GetGUID().GetCounter(),
+            BuildBotStateJson(bot));
+    }
+
+    json += "}";
+    return json;
+}
+
 static void QueueChatterRequest(
     Player* bot1, Player* bot2,
     Player* bot3, Player* bot4,
@@ -896,6 +975,7 @@ static void QueueChatterRequest(
         isConversation
             ? "conversation"
             : "statement";
+
     std::string bot1Name = bot1->GetName();
     std::string bot1Class =
         GetChatterClassName(bot1->getClass());
@@ -907,6 +987,39 @@ static void QueueChatterRequest(
         EscapeString(zoneName);
     std::string currentWeather =
         GetCachedWeatherName(zoneId);
+
+    // Capture authoritative live PlayerBot state
+    // for every participant in this ambient request.
+    std::string botStatesJson = "{";
+
+    auto appendBotState =
+        [&botStatesJson](Player* bot)
+    {
+        if (!bot)
+            return;
+
+        if (botStatesJson.size() > 1)
+            botStatesJson += ",";
+
+        botStatesJson += fmt::format(
+            "\"{}\":{{{}}}",
+            bot->GetGUID().GetCounter(),
+            BuildBotStateJson(bot));
+    };
+
+    appendBotState(bot1);
+
+    if (isConversation)
+    {
+        appendBotState(bot2);
+        appendBotState(bot3);
+        appendBotState(bot4);
+    }
+
+    botStatesJson += "}";
+
+    std::string escapedBotStatesJson =
+        EscapeString(botStatesJson);
 
     if (isConversation && bot2)
     {
@@ -922,11 +1035,12 @@ static void QueueChatterRequest(
             "bot1_class, bot1_race, bot1_level, "
             "bot1_zone, zone_id, weather, bot_count, "
             "bot2_guid, bot2_name, bot2_class, "
-            "bot2_race, bot2_level";
+            "bot2_race, bot2_level, bot_states_json";
+
         std::string values = fmt::format(
             "'{}', {}, '{}', '{}', '{}', {}, "
             "'{}', {}, '{}', {}, {}, '{}', "
-            "'{}', '{}', {}",
+            "'{}', '{}', {}, '{}'",
             requestType,
             bot1->GetGUID().GetCounter(),
             EscapeString(bot1Name),
@@ -941,7 +1055,8 @@ static void QueueChatterRequest(
             EscapeString(bot2Name),
             bot2Class,
             bot2Race,
-            bot2Level);
+            bot2Level,
+            escapedBotStatesJson);
 
         if (bot3)
         {
@@ -951,9 +1066,11 @@ static void QueueChatterRequest(
             std::string bot3Race =
                 GetRaceName(bot3->getRace());
             uint8 bot3Level = bot3->GetLevel();
+
             columns +=
                 ", bot3_guid, bot3_name, bot3_class, "
                 "bot3_race, bot3_level";
+
             values += fmt::format(
                 ", {}, '{}', '{}', '{}', {}",
                 bot3->GetGUID().GetCounter(),
@@ -971,9 +1088,11 @@ static void QueueChatterRequest(
             std::string bot4Race =
                 GetRaceName(bot4->getRace());
             uint8 bot4Level = bot4->GetLevel();
+
             columns +=
                 ", bot4_guid, bot4_name, bot4_class, "
                 "bot4_race, bot4_level";
+
             values += fmt::format(
                 ", {}, '{}', '{}', '{}', {}",
                 bot4->GetGUID().GetCounter(),
@@ -998,9 +1117,9 @@ static void QueueChatterRequest(
             "(request_type, bot1_guid, bot1_name, "
             "bot1_class, bot1_race, bot1_level, "
             "bot1_zone, zone_id, weather, "
-            "bot_count, status) VALUES "
+            "bot_count, bot_states_json, status) VALUES "
             "('{}', {}, '{}', '{}', '{}', {}, "
-            "'{}', {}, '{}', 1, 'pending')",
+            "'{}', {}, '{}', 1, '{}', 'pending')",
             requestType,
             bot1->GetGUID().GetCounter(),
             EscapeString(bot1Name),
@@ -1009,11 +1128,12 @@ static void QueueChatterRequest(
             bot1Level,
             escapedZoneName,
             zoneId,
-            currentWeather);
+            currentWeather,
+            escapedBotStatesJson);
     }
 }
 
-void TryTriggerChatter()
+void TryTriggerChatter(bool capitalsOnly)
 {
     if (!sLLMChatterConfig->_generalChannelEnable)
         return;
@@ -1040,21 +1160,22 @@ void TryTriggerChatter()
     std::random_device rd;
     std::mt19937 g(rd());
 
-    for (uint32 selectedZone : validZones)
-    {
-        uint32 triggerChance =
-            sLLMChatterConfig->_triggerChance;
-        if (IsCapitalCity(selectedZone))
-        {
-            triggerChance = std::min(
-                triggerChance
-                    * sLLMChatterConfig
-                          ->_cityChatterMultiplier,
-                100u);
-        }
+for (uint32 selectedZone : validZones)
+{
+    bool isCapitalCity =
+        IsCapitalCity(selectedZone);
 
-        if (urand(1, 100) > triggerChance)
-            continue;
+    // Normal and capital chatter run on separate clocks.
+    if (capitalsOnly != isCapitalCity)
+        continue;
+
+    uint32 triggerChance =
+        isCapitalCity
+            ? sLLMChatterConfig->_cityTriggerChance
+            : sLLMChatterConfig->_triggerChance;
+
+    if (urand(1, 100) > triggerChance)
+        continue;
 
         std::string zoneName =
             GetZoneName(selectedZone);
@@ -1071,10 +1192,13 @@ void TryTriggerChatter()
                 }),
             bots.end());
 
-        bool isConversation =
-            (urand(1, 100)
-             <= sLLMChatterConfig
-                    ->_conversationChance);
+uint32 conversationChance =
+    isCapitalCity
+        ? sLLMChatterConfig->_cityConversationChance
+        : sLLMChatterConfig->_conversationChance;
+
+bool isConversation =
+    (urand(1, 100) <= conversationChance);
         uint32 requiredBots =
             isConversation ? 2 : 1;
         if (bots.size() < requiredBots)

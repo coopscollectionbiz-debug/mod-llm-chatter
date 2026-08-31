@@ -1607,53 +1607,85 @@ MSG_TYPE_SPELL = 100         # 5% chance (96-100)
 # Also excluded: items, quests, quest rewards, spells, trade
 # (handled by dedicated message-type paths).
 AMBIENT_CHAT_TOPICS = [
-    # Environment / Zone
-    'commenting on the scenery or surroundings',
-    'noticing something interesting in the zone',
-    'remarking on the local wildlife or creatures',
-    'observing the landscape or terrain',
-    # Weather / Time
-    'commenting on the weather',
-    'noticing the time of day',
-    'mentioning how the light looks',
-    # Class / Race
+    # Gameplay / What I'm doing
+    'mentioning what they are doing right now',
+    'wondering what to do next',
+    'complaining about having to run somewhere',
+    'mentioning they are heading back to town',
+    'asking what other players are working on',
+    'mentioning they need to vendor soon',
+    'complaining that their bags are getting full',
+    'being briefly confused about where to go',
+
+    # Class / Abilities
     'mentioning something about their class abilities',
-    'mentioning something about their race or class perks',
-    'comparing fighting styles or approaches',
-    'sharing class-specific knowledge or tips',
-    # Food / Drink
+    'making a general comment about one of their class abilities',
+    'complaining about an annoying class limitation',
+    'asking another player about their class',
+    'making a casual comment about their spec or role',
+
+    # Food / Drink / Resources
     'asking if anyone has food or water',
-    'complaining about being hungry or thirsty',
-    'mentioning a favorite food or drink',
+    'mentioning they need food or water',
+    'complaining about being low on mana',
+    'mentioning they need to restock something',
+
     # Travel / Mounts
     'talking about their mount',
-    'commenting on how far they have walked',
+    'complaining about how far they have to travel',
     'wishing they had a faster mount',
+    'asking where someone is headed',
+    'mentioning they are on the way somewhere',
+
     # Professions
-    'mentioning their profession skill progress',
-    'talking about gathering or crafting',
+    'mentioning their current profession or profession skill',
+    'talking generally about gathering or crafting',
     'asking if anyone needs something crafted',
-    # Capital Cities / Inns
-    'talking about a capital city or inn they like',
-    'talking about what they do in town',
-    'mentioning a favorite hangout spot',
+    'complaining generally about profession materials',
+
+    # Town / Services
+    'mentioning they need to repair',
+    'mentioning they need to vendor',
+    'mentioning they need the auction house',
+    'talking about what they need to do in town',
+
     # Gear / Equipment
-    'commenting on their own gear or armor',
-    'noticing a party member looks well-equipped',
-    'wishing they had better equipment',
-    # Level Progress
+    'commenting on their own gear',
+    'wishing they had better gear',
+    'complaining about needing an upgrade',
+    'asking whether something is an upgrade',
+
+    # Level / Progress
     'mentioning how close they are to leveling',
-    'talking about what abilities they want next',
-    'reflecting on how far they have come',
-    # AFK / Bio / Humor
-    'joking about needing a bio break',
-    'wondering how long until the next rest stop',
-    'making a joke about falling asleep at the keys',
-    # General banter
+    'talking about what ability they want next',
+    'complaining that leveling is taking forever',
+    'making a general comment about leveling progress',
+
+    # Group / Player Stuff
+    'asking if anyone needs help',
+    'asking if anyone is doing the same thing',
+    'wondering where everyone went',
+    'asking someone to wait a second',
+    'mentioning they will be right back',
+    'asking whether anyone needs a mob',
+    'complaining about waiting for someone',
+    'making a quick comment about another player',
+
+    # AFK / Real Life
+    'mentioning they need a bio break',
+    'saying they will be afk for a minute',
+    'mentioning being tired',
+    'mentioning food or something happening in real life',
+
+    # Normal player banter
     'making small talk with another player',
-    'cracking a joke or making a witty observation',
     'complaining about something minor',
     'sharing a random thought',
+    'making a dry joke about the game',
+    'reacting to something another player did',
+    'saying something mundane with no larger point',
+    'briefly changing the subject',
+    'asking a simple question',
 ]
 
 # Topics for roleplay mode — all normal topics plus in-character
@@ -2033,7 +2065,6 @@ TONES = [
     "cheerful and social",
     "focused on gameplay",
     "a bit bored",
-    "curious about the zone",
     "friendly and helpful",
     "mildly frustrated",
     "just vibing",
@@ -2065,11 +2096,9 @@ TONES = [
     "chronically online",
     "salty and sarcastic",
     "done with everyone's nonsense",
-    "gremlin energy, unhinged but harmless",
     "trash-talking but good-natured",
     "smug about being right",
-    "low-key gatekeeping",
-    "meme-brained",
+
 ]
 
 # Mood variations - the emotional angle of the message
@@ -2085,13 +2114,11 @@ MOODS = [
     "neutral",
     "dramatic",
     "deadpan",
-    "roleplaying",
     "nostalgic",
     "impatient",
     "grateful",
     "showing off",
     "self-deprecating",
-    "philosophical",
     "surprised",
     "helpful",
     "geeky",
@@ -2104,7 +2131,6 @@ MOODS = [
     "dry and snarky",
     # Online/internet-culture moods
     "roasting someone playfully",
-    "trolling a little",
     "unimpressed and vocal about it",
     "salty about RNG",
     "smugly correct",
@@ -2119,11 +2145,11 @@ CREATIVE_TWISTS = [
     "Answer your own question",
     "Start mid-sentence as if continuing a thought",
     # Content twists
-    "Include an unexpected observation",
+    "Include an unexpected observation about gameplay or another player",
     "Reference something mundane from real life",
     "Use a metaphor or comparison",
     "Mention something completely unrelated briefly",
-    "React to something nobody else mentioned",
+    "React to an imagined gameplay event nobody else mentioned",
     "Misremember something slightly",
     "Get distracted mid-message",
     "Correct yourself mid-sentence",
@@ -2165,10 +2191,7 @@ CREATIVE_TWISTS = [
     "Make a self-deprecating joke",
     "Find an absurd silver lining",
     # Internet slang / meme twists
-    "Use a gamer meme phrase naturally (skill issue, mid, cope, based, ratio, no cap, W/L, git gud)",
     "Type in all-lowercase for effect",
-    "Give a mock-serious 'skill issue' callout",
-    "Drop a light 'L + ratio' style jab, playful not mean",
     "React like it's a Reddit/Discord comment, not a tavern conversation",
     "Reference stream/Discord/Twitch culture briefly",
     "Gatekeep something minor as a joke (e.g. 'real ones remember...')",
@@ -2226,11 +2249,8 @@ GOSSIP_CREATIVE_TWISTS = [
 # Message categories - abstract directions that force original content
 MESSAGE_CATEGORIES = [
     # Observations
-    "observation about surroundings or atmosphere",
-    "noticing something interesting nearby",
-    "comment about the zone's vibe",
     "remarking on how empty or busy the area is",
-    "noting something weird or unexpected",
+    "noting something weird or unexpected about gameplay",
     # Reactions
     "reaction to something that just happened",
     "celebrating a small victory",
@@ -2238,7 +2258,6 @@ MESSAGE_CATEGORIES = [
     "pleasant surprise",
     "genuine excitement about something",
     "feeling lucky",
-    "enjoying the moment",
     # Questions
     "question to other players",
     "asking if anyone else experienced something",
@@ -2260,7 +2279,7 @@ MESSAGE_CATEGORIES = [
     "joking about bad luck",
     # Humor and joy
     "lighthearted joke",
-    "playful observation",
+    "playful observation about gameplay or another player",
     "finding humor in the situation",
     "absurd or random humor",
     "pun or wordplay",
@@ -2297,18 +2316,14 @@ MESSAGE_CATEGORIES = [
     # Salt, banter, and gamer opinions
     "hot take about the game or class balance",
     "trash talking the enemy team or a mob, playfully",
-    "gatekeeping opinion about 'real' players or vanilla/classic",
     "backhanded compliment",
     "roasting a bad pull or bad decision, played for laughs",
     "meme reference or inside joke about the game",
     "complaining about queue times or bad RNG",
-    "skill-issue style callout, lighthearted",
-    "copypasta-style short rant",
     "reacting like a Reddit or Discord comment",
     "smug 'told you so' moment",
     "nostalgia bait about vanilla/classic/old content",
     # Zone/world commentary (grounded, not lore-heavy)
-    "quick comment on how a zone looks or feels",
     "noting how empty or busy an area is",
     "reacting to NPC dialogue like it's funny or dumb",
     # Nostalgic
@@ -2321,11 +2336,6 @@ MESSAGE_CATEGORIES = [
     "appreciating how far they've come",
     "bittersweet reflection on the past",
     "wishing to relive a memory",
-    # Contemplative (kept brief, not poetic)
-    "quick reflection on the game world",
-    "appreciating the simple things",
-    "moment of gratitude",
-    "feeling content",
     # Misc
     "sharing a random fact",
     "expressing boredom",
@@ -3487,6 +3497,106 @@ REACTION_TONES = {
 # and its prompt bans game-mechanic talk. Selected per event and injected as an
 # optional "topic idea" nudge.
 # =============================================================================
+GUILD_CHAT_TOPICS = [
+    # --- general gameplay ---
+    "what everyone is working on right now",
+    "asking if anyone needs help with something",
+    "complaining about a quest",
+    "a quest mob or item that refuses to drop",
+    "asking where something is",
+    "being lost or going the wrong way",
+    "leveling progress",
+    "an alt you're leveling",
+    "what zone people are questing in",
+    "whether a quest is worth doing",
+    "something annoying that just happened",
+    "something unexpectedly lucky that just happened",
+
+    # --- groups and dungeons ---
+    "asking if anyone wants to run a dungeon",
+    "looking for a tank or healer",
+    "a dungeon run that went badly",
+    "a dungeon run that went surprisingly well",
+    "waiting for someone to get to the dungeon",
+    "someone pulling too many mobs",
+    "a recent wipe",
+    "whether anyone needs a particular dungeon",
+    "asking if anyone has a group going",
+    "complaining about a long corpse run",
+
+    # --- gear and loot ---
+    "a piece of gear that finally dropped",
+    "bad loot luck",
+    "good loot luck",
+    "whether an item is actually an upgrade",
+    "asking what dropped for someone",
+    "bags being completely full",
+    "needing to repair",
+    "saving gold for something expensive",
+    "being broke after buying something",
+    "an item that seems ridiculously overpriced",
+
+    # --- classes and characters ---
+    "whether a class or spec is fun",
+    "complaining about your class",
+    "being happy with your class",
+    "trying a different spec",
+    "asking how someone's character is going",
+    "a spell or ability you just got",
+    "something another class can do that you wish you could",
+    "deciding what alt to play next",
+
+    # --- professions and economy ---
+    "asking if anyone has a profession you need",
+    "offering to craft something for a guildmate",
+    "asking for a profession material",
+    "the price of something on the auction house",
+    "trying to make some gold",
+    "being short on a crafting material",
+    "leveling a profession",
+    "something unexpectedly expensive on the auction house",
+
+    # --- PvP ---
+    "asking if anyone wants to queue for PvP",
+    "a battleground that just went badly",
+    "a battleground that just went well",
+    "complaining about getting repeatedly killed",
+    "an annoying enemy player",
+    "a close PvP fight",
+    "whether anyone else is doing battlegrounds",
+
+    # --- normal guild chatter ---
+    "saying hello after being quiet for a while",
+    "asking what everyone is up to",
+    "someone going AFK for a minute",
+    "someone getting food or a drink",
+    "being tired",
+    "playing way too late",
+    "having nothing useful to say",
+    "reacting to something another guildmate said",
+    "lightly teasing a guildmate",
+    "being bored",
+    "deciding what to do next",
+    "waiting on something",
+    "having terrible luck today",
+    "having unusually good luck today",
+    "a minor mistake you just made",
+    "realizing you forgot to do something",
+    "having to clear bag space again",
+    "wondering why you're still playing instead of sleeping",
+
+    # --- WoW/player talk ---
+    "an addon you use or need",
+    "changing your UI",
+    "keybinds or controls",
+    "lag or a connection hiccup",
+    "graphics or performance",
+    "something confusing about the game",
+    "something you remembered from another character",
+    "asking a basic game question",
+    "answering a basic game question",
+    "something in the game that makes no sense",
+]
 GUILD_CHAT_TOPICS_RP = [
     "the dangers of the road you're traveling",
     "a rumor overheard in the last town",

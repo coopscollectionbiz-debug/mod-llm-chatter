@@ -18,6 +18,7 @@ from chatter_shared import (
     build_bot_identity,
     append_json_instruction,
     get_gender_label,
+    get_chatter_mode,
 )
 from chatter_group_state import (
     _mark_event,
@@ -99,6 +100,7 @@ def handle_emote_observer(db, client, config, event):
             npc_subname,
             traits=traits,
             stored_tone=stored_tone,
+            config=config,
         )
     elif tgt == 'player_external':
         prompt = _build_player_prompt(
@@ -107,6 +109,7 @@ def handle_emote_observer(db, client, config, event):
             p_name, emote, t_name, category,
             traits=traits,
             stored_tone=stored_tone,
+            config=config,
         )
     else:
         prompt = _build_undirected_prompt(
@@ -115,6 +118,7 @@ def handle_emote_observer(db, client, config, event):
             p_name, emote,
             traits=traits,
             stored_tone=stored_tone,
+            config=config,
         )
 
     result = run_single_reaction(
@@ -166,6 +170,7 @@ def _build_creature_prompt(
     npc_subname='',
     traits=None,
     stored_tone=None,
+    config=None,
 ):
     rank_str = NPC_RANK_NAMES.get(npc_rank, "")
     type_str = NPC_TYPE_NAMES.get(
@@ -177,33 +182,62 @@ def _build_creature_prompt(
         else ""
     )
     creature_label = t_name or "a creature"
-    # Build role description: prefer subname
-    # ("Druid Trainer", "Food Vendor", "Guard"),
-    # fall back to type ("Humanoid", "Beast").
+
     if npc_subname:
         role_label = npc_subname
     else:
         role_label = f"{rank_label}{type_str}"
-    tone = stored_tone or _pick_tone(category)
-    identity = build_bot_identity(
-        bot_name, bot_race, bot_class, bot_gender
+
+    mode = (
+        get_chatter_mode(config)
+        if config else 'normal'
     )
-    prompt = identity
-    if traits:
-        prompt += (
-            " Your personality: "
-            f"{', '.join(traits)}."
+    is_rp = (mode == 'roleplay')
+
+    if is_rp:
+        tone = stored_tone or _pick_tone(category)
+
+        prompt = build_bot_identity(
+            bot_name, bot_race,
+            bot_class, bot_gender,
         )
-    prompt += (
-        f" Your tone: {tone}. "
-        f"You witness {p_name} "
-        f"/{emote} at {creature_label} "
-        f"({role_label}). "
-        f"Make a brief offhand remark about it "
-        f"— {tone}. 1-2 sentences. "
-        "NEVER put /slash commands in your "
-        "response."
-    )
+
+        if traits:
+            prompt += (
+                " Your personality: "
+                f"{', '.join(traits)}."
+            )
+
+        prompt += (
+            f" Your tone: {tone}. "
+            f"You witness {p_name} "
+            f"/{emote} at {creature_label} "
+            f"({role_label}). "
+            "Make a brief offhand remark about it "
+            f"— {tone}. 1-2 sentences. "
+            "NEVER put /slash commands in your "
+            "response."
+        )
+
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player "
+            f"controlling a {bot_class or 'character'}. "
+            f"Your party member {p_name} just used "
+            f"/{emote} on {creature_label} "
+            f"({role_label}). "
+            "React only if a real player might actually "
+            "say something about that in party chat. "
+            "Keep it very short and low-effort. "
+            "One word or a fragment is completely fine. "
+            "Examples of the general level of reaction: "
+            "'lol', 'bruh', 'why', 'lmao', 'nice', "
+            "'what are you doing'. "
+            "Do not force a joke. Do not explain the emote. "
+            "Do not roleplay or narrate what happened. "
+            "Do not put /slash commands in the response."
+        )
+
     return append_json_instruction(prompt)
 
 
@@ -212,27 +246,54 @@ def _build_player_prompt(
     p_name, emote, t_name, category,
     traits=None,
     stored_tone=None,
+    config=None,
 ):
-    tone = stored_tone or _pick_tone(category)
-    identity = build_bot_identity(
-        bot_name, bot_race, bot_class, bot_gender
+    mode = (
+        get_chatter_mode(config)
+        if config else 'normal'
     )
-    prompt = identity
-    if traits:
-        prompt += (
-            " Your personality: "
-            f"{', '.join(traits)}."
+    is_rp = (mode == 'roleplay')
+
+    if is_rp:
+        tone = stored_tone or _pick_tone(category)
+
+        prompt = build_bot_identity(
+            bot_name, bot_race,
+            bot_class, bot_gender,
         )
-    prompt += (
-        f" Your tone: {tone}. "
-        f"You notice {p_name} "
-        f"/{emote} at {t_name}, "
-        "a stranger outside the group. "
-        f"Make a brief comment about it "
-        f"— {tone}. 1-2 sentences. "
-        "NEVER put /slash commands in your "
-        "response."
-    )
+
+        if traits:
+            prompt += (
+                " Your personality: "
+                f"{', '.join(traits)}."
+            )
+
+        prompt += (
+            f" Your tone: {tone}. "
+            f"You notice {p_name} "
+            f"/{emote} at {t_name}, "
+            "a stranger outside the group. "
+            "Make a brief comment about it "
+            f"— {tone}. 1-2 sentences. "
+            "NEVER put /slash commands in your "
+            "response."
+        )
+
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player. "
+            f"Your party member {p_name} just used "
+            f"/{emote} on another player named {t_name}. "
+            "If you comment, sound like someone casually "
+            "typing in party chat while playing. "
+            "Keep it very short. One-word reactions and "
+            "fragments are fine. It can be amused, confused, "
+            "dismissive, mildly annoyed, or completely mundane. "
+            "Do not force humor or commentary. "
+            "Do not roleplay or narrate the scene. "
+            "Do not put /slash commands in the response."
+        )
+
     return append_json_instruction(prompt)
 
 
@@ -241,27 +302,58 @@ def _build_undirected_prompt(
     p_name, emote,
     traits=None,
     stored_tone=None,
+    config=None,
 ):
     category = EMOTE_CATEGORIES.get(
-        EMOTE_NAME_TO_ID.get(emote, 0), "ambient"
+        EMOTE_NAME_TO_ID.get(emote, 0),
+        "ambient",
     )
-    tone = stored_tone or _pick_tone(category)
-    identity = build_bot_identity(
-        bot_name, bot_race, bot_class, bot_gender
+
+    mode = (
+        get_chatter_mode(config)
+        if config else 'normal'
     )
-    prompt = identity
-    if traits:
-        prompt += (
-            " Your personality: "
-            f"{', '.join(traits)}."
+    is_rp = (mode == 'roleplay')
+
+    if is_rp:
+        tone = stored_tone or _pick_tone(category)
+
+        prompt = build_bot_identity(
+            bot_name, bot_race,
+            bot_class, bot_gender,
         )
-    prompt += (
-        f" Your tone: {tone}. "
-        f"You notice {p_name} "
-        f"just /{emote}. "
-        f"Make a brief offhand remark — {tone}. "
-        "1-2 sentences. "
-        "NEVER put /slash commands in your "
-        "response."
-    )
+
+        if traits:
+            prompt += (
+                " Your personality: "
+                f"{', '.join(traits)}."
+            )
+
+        prompt += (
+            f" Your tone: {tone}. "
+            f"You notice {p_name} "
+            f"just /{emote}. "
+            f"Make a brief offhand remark — {tone}. "
+            "1-2 sentences. "
+            "NEVER put /slash commands in your "
+            "response."
+        )
+
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player. "
+            f"Your party member {p_name} just used "
+            f"/{emote}. "
+            "Give a natural party-chat reaction only as much "
+            "as a real player would. Usually keep it to "
+            "1-6 words. One word is fine. "
+            "For something ordinary like a wave, a simple "
+            "'hey', 'yo', 'sup', or no elaborate reaction "
+            "is appropriate. For something silly, 'lol', "
+            "'lmao', 'bruh', or 'why' can fit. "
+            "Do not make every emote funny. "
+            "Do not roleplay, narrate, or describe the action. "
+            "Do not put /slash commands in the response."
+        )
+
     return append_json_instruction(prompt)

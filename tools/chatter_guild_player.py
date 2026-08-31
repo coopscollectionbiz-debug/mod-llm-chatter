@@ -26,12 +26,14 @@ from chatter_prompts import (
 from chatter_shared import (
     append_conversation_json_instruction,
     append_json_instruction,
+    build_bot_state_context,
     build_conversation_json_repair_prompt,
     calculate_dynamic_delay,
     find_addressed_bot,
     parse_conversation_response,
     parse_extra_data,
     select_conversation_message_count,
+    get_chatter_mode,
 )
 from chatter_text import (
     cleanup_message,
@@ -171,12 +173,18 @@ def _normalize_candidates(extra: Dict) -> List[Dict]:
         speaker = raw.get('speaker') or {}
         if not speaker:
             speaker = None
+        bot_state = raw.get('bot_state') or {}
+
+        if not isinstance(bot_state, dict):
+            bot_state = {}
+
         candidates.append({
             'guid': guid,
             'name': name,
             'zone_id': _safe_int(raw.get('zone_id')),
             'map_id': _safe_int(raw.get('map_id')),
             'speaker': speaker,
+            'bot_state': bot_state,
         })
         seen.add(guid)
     return candidates
@@ -381,59 +389,156 @@ def _shared_prompt_lines(
     player_message: str,
     session_context: str,
     callback_requested: bool,
+    chatter_mode: str = 'roleplay',
 ) -> List[str]:
-    lines = [
-        "Write natural in-character World of Warcraft "
-        "Guild Chat.",
-        f"The guild is \"{guild_name}\".",
-    ]
+    is_rp = (chatter_mode == 'roleplay')
+
+    if is_rp:
+        lines = [
+            "Write natural in-character World of Warcraft "
+            "Guild Chat.",
+            f"The guild is \"{guild_name}\".",
+        ]
+    else:
+        lines = [
+            "Write natural World of Warcraft Guild Chat "
+            "between real players typing while they play.",
+            f"The guild is \"{guild_name}\".",
+            "The speakers are players controlling their "
+            "characters, not fantasy characters roleplaying "
+            "in Azeroth.",
+        ]
+
     for participant in participants:
         lines.extend(
-            _participant_identity_lines(participant)
+            _participant_identity_lines(
+                participant,
+                chatter_mode,
+            )
         )
 
-    if faction:
+        bot_state = participant.get(
+            'bot_state', {}
+        )
+
+        factual_context = build_bot_state_context(
+            bot_state
+        )
+
+        if factual_context:
+            lines.append("")
+            lines.append(
+                f"Live state for "
+                f"{participant['name']}:"
+            )
+            lines.append(factual_context)
+
+    if is_rp and faction:
         lines.append(
             f"They fight for the {faction}. Never "
             f"insult or mock the {faction}, their own "
             "faction."
         )
+
     lines.extend(
         _guild_location_lines(participants, False)
     )
+    if not is_rp:
+        lines.extend([
+            "",
+            "LIVE STATE RULES:",
+            "- The authoritative live bot states above "
+            "override session memory, chat history, and "
+            "previous bot messages for specific factual "
+            "claims.",
+            "- Each guildmate may use ONLY the live state "
+            "listed under their own name for facts about "
+            "themselves.",
+            "- Use live state for facts about level, quests, "
+            "objectives, counts, inventory, equipment, "
+            "professions, money, location, and current "
+            "activity.",
+            "- Never borrow another guildmate's state.",
+            "- Never invent a quest name, objective, mob, "
+            "item, NPC, number, destination, profession, "
+            "equipment item, or other specific game-state "
+            "fact.",
+            "- If a requested fact is absent from that "
+            "guildmate's live state, say you don't know or "
+            "aren't sure instead of guessing.",
+            "- Supplied [[quest:...]] and [[item:...]] "
+            "tokens are exact opaque strings. Copy one "
+            "exactly when relevant or omit it. Never create "
+            "or modify a token.",
+        ])
     if session_context:
         lines.extend(["", session_context])
+
     lines.extend([
         "",
         f"{player_name} just said in Guild Chat:",
         f"\"{player_message}\"",
         "",
         "The latest player message is authoritative. "
-        "Answer it rather than an obsolete earlier turn.",
-        "Stay consistent with the session memory and "
-        "with each bot's earlier opinions. A bot may "
-        "change its mind only if it acknowledges why.",
+        "Respond to it rather than an obsolete earlier turn.",
+        "Stay consistent with session memory and each bot's "
+        "earlier opinions when relevant, but never let old "
+        "memory override authoritative current game state.",
         "Preserve unresolved questions and promises "
         "naturally; do not recite the memory.",
-        "Do not invent facts that were not said.",
-        "Guild Chat reaches across Azeroth. Never imply "
-        "the speakers can see, touch, or stand beside "
-        "one another.",
-        "Each line is spoken text only: no narrator "
-        "text, roleplay asterisks, slash commands, "
-        "emotes, or name prefixes.",
-        "Stay fully in Azeroth and avoid game-mechanic "
-        "terms such as DPS, specs, talents, loot, mobs, "
-        "XP, levels, rotations, addons, or players "
-        "behind screens.",
-        "Never exceed 150 characters in one message.",
+        "Do not invent facts that are absent from both "
+        "the authoritative live state and conversation.",
+        "Guild Chat is remote chat. Never imply the speakers "
+        "can physically see, touch, or stand beside one "
+        "another unless the context explicitly says they are "
+        "together.",
+        "Each line is chat text only: no narrator text, "
+        "roleplay asterisks, slash commands, emotes, or "
+        "name prefixes.",
     ])
+
+    if is_rp:
+        lines.extend([
+            "Stay fully in Azeroth and avoid game-mechanic "
+            "terms such as DPS, specs, talents, loot, mobs, "
+            "XP, levels, rotations, addons, or players "
+            "behind screens.",
+            "Never exceed 150 characters in one message.",
+        ])
+    else:
+        lines.extend([
+            "Write like actual WoW players casually typing "
+            "while playing.",
+            "Gameplay terminology is normal and encouraged "
+            "when relevant: quests, mobs, loot, gear, DPS, "
+            "specs, talents, levels, XP, professions, AH, "
+            "dungeons, raids, PvP, addons, alts, wipes, RNG, "
+            "bags, repairs, and similar terms.",
+            "Use ordinary WoW shorthand naturally when it "
+            "fits: gz, grats, ty, np, mb, brb, afk, oom, "
+            "lfg, inv, sec, omw, etc.",
+            "Casual internet language like lol, lmao, tbh, "
+            "ngl, bruh, or rip is fine occasionally. Do not "
+            "force memes or slang into every reply.",
+            "Lowercase, fragments, missing punctuation, "
+            "occasional typos, one-word replies, and "
+            "incomplete thoughts are fine.",
+            "Replies can be mundane, distracted, confused, "
+            "annoyed, amused, unhelpful, or brief.",
+            "Do not make every response clever, funny, "
+            "enthusiastic, polished, or meaningful.",
+            "Do not narrate gameplay or scenery.",
+            "Do not write fantasy dialogue.",
+            "Never exceed 150 characters in one message.",
+        ])
+
     if callback_requested:
         lines.append(
             "If genuinely relevant, make one subtle "
             "callback to an earlier session detail. "
             "Do not force or announce the callback."
         )
+
     return lines
 
 
@@ -453,7 +558,10 @@ def _build_single_prompt(
     callback_requested: bool,
     name_requested: bool,
     question_requested: bool,
+    config: Dict,
 ) -> str:
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
     lines = _shared_prompt_lines(
         [participant],
         guild_name,
@@ -462,22 +570,28 @@ def _build_single_prompt(
         player_message,
         session_context,
         callback_requested,
+        chatter_mode,
     )
     lines.extend([
         "",
-        f"{participant['name']} gives one direct, "
-        "meaningful reply.",
-        _pick_length_hint('roleplay'),
+        (
+            f"{participant['name']} gives one direct, "
+            "meaningful reply."
+            if is_rp
+            else
+            f"{participant['name']} replies naturally."
+        ),
+        _pick_length_hint(chatter_mode),
     ])
-    if name_requested:
+    if is_rp and name_requested:
         lines.append(
             f"Naturally address {player_name} by name "
             "once, not necessarily at the beginning."
         )
     if question_requested:
         lines.append(
-            "End with one natural follow-up question "
-            "only if the player's message supports it."
+            "A follow-up question is okay if it would "
+            "naturally be asked here. Do not force one."
         )
     lines.extend([
         "Do not merely repeat or paraphrase what the "
@@ -504,17 +618,40 @@ def _build_multi_prompt(
     question_requested: bool,
     config: Dict,
 ) -> Tuple[str, List[Dict], int]:
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
+
     names = [
         participant['name']
         for participant in participants
     ]
-    if topology == 'multi_reply':
-        message_count = len(participants)
+    if is_rp:
+        if topology == 'multi_reply':
+            message_count = len(participants)
+        else:
+            max_lines = min(
+                8,
+                max(
+                    len(participants),
+                    _safe_int(config.get(
+                        'LLMChatter.GuildChatter.'
+                        'MaxConversationLines',
+                        4,
+                    ), 4),
+                ),
+            )
+            message_count = (
+                select_conversation_message_count(
+                    len(participants),
+                    len(participants),
+                    max_lines,
+                )
+            )
     else:
         max_lines = min(
-            8,
+            4,
             max(
-                len(participants),
+                1,
                 _safe_int(config.get(
                     'LLMChatter.GuildChatter.'
                     'MaxConversationLines',
@@ -525,13 +662,13 @@ def _build_multi_prompt(
         message_count = (
             select_conversation_message_count(
                 len(participants),
-                len(participants),
+                1,
                 max_lines,
             )
         )
 
     reference_plans = []
-    if topology == 'conversation':
+    if is_rp and topology == 'conversation':
         reference_plans = (
             _select_participant_references(
                 names,
@@ -564,77 +701,106 @@ def _build_multi_prompt(
         player_message,
         session_context,
         callback_requested,
+        chatter_mode,
     )
     lines.append("")
-    if topology == 'multi_reply':
-        lines.extend([
-            "Generate independent reactions from each "
-            "selected guildmate.",
-            "Each bot answers the player from its own "
-            "perspective. Do not turn these lines into "
-            "a bot-to-bot conversation.",
-            "Every selected bot speaks exactly once.",
-        ])
+
+    if is_rp:
+        if topology == 'multi_reply':
+            lines.extend([
+                "Generate independent reactions from each "
+                "selected guildmate.",
+                "Each bot answers the player from its own "
+                "perspective. Do not turn these lines into "
+                "a bot-to-bot conversation.",
+                "Every selected bot speaks exactly once.",
+            ])
+        else:
+            lines.extend([
+                "The player's message starts a coherent "
+                "conversation among the selected guildmates.",
+                "The first bot answers the player. Later "
+                "bots may answer the player or respond to "
+                "an earlier guildmate.",
+                "Every selected bot must speak at least once.",
+            ])
     else:
         lines.extend([
-            "The player's message starts a coherent "
-            "conversation among the selected guildmates.",
-            "The first bot answers the player. Later "
-            "bots may answer the player or respond to "
-            "an earlier guildmate.",
-            "Every selected bot must speak at least once.",
+            "Respond the way a real guild would respond to "
+            "the player's message.",
+            "At least one message should respond naturally "
+            "to the player.",
+            "Other messages may respond to the player, "
+            "respond to another guildmate, change direction, "
+            "or add something brief.",
+            "Not every available guildmate needs to respond.",
+            "A guildmate may speak more than once.",
+            "Do not force everyone to acknowledge the player "
+            "or one another.",
+            "Do not force agreement, a neat conversational "
+            "arc, or a concluding message.",
+            "A short or mundane exchange is completely fine.",
         ])
 
-    moods = generate_conversation_mood_sequence(
-        message_count, 'roleplay'
-    )
-    lengths = generate_conversation_length_sequence(
-        message_count
-    )
-    sequence_names = [
-        names[index % len(names)]
-        for index in range(message_count)
-    ]
-    reference_by_index = {
-        plan['message_index']: plan
-        for plan in reference_plans
-    }
-    lines.append("MESSAGE SEQUENCE:")
-    for index, speaker in enumerate(sequence_names):
-        instruction = (
-            f"  Message {index + 1} ({speaker}): "
-            f"mood={moods[index]}, "
-            f"length={lengths[index]}"
+    if is_rp:
+        moods = generate_conversation_mood_sequence(
+            message_count, 'roleplay'
         )
-        plan = reference_by_index.get(index)
-        if plan:
-            candidates = ", ".join(plan['candidates'])
-            instruction += (
-                "; naturally address an earlier "
-                "speaker by name while replying "
-                f"(choose contextually from {candidates})"
+        lengths = generate_conversation_length_sequence(
+            message_count
+        )
+        sequence_names = [
+            names[index % len(names)]
+            for index in range(message_count)
+        ]
+        reference_by_index = {
+            plan['message_index']: plan
+            for plan in reference_plans
+        }
+        lines.append("MESSAGE SEQUENCE:")
+
+        for index, speaker in enumerate(sequence_names):
+            instruction = (
+                f"  Message {index + 1} ({speaker}): "
+                f"mood={moods[index]}, "
+                f"length={lengths[index]}"
             )
-        if index == 0 and name_requested:
-            instruction += (
-                f"; naturally address {player_name} "
-                "by name once"
-            )
-        if (
-            index == message_count - 1
-            and question_requested
-        ):
-            instruction += (
-                "; ask one natural follow-up question "
-                "if the context supports it"
-            )
-        lines.append(instruction)
+            plan = reference_by_index.get(index)
+            if plan:
+                candidates = ", ".join(plan['candidates'])
+                instruction += (
+                    "; naturally address an earlier "
+                    "speaker by name while replying "
+                    f"(choose contextually from {candidates})"
+                )
+            if index == 0 and name_requested:
+                instruction += (
+                    f"; naturally address {player_name} "
+                    "by name once"
+                )
+            if (
+                index == message_count - 1
+                and question_requested
+            ):
+                instruction += (
+                    "; ask one natural follow-up question "
+                    "if the context supports it"
+                )
+            lines.append(instruction)
+
+    output_speakers = (
+        sequence_names
+        if is_rp
+        else names
+    )
 
     prompt = append_conversation_json_instruction(
         "\n".join(lines),
-        sequence_names,
+        output_speakers,
         message_count,
         allow_action=False,
         message_only=True,
+        require_all_speakers=is_rp,
     )
     return prompt, reference_plans, message_count
 
@@ -665,6 +831,7 @@ def _generate_single_reply(
         callback_requested,
         name_requested,
         question_requested,
+        config,
     )
     response = call_llm(
         client,
@@ -759,6 +926,8 @@ def _generate_multi_reply(
         participant['name']
         for participant in participants
     ]
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
     base_tokens = _safe_int(config.get(
         'LLMChatter.GuildChatter.MaxTokens',
         200,
@@ -790,13 +959,16 @@ def _generate_multi_reply(
     )[:message_count]
 
     if not _valid_guild_conversation(
-        messages, names
+        messages,
+        names,
+        require_all_speakers=is_rp,
     ):
         repair_prompt = (
             build_conversation_json_repair_prompt(
                 prompt,
                 names,
                 message_only=True,
+                require_all_speakers=is_rp,
             )
         )
         repair_metadata = dict(metadata)
@@ -818,7 +990,9 @@ def _generate_multi_reply(
         )[:message_count]
 
     if not _valid_guild_conversation(
-        messages, names
+        messages,
+        names,
+        require_all_speakers=is_rp,
     ):
         return []
     if reference_plans:

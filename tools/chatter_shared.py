@@ -615,78 +615,493 @@ def build_race_class_context_parts(
 
 
 def build_bot_state_context(extra_data):
-    """Build natural-language state description
-    from C++ bot_state data in extra_data."""
+    """Build authoritative factual context from the
+    nested C++ bot_state snapshot."""
+
     if not extra_data:
         return ""
-    state = extra_data.get('bot_state')
+
+    if isinstance(extra_data, dict):
+        state = extra_data.get('bot_state')
+
+        # Also allow callers to pass the bot_state
+        # dictionary directly.
+        if not state and any(
+            key in extra_data
+            for key in (
+                'identity',
+                'progression',
+                'vitals',
+                'combat',
+                'equipment',
+                'inventory',
+                'professions',
+                'quests',
+                'activity',
+                'travel_state',
+            )
+        ):
+            state = extra_data
+    else:
+        return ""
+
     if not state or not isinstance(state, dict):
         return ""
 
-    parts = []
+    lines = [
+        "<authoritative_bot_state>",
+        "The facts below come from the bot's live game "
+        "state and are authoritative.",
+        "Never contradict them or invent a specific fact "
+        "that is not present.",
+    ]
 
-    # Real role (replaces CLASS_ROLE_MAP guessing)
-    role = state.get('role', '')
-    if role:
-        role_labels = {
-            'tank': 'the tank',
-            'healer': 'the healer',
-            'melee_dps': 'melee DPS',
-            'ranged_dps': 'ranged DPS',
-            'dps': 'DPS',
-        }
-        parts.append(
-            f"Your role in this group is "
-            f"{role_labels.get(role, role)}."
-        )
+    identity = state.get('identity') or {}
+    if identity:
+        identity_parts = []
 
-    # Health
-    hp = state.get('health_pct')
-    if hp is not None:
-        hp = int(hp)
-        if hp <= 20:
-            parts.append(
-                f"You are critically wounded "
-                f"({hp}% health)."
+        name = identity.get('name')
+        if name:
+            identity_parts.append(f"name={name}")
+
+        level = identity.get('level')
+        if level is not None:
+            identity_parts.append(f"level={level}")
+
+        race = identity.get('race')
+        if race:
+            identity_parts.append(f"race={race}")
+
+        class_name = identity.get('class')
+        if class_name:
+            identity_parts.append(f"class={class_name}")
+
+        gender = identity.get('gender')
+        if gender:
+            identity_parts.append(f"gender={gender}")
+
+        zone = identity.get('zone')
+        if zone:
+            identity_parts.append(f"zone={zone}")
+
+        subzone = identity.get('subzone')
+        if subzone:
+            identity_parts.append(f"subzone={subzone}")
+
+        if identity_parts:
+            lines.append(
+                "Identity: " + ", ".join(identity_parts)
             )
-        elif hp <= 50:
-            parts.append(
-                f"You are injured "
-                f"({hp}% health)."
+
+    progression = state.get('progression') or {}
+    if progression:
+        progression_parts = []
+
+        xp = progression.get('xp')
+        next_level_xp = progression.get('next_level_xp')
+        xp_pct = progression.get('xp_pct')
+
+        if xp is not None:
+            progression_parts.append(f"xp={xp}")
+
+        if next_level_xp is not None:
+            progression_parts.append(
+                f"next_level_xp={next_level_xp}"
             )
 
-    # Mana (skip for non-mana classes: -1 sentinel)
-    mp = state.get('mana_pct')
-    if mp is not None:
-        mp = int(mp)
-        if mp >= 0:  # -1 = not a mana user
-            if mp <= 15:
-                parts.append(
-                    f"You are almost out of mana "
-                    f"({mp}%)."
-                )
-            elif mp <= 35:
-                parts.append(
-                    f"Your mana is getting low "
-                    f"({mp}%)."
+        if xp_pct is not None:
+            progression_parts.append(
+                f"xp_progress={xp_pct}%"
+            )
+
+        money = progression.get('money_copper')
+        if money is not None:
+            progression_parts.append(
+                f"money_copper={money}"
+            )
+
+        if progression_parts:
+            lines.append(
+                "Progression: "
+                + ", ".join(progression_parts)
+            )
+
+    vitals = state.get('vitals') or {}
+    if vitals:
+        vital_parts = []
+
+        health_pct = vitals.get('health_pct')
+        if health_pct is not None:
+            vital_parts.append(
+                f"health={health_pct}%"
+            )
+
+        mana_pct = vitals.get('mana_pct')
+        if mana_pct is not None:
+            vital_parts.append(
+                f"mana={mana_pct}%"
+            )
+
+        if vital_parts:
+            lines.append(
+                "Vitals: " + ", ".join(vital_parts)
+            )
+
+    combat = state.get('combat') or {}
+    if combat:
+        combat_parts = []
+
+        role = combat.get('role')
+        if role:
+            combat_parts.append(f"role={role}")
+
+        in_combat = combat.get('in_combat')
+        if in_combat is not None:
+            combat_parts.append(
+                f"in_combat={bool(in_combat)}"
+            )
+
+        target = combat.get('target')
+        if target:
+            combat_parts.append(f"target={target}")
+
+        ai_state = combat.get('bot_ai_state')
+        if ai_state:
+            combat_parts.append(
+                f"bot_ai_state={ai_state}"
+            )
+
+        if combat_parts:
+            lines.append(
+                "Combat: " + ", ".join(combat_parts)
+            )
+
+    quests = state.get('quests') or []
+    if quests:
+        lines.append("Quest log:")
+
+        for quest in quests:
+            if not isinstance(quest, dict):
+                continue
+
+            qid = quest.get('id')
+            name = quest.get('name') or "unknown quest"
+            level = quest.get('level')
+            status = quest.get('status') or "unknown"
+            rewarded = quest.get('rewarded')
+
+            quest_bits = []
+
+            if qid is not None:
+                quest_bits.append(f"id={qid}")
+
+            quest_bits.append(f"name={name}")
+
+            if level is not None:
+                quest_bits.append(f"level={level}")
+
+            quest_bits.append(f"status={status}")
+
+            if rewarded is not None:
+                quest_bits.append(
+                    f"rewarded={bool(rewarded)}"
                 )
 
-    # Current target
-    target = state.get('target', '')
-    if target:
-        parts.append(
-            f"You are currently fighting "
-            f"{target}."
+            link_token = quest.get('link_token')
+            if link_token:
+                quest_bits.append(
+                    f"link_token={link_token}"
+                )
+
+            lines.append(
+                "  Quest: " + ", ".join(quest_bits)
+            )
+
+            objectives = quest.get('objectives') or []
+            for objective in objectives:
+                if not isinstance(objective, dict):
+                    continue
+
+                obj_bits = []
+
+                obj_type = objective.get('type')
+                if obj_type:
+                    obj_bits.append(f"type={obj_type}")
+
+                entry = objective.get('entry')
+                if entry is not None:
+                    obj_bits.append(f"entry={entry}")
+
+                obj_name = objective.get('name')
+                if obj_name:
+                    obj_bits.append(f"name={obj_name}")
+
+                current = objective.get('current')
+                required = objective.get('required')
+
+                if current is not None:
+                    obj_bits.append(
+                        f"current={current}"
+                    )
+
+                if required is not None:
+                    obj_bits.append(
+                        f"required={required}"
+                    )
+
+                complete = objective.get('complete')
+                if complete is not None:
+                    obj_bits.append(
+                        f"complete={bool(complete)}"
+                    )
+
+                text = objective.get('objective_text')
+                if text:
+                    obj_bits.append(f"text={text}")
+
+                if obj_bits:
+                    lines.append(
+                        "    Objective: "
+                        + ", ".join(obj_bits)
+                    )
+
+    equipment = state.get('equipment') or []
+    if equipment:
+        lines.append("Equipped items:")
+
+        for item in equipment:
+            if not isinstance(item, dict):
+                continue
+
+            bits = []
+
+            slot = item.get('slot')
+            if slot:
+                bits.append(f"slot={slot}")
+
+            name = item.get('name')
+            if name:
+                bits.append(f"name={name}")
+
+            entry = item.get('entry')
+            if entry is not None:
+                bits.append(f"entry={entry}")
+
+            item_level = item.get('item_level')
+            if item_level is not None:
+                bits.append(
+                    f"item_level={item_level}"
+                )
+
+            link_token = item.get('link_token')
+            if link_token:
+                bits.append(
+                    f"link_token={link_token}"
+                )
+
+            if bits:
+                lines.append(
+                    "  Item: " + ", ".join(bits)
+                )
+
+    inventory = state.get('inventory') or {}
+    if inventory:
+        inventory_parts = []
+
+        used_slots = inventory.get('used_slots')
+        if used_slots is not None:
+            inventory_parts.append(
+                f"used_slots={used_slots}"
+            )
+
+        free_slots = inventory.get('free_slots')
+        if free_slots is not None:
+            inventory_parts.append(
+                f"free_slots={free_slots}"
+            )
+
+        if inventory_parts:
+            lines.append(
+                "Inventory: "
+                + ", ".join(inventory_parts)
+            )
+
+        items = inventory.get('items') or []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            bits = []
+
+            name = item.get('name')
+            if name:
+                bits.append(f"name={name}")
+
+            entry = item.get('entry')
+            if entry is not None:
+                bits.append(f"entry={entry}")
+
+            count = item.get('count')
+            if count is not None:
+                bits.append(f"count={count}")
+
+            link_token = item.get('link_token')
+            if link_token:
+                bits.append(
+                    f"link_token={link_token}"
+                )
+
+            if bits:
+                lines.append(
+                    "  Inventory item: "
+                    + ", ".join(bits)
+                )
+
+    professions = state.get('professions') or []
+    if professions:
+        lines.append("Professions:")
+
+        for profession in professions:
+            if not isinstance(profession, dict):
+                continue
+
+            bits = []
+
+            name = profession.get('name')
+            if name:
+                bits.append(f"name={name}")
+
+            current = profession.get('current')
+            maximum = profession.get('max')
+
+            if current is not None:
+                bits.append(
+                    f"skill={current}"
+                )
+
+            if maximum is not None:
+                bits.append(
+                    f"max={maximum}"
+                )
+
+            if bits:
+                lines.append(
+                    "  Profession: "
+                    + ", ".join(bits)
+                )
+
+    activity = state.get('activity') or {}
+    if activity:
+        activity_parts = []
+
+        available = activity.get('available')
+        if available is not None:
+            activity_parts.append(
+                f"available={bool(available)}"
+            )
+
+        has_target = activity.get('has_travel_target')
+        if has_target is not None:
+            activity_parts.append(
+                f"has_travel_target="
+                f"{bool(has_target)}"
+            )
+
+        traveling = activity.get('traveling')
+        if traveling is not None:
+            activity_parts.append(
+                f"traveling={bool(traveling)}"
+            )
+
+        activity_type = activity.get('activity_type')
+        if activity_type:
+            activity_parts.append(
+                f"activity_type={activity_type}"
+            )
+
+        destination_type = activity.get(
+            'destination_type'
         )
+        if destination_type:
+            activity_parts.append(
+                f"destination_type="
+                f"{destination_type}"
+            )
 
-    travel_ctx = format_travel_context(
-        state.get('travel_state')
-    )
-    if travel_ctx:
-        parts.append(travel_ctx)
+        destination = activity.get('destination')
+        if destination:
+            activity_parts.append(
+                f"destination={destination}"
+            )
 
-    return ' '.join(parts)
+        distance = activity.get('distance')
+        if distance is not None:
+            activity_parts.append(
+                f"distance={distance}"
+            )
 
+        quest_name = activity.get('quest_name')
+        if quest_name:
+            activity_parts.append(
+                f"quest_name={quest_name}"
+            )
+
+        quest_id = activity.get('quest_id')
+        if quest_id is not None:
+            activity_parts.append(
+                f"quest_id={quest_id}"
+            )
+
+        if activity_parts:
+            lines.append(
+                "Current activity: "
+                + ", ".join(activity_parts)
+            )
+
+    travel = state.get('travel_state') or {}
+    if travel:
+        travel_parts = []
+
+        mode = travel.get('mode')
+        if mode:
+            travel_parts.append(f"mode={mode}")
+
+        context = travel.get('context')
+        if context:
+            travel_parts.append(
+                f"context={context}"
+            )
+
+        mounted = travel.get('mounted')
+        if mounted is not None:
+            travel_parts.append(
+                f"mounted={bool(mounted)}"
+            )
+
+        flying = travel.get('flying')
+        if flying is not None:
+            travel_parts.append(
+                f"flying={bool(flying)}"
+            )
+
+        if travel_parts:
+            lines.append(
+                "Travel: " + ", ".join(travel_parts)
+            )
+
+    lines.extend([
+        "Use only these facts for specific factual "
+        "claims about yourself.",
+        "If a requested fact is not present here, do not "
+        "invent a name, number, item, quest, NPC, mob, "
+        "location, or objective.",
+        "For supplied [[quest:...]] and [[item:...]] "
+        "tokens: copy the token exactly if relevant, "
+        "or omit it. Never create or modify a token.",
+        "</authoritative_bot_state>",
+    ])
+
+    return "\n".join(lines)
 
 def format_travel_context(travel_state):
     """Format live travel state for LLM prompts.
@@ -857,7 +1272,7 @@ def parse_config(config_path: str) -> dict:
     """Parse the WoW-style config file."""
     config = {}
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8-sig') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
@@ -1423,11 +1838,19 @@ def append_json_instruction(
             f"{lang_rule}"
         )
         return PromptParts(prompt, block)
-    # Apply ActionChance RNG: allow_action=True means
-    # "eligible for action" — the RNG decides.
-    # allow_action=False means "never include action"
-    # (e.g. raid channel).
-    # skip_action_rng=True defers RNG to post-parse.
+    # Actions are an RP-only feature globally.
+    # In Normal mode, PlayerBots should only type their
+    # spoken message and never generate narrated physical
+    # actions such as *leans in* or *swings weapon*.
+    #
+    # _action_disabled is set globally for non-RP mode.
+    if _action_disabled:
+        allow_action = False
+
+    # In RP mode, allow_action=True means the response is
+    # eligible for an action and ActionChance decides.
+    # skip_action_rng=True defers the RNG to post-parse
+    # for conversation-style callers.
     if (allow_action and not skip_action_rng
             and random.random() >= _action_chance):
         allow_action = False
@@ -1492,6 +1915,7 @@ def append_conversation_json_instruction(
     msg_count: int,
     allow_action: bool = True,
     message_only: bool = False,
+    require_all_speakers: bool = True,
 ) -> str:
     """Append conversation JSON array instruction.
 
@@ -1504,15 +1928,35 @@ def append_conversation_json_instruction(
         prompt = prompt + lang_rule
 
     if message_only:
-        example_msgs = ',\n  '.join(
-            [
-                (
-                    f'{{"speaker": "{name}", '
-                    f'"message": "..."}}'
-                )
-                for name in bot_names
-            ]
-        )
+        if require_all_speakers:
+            example_msgs = ',\n  '.join(
+                [
+                    (
+                        f'{{"speaker": "{name}", '
+                        f'"message": "..."}}'
+                    )
+                    for name in bot_names
+                ]
+            )
+            speaker_rule = (
+                "Use the listed speakers as instructed "
+                "by the conversation prompt.\n"
+            )
+        else:
+            sample_name = (
+                bot_names[0] if bot_names else "BotName"
+            )
+            example_msgs = (
+                f'{{"speaker": "{sample_name}", '
+                f'"message": "..."}}'
+            )
+            speaker_rule = (
+                f"Available speakers: {', '.join(bot_names)}.\n"
+                "Not every available speaker needs to talk. "
+                "A speaker may talk more than once. Choose "
+                "who responds naturally.\n"
+            )
+
         block = (
             "\n\nJSON rules: Use double quotes, escape "
             "quotes/newlines, no trailing commas, "
@@ -1524,9 +1968,10 @@ def append_conversation_json_instruction(
             "]\n"
             "Each object must contain only \"speaker\" "
             "and \"message\".\n"
+            f"{speaker_rule}"
             "ONLY the JSON array, nothing else.\n"
             "CRITICAL: Follow the Length instruction "
-            "in the prompt exactly â€” never exceed the "
+            "in the prompt exactly — never exceed the "
             "stated character limit."
             f"{lang_rule}"
         )
@@ -1587,14 +2032,35 @@ def append_conversation_json_instruction(
         '"action": "..."' if action_speakers
         else '"action": null'
     )
-    example_msgs = ',\n  '.join(
-        [
-            f'{{"speaker": "{name}", "message": "...", '
-            f'{emote_ex}, '
+    if require_all_speakers:
+        example_msgs = ',\n  '.join(
+            [
+                f'{{"speaker": "{name}", "message": "...", '
+                f'{emote_ex}, '
+                f'{action_ex}}}'
+                for name in bot_names
+            ]
+        )
+        speaker_rule = (
+            "Use the listed speakers as instructed "
+            "by the conversation prompt.\n"
+        )
+    else:
+        sample_name = (
+            bot_names[0] if bot_names else "BotName"
+        )
+        example_msgs = (
+            f'{{"speaker": "{sample_name}", '
+            f'"message": "...", {emote_ex}, '
             f'{action_ex}}}'
-            for name in bot_names
-        ]
-    )
+        )
+        speaker_rule = (
+            f"Available speakers: {', '.join(bot_names)}.\n"
+            "Not every available speaker needs to talk. "
+            "A speaker may talk more than once. Choose "
+            "who responds naturally. Do not force everyone "
+            "to acknowledge or answer someone else.\n"
+        )
 
     block = (
         f"\n\n{emote_rule}"
@@ -1605,6 +2071,7 @@ def append_conversation_json_instruction(
         "[\n"
         f"  {example_msgs}\n"
         "]\n"
+        f"{speaker_rule}"
         "ONLY the JSON array, nothing else.\n"
         "CRITICAL: Follow the Length instruction "
         "in the prompt exactly — never exceed the "
@@ -1619,14 +2086,13 @@ def select_conversation_message_count(
     minimum: int,
     maximum: int,
 ) -> int:
-    """Select a bounded conversation length.
+    """Select a natural conversation length.
 
-    A conversation cannot contain fewer messages than
-    participants because every selected speaker must be
-    able to contribute at least once.
+    Message count is intentionally independent of the
+    number of available participants. Real chat does not
+    require every available speaker to contribute.
     """
-    participants = max(1, int(participant_count))
-    lower = max(participants, int(minimum))
+    lower = max(1, int(minimum))
     upper = max(lower, int(maximum))
     return random.randint(lower, upper)
 
@@ -1635,26 +2101,43 @@ def build_conversation_json_repair_prompt(
     prompt: str,
     bot_names: List[str],
     message_only: bool = False,
+    require_all_speakers: bool = True,
 ) -> str:
     """Build the shared one-attempt conversation repair prompt."""
     msg_count = extract_conversation_msg_count(prompt)
+
+    if require_all_speakers:
+        speaker_text = (
+            "messages with the speakers: "
+            f"{', '.join(bot_names)}. "
+        )
+    else:
+        speaker_text = (
+            "messages using only these available speakers: "
+            f"{', '.join(bot_names)}. "
+            "Not every available speaker needs to appear. "
+            "A speaker may appear more than once. "
+        )
+
     repair_prompt = (
         "Your previous output was invalid JSON. "
         "Output ONLY a JSON array of "
         f"{msg_count if msg_count else 'the required number of'} "
-        "messages with the speakers: "
-        f"{', '.join(bot_names)}. Use double quotes, "
-        "escape quotes/newlines, no trailing commas, "
-        "no code fences."
+        f"{speaker_text}"
+        "Use double quotes, escape quotes/newlines, "
+        "no trailing commas, no code fences."
     )
+
     if message_only:
         repair_prompt += (
             " Each object must contain only "
             "\"speaker\" and \"message\"."
         )
+
     lang_rule = get_language_rule()
     if lang_rule:
         repair_prompt += lang_rule
+
     return repair_prompt
 
 

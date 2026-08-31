@@ -24,12 +24,35 @@ void LLMChatterConfig::LoadConfig()
     _debugLog = GetChatterOption<bool>("LLMChatter.DebugLog", false);
 
     // General settings
-    _triggerIntervalSeconds = GetChatterOption<uint32>("LLMChatter.TriggerIntervalSeconds", 60);
+    _triggerIntervalSeconds = GetChatterOption<uint32>(
+        "LLMChatter.TriggerIntervalSeconds", 30);
+
     _conversationChance = GetChatterOption<uint32>(
         "LLMChatter.ConversationChance", 40);
-    _triggerChance = GetChatterOption<uint32>("LLMChatter.TriggerChance", 15);
-    _cityChatterMultiplier = GetChatterOption<uint32>("LLMChatter.CityChatterMultiplier", 2);
-    _maxPendingRequests = GetChatterOption<uint32>("LLMChatter.MaxPendingRequests", 5);
+
+    _triggerChance = GetChatterOption<uint32>(
+        "LLMChatter.TriggerChance", 15);
+
+    _cityTriggerChance = GetChatterOption<uint32>(
+        "LLMChatter.CityTriggerChance", 75);
+
+    _cityConversationChance = GetChatterOption<uint32>(
+        "LLMChatter.CityConversationChance", 60);
+
+    _capitalTriggerMinSeconds = GetChatterOption<uint32>(
+        "LLMChatter.CapitalTriggerMinSeconds", 3);
+
+    _capitalTriggerMaxSeconds = GetChatterOption<uint32>(
+        "LLMChatter.CapitalTriggerMaxSeconds", 8);
+
+    if (_capitalTriggerMinSeconds < 1)
+        _capitalTriggerMinSeconds = 1;
+
+    if (_capitalTriggerMaxSeconds < _capitalTriggerMinSeconds)
+        _capitalTriggerMaxSeconds = _capitalTriggerMinSeconds;
+
+    _maxPendingRequests = GetChatterOption<uint32>(
+        "LLMChatter.MaxPendingRequests", 5);
     _maxBotsPerZone = GetChatterOption<uint32>(
         "LLMChatter.MaxBotsPerZone", 8);
     _maxMessageLength = GetChatterOption<uint32>(

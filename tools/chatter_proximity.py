@@ -16,6 +16,8 @@ from chatter_shared import (
     get_class_name,
     get_gender_label,
     get_race_name,
+    get_chatter_mode,
+    build_bot_state_context,
     strip_conversation_actions,
 )
 from chatter_text import (
@@ -203,139 +205,280 @@ def _single_prompt(
     last_message: Optional[str] = None,
     config: Optional[Dict] = None,
 ) -> PromptParts:
+    mode = get_chatter_mode(config or {})
+    is_rp = mode == 'roleplay'
+    is_npc = bool(speaker.get('is_npc'))
+
     zone_name = extra.get('zone_name', 'the area')
     subzone_name = extra.get('subzone_name', '')
     player_name = extra.get('player_name', 'the player')
+
     player_addressed = bool(
         extra.get('player_addressed', False)
     )
+
     speaker_desc = _describe_speaker(db, speaker)
     nearby_names = extra.get('nearby_names') or []
+
     speaker_traits = []
     speaker_tone = ''
     speaker_backstory = ''
+
     if not speaker.get('is_npc'):
         profile = _query_bot_traits(
             db,
             int(speaker.get('bot_guid', 0) or 0),
         )
+
         speaker_traits = profile.get('traits', [])
         speaker_tone = profile.get('tone', '')
         speaker_backstory = profile.get(
             'backstory', ''
         )
 
-    lines = [
-        "You write extremely short, immersive World of "
-        "Warcraft in-world /say lines.",
-        "message must be 8-15 words, grounded, local, "
-        "and low-stakes.",
-        "Keep it lore-friendly. No modern memes, no AI "
-        "talk, no markdown.",
-        "",
-        f"Speaker: {speaker_desc}",
-        f"Zone: {zone_name}",
-    ]
-    if speaker_traits:
+    if is_rp or is_npc:
+        lines = [
+            "You write extremely short, immersive World of "
+            "Warcraft in-world /say lines.",
+            "Message must be 8-15 words, grounded, local, "
+            "and low-stakes.",
+            "Keep it lore-friendly. No modern memes, no AI "
+            "talk, no markdown.",
+            "",
+            f"Speaker: {speaker_desc}",
+            f"Zone: {zone_name}",
+        ]
+    else:
+        lines = [
+            "Write one /say message like a real World of "
+            "Warcraft player casually typing while playing.",
+            "The speaker is the PLAYER controlling this "
+            "character, not the character roleplaying.",
+            "",
+            "Keep it casual and low-effort.",
+            "Very short messages are preferred.",
+            "A one-word reply or sentence fragment is fine.",
+            "Lowercase, shorthand, missing punctuation, and "
+            "occasional typos are normal.",
+            "Normal WoW shorthand like lol, gz, ty, np, mb, "
+            "brb, afk, oom, inv, sec, omw, and lfg is fine "
+            "when it naturally fits.",
+            "Occasional casual internet slang is fine, but "
+            "do not force slang or memes.",
+            "",
+            "Do not try to make the message interesting, "
+            "clever, funny, useful, or memorable.",
+            "Do not narrate gameplay.",
+            "Do not describe scenery, weather, surroundings, "
+            "or atmosphere.",
+            "Do not turn the zone into a conversation topic "
+            "just because its name is provided.",
+            "Do not use fantasy dialogue.",
+            "Do not explain ordinary WoW terminology.",
+            "No AI talk or markdown.",
+            "",
+            f"Speaker: {speaker_desc}",
+            f"Zone for factual context only: {zone_name}",
+        ]
+
+    if speaker_traits and (is_rp or is_npc):
         lines.append(
             "Speaker personality: "
             + ", ".join(speaker_traits)
         )
-    if speaker_tone:
-        lines.append(f"Speaker tone: {speaker_tone}")
-    # RNG-gate backstory injection
-    if speaker_backstory and config:
+
+    if speaker_tone and (is_rp or is_npc):
+        lines.append(
+            f"Speaker tone: {speaker_tone}"
+        )
+
+    # RNG-gate backstory injection.
+    if (
+        speaker_backstory
+        and config
+        and (is_rp or is_npc)
+    ):
         bs_enabled = int(config.get(
             'LLMChatter.Backstory.Enable', 1
         ))
+
         prox_chance = int(config.get(
             'LLMChatter.Backstory.ProximityChance',
             15,
         )) / 100.0
-        if bs_enabled and random.random() < prox_chance:
+
+        if (
+            bs_enabled
+            and random.random() < prox_chance
+        ):
             lines.append(
                 f"Speaker background: "
                 f"{speaker_backstory}"
             )
+
     if subzone_name:
-        lines.append(f"Subzone: {subzone_name}")
-    lines.append(f"Topic seed: {topic}")
+        if is_rp or is_npc:
+            lines.append(
+                f"Subzone: {subzone_name}"
+            )
+        else:
+            lines.append(
+                f"Current subzone for factual context only: "
+                f"{subzone_name}"
+            )
+
+    # Topic seeds are useful for RP, but forcing one into
+    # every Normal-mode line makes ambient chat feel authored.
+    if is_rp or is_npc:
+        lines.append(
+            f"Topic seed: {topic}"
+        )
 
     if player_message:
+        lines.append("")
         lines.append(
-            f"Player message to answer: {player_message}"
+            f"Nearby player said: {player_message}"
         )
-    if last_message:
+
+        if not is_rp and not is_npc:
+            lines.extend([
+                "Respond like an ordinary player who heard "
+                "that message.",
+                "Answer it if an answer makes sense, but you "
+                "may also be brief, uncertain, confused, or "
+                "only partially helpful.",
+                "Do not invent specific game facts just to "
+                "provide an answer.",
+            ])
+
+    elif last_message:
+        lines.append("")
         lines.append(
-            f"Most recent nearby line: {last_message}"
+            f"Most recent nearby /say: {last_message}"
         )
+
+        if not is_rp and not is_npc:
+            lines.extend([
+                "This may be a continuation of the local "
+                "conversation.",
+                "React naturally if a response makes sense.",
+                "Do not restate or summarize what was said.",
+            ])
+
+    elif not is_rp and not is_npc:
+        lines.extend([
+            "",
+            "This is unsolicited ambient /say.",
+            "There is no required subject.",
+            "The player may make a mundane comment, ask a "
+            "small question, complain briefly, say something "
+            "practical, or say almost nothing.",
+            "It does not need to start a conversation.",
+        ])
 
     addressable = list(nearby_names)
+
     if player_addressed:
         addressable.insert(0, player_name)
-    if addressable:
-        lines.append(
-            "Nearby people you may address by name: "
-            + ", ".join(addressable[:5]) + "."
-        )
 
-    # Use global EmoteChance / ActionChance gates
+    if addressable:
+        if is_rp or is_npc:
+            lines.append(
+                "Nearby people you may address by name: "
+                + ", ".join(addressable[:5]) + "."
+            )
+        else:
+            lines.append(
+                "Nearby players: "
+                + ", ".join(addressable[:5])
+                + ". Mention one only if it naturally fits."
+            )
+
     return append_json_instruction(
         "\n".join(lines) + "\n",
-        allow_action=True,
+        allow_action=(is_rp or is_npc),
         skip_emote=False,
     )
-
 
 def _conversation_prompt(
     db, extra: Dict, participants: List[Dict],
     config: Optional[Dict] = None,
 ) -> PromptParts:
-    topic = random.choice(PROXIMITY_CHAT_TOPICS)
+    mode = get_chatter_mode(config or {})
+    is_rp = mode == 'roleplay'
+
     zone_name = extra.get('zone_name', 'the area')
     subzone_name = extra.get('subzone_name', '')
+
     max_lines = max(
         2, min(
             int(extra.get('max_lines', 3) or 3),
             len(participants) + 1,
         ),
     )
-    # Check backstory config once
+
+    if not is_rp:
+        # Real /say exchanges are often extremely short.
+        # Sometimes a player says one thing and nobody
+        # really develops it into a conversation.
+        max_lines = random.randint(1, max_lines)
+
+    # RP mode may still use a topic seed.
+    topic = (
+        random.choice(PROXIMITY_CHAT_TOPICS)
+        if is_rp
+        else None
+    )
+
+    # Check backstory config once.
     _bs_enabled = False
     _bs_chance = 0.0
+
     if config:
         _bs_enabled = int(config.get(
             'LLMChatter.Backstory.Enable', 1
         )) == 1
+
         _bs_chance = int(config.get(
             'LLMChatter.Backstory.ProximityChance',
             15,
         )) / 100.0
 
     roster_lines = []
+
     for speaker in participants:
         line = f"- {_describe_speaker(db, speaker)}"
-        if not speaker.get('is_npc'):
+
+        if not speaker.get('is_npc') and is_rp:
             profile = _query_bot_traits(
                 db,
                 int(speaker.get('bot_guid', 0) or 0),
             )
+
             traits = profile.get('traits', [])
             tone = profile.get('tone', '')
             backstory = profile.get('backstory', '')
+
             if traits:
                 line += (
                     "; personality: "
                     + ", ".join(traits)
                 )
+
             if tone:
                 line += f"; tone: {tone}"
-            if (backstory and _bs_enabled
-                    and random.random() < _bs_chance):
+
+            if (
+                backstory
+                and _bs_enabled
+                and random.random() < _bs_chance
+            ):
                 line += (
                     f"; background: {backstory}"
                 )
+
         roster_lines.append(line)
+
     roster = "\n".join(roster_lines)
 
     nearby_names = extra.get('nearby_names') or []
@@ -344,31 +487,100 @@ def _conversation_prompt(
         extra.get('player_addressed', False)
     )
 
-    lines = [
-        "You write short World of Warcraft ambient "
-        "overheard /say conversations.",
-        "Use only the provided speaker names.",
-        "Each message must be 6-14 words, natural, and "
-        "grounded in the immediate place.",
-        "Keep the exchange brief and immersive.",
-        "",
-        f"Zone: {zone_name}",
-        f"Topic seed: {topic}",
-        f"Write EXACTLY {max_lines} messages.",
-        "Speakers may address each other by name.",
-    ]
+    if is_rp:
+        lines = [
+            "You write short World of Warcraft ambient "
+            "overheard /say conversations.",
+            "Use only the provided speaker names.",
+            "Each message must be 6-14 words, natural, and "
+            "grounded in the immediate place.",
+            "Keep the exchange brief and immersive.",
+            "",
+            f"Zone: {zone_name}",
+            f"Topic seed: {topic}",
+            f"Write EXACTLY {max_lines} messages.",
+            "Speakers may address each other by name.",
+        ]
+    else:
+        lines = [
+            "Simulate an overheard /say exchange between "
+            "real World of Warcraft players.",
+            "These are players at their keyboards controlling "
+            "characters, not characters roleplaying.",
+            "Use only the provided speaker names.",
+            "",
+            "Write like actual players who happen to be near "
+            "each other in the game.",
+            "Most messages should be very short and low-effort.",
+            "One-word replies and sentence fragments are normal.",
+            "Lowercase, shorthand, missing punctuation, and "
+            "occasional typos are normal.",
+            "Normal WoW shorthand like lol, gz, ty, np, mb, "
+            "brb, afk, oom, inv, sec, omw, and lfg is fine "
+            "when it naturally fits.",
+            "",
+            "Do not try to create an interesting conversation.",
+            "Do not give the exchange a story arc, setup, "
+            "punchline, lesson, or conclusion.",
+            "Do not make every message witty, useful, friendly, "
+            "or responsive.",
+            "Players may misunderstand each other, disagree, "
+            "give a useless answer, change the subject, or "
+            "barely respond.",
+            "A player may speak twice.",
+            "Not every available speaker has to participate.",
+            "The exchange may stop abruptly.",
+            "",
+            "Do not narrate gameplay, scenery, weather, "
+            "surroundings, or atmosphere.",
+            "Do not describe the zone just because its name "
+            "is provided.",
+            "Do not use fantasy dialogue or immersive "
+            "character speech.",
+            "Do not explain ordinary WoW terminology to the "
+            "other players.",
+            "Do not force memes, jokes, sarcasm, or slang.",
+            "",
+            "Possible reasons players might happen to talk "
+            "include quests, mobs, loot, bags, professions, "
+            "travel, grouping, directions, waiting, mistakes, "
+            "or something completely trivial.",
+            "You do NOT need to choose from that list.",
+            "",
+            f"Zone: {zone_name}",
+            f"Write EXACTLY {max_lines} messages.",
+        ]
+
     if subzone_name:
-        lines.append(f"Subzone: {subzone_name}")
+        if is_rp:
+            lines.append(
+                f"Subzone: {subzone_name}"
+            )
+        else:
+            lines.append(
+                f"Current subzone for factual context only: "
+                f"{subzone_name}"
+            )
 
     addressable = list(nearby_names)
+
     if player_addressed and player_name:
         addressable.insert(0, player_name)
+
     if addressable:
-        lines.append(
-            "Also nearby: "
-            + ", ".join(addressable[:5])
-            + ". A speaker may address one of them."
-        )
+        if is_rp:
+            lines.append(
+                "Also nearby: "
+                + ", ".join(addressable[:5])
+                + ". A speaker may address one of them."
+            )
+        else:
+            lines.append(
+                "Other nearby players: "
+                + ", ".join(addressable[:5])
+                + ". They are background context only. "
+                "Do not involve them unless it feels natural."
+            )
 
     lines.append("Speakers:")
     lines.append(roster)
@@ -376,14 +588,14 @@ def _conversation_prompt(
     speaker_names = [
         s.get('name', '') for s in participants
     ]
-    # Use global EmoteChance / ActionChance gates
+
     return append_conversation_json_instruction(
         "\n".join(lines) + "\n",
         speaker_names,
         max_lines,
-        allow_action=True,
+        allow_action=is_rp,
+        require_all_speakers=is_rp,
     )
-
 
 def _generate_single_line(
     db,
@@ -580,18 +792,27 @@ def handle_proximity_conversation(
 
 def handle_proximity_reply(db, client, config, event):
     event_id = int(event['id'])
+
     extra = parse_extra_data(
         event.get('extra_data'),
         event_id,
         'proximity_reply',
     )
+
+    mode = get_chatter_mode(config or {})
+    is_rp = mode == 'roleplay'
+
     responder = {
-        'name': extra.get('responder_name', 'Nearby'),
+        'name': extra.get(
+            'responder_name', 'Nearby'
+        ),
         'is_npc': bool(
             extra.get('responder_is_npc', False)
         ),
         'bot_guid': int(
-            extra.get('responder_bot_guid', 0) or 0
+            extra.get(
+                'responder_bot_guid', 0
+            ) or 0
         ),
         'npc_spawn_id': int(
             extra.get(
@@ -599,6 +820,7 @@ def handle_proximity_reply(db, client, config, event):
             ) or 0
         ),
     }
+
     if (
         not responder['bot_guid']
         and not responder['npc_spawn_id']
@@ -606,12 +828,35 @@ def handle_proximity_reply(db, client, config, event):
         _mark_event(db, event_id, 'skipped')
         return False
 
-    topic = "brief local reply"
-    if int(extra.get('turn_count', 0) or 0) >= (
-        _get_proximity_int(config, 'ReplyMaxTurns', 5)
-        - 1
-    ):
-        topic = "brief reply with a graceful exit"
+    # Normal-mode proximity conversation is PlayerBot
+    # chat. NPC scene replies are RP-only.
+    if not is_rp and responder['is_npc']:
+        logger.debug(
+            "Skipping Normal-mode NPC proximity reply "
+            "for event %s",
+            event_id,
+        )
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+    # Topic steering is retained for RP. Normal mode
+    # relies on the actual previous/player message and
+    # should not be forced into a scripted exit.
+    if is_rp:
+        topic = "brief local reply"
+
+        if int(
+            extra.get('turn_count', 0) or 0
+        ) >= (
+            _get_proximity_int(
+                config, 'ReplyMaxTurns', 5
+            ) - 1
+        ):
+            topic = (
+                "brief reply with a graceful exit"
+            )
+    else:
+        topic = "brief local reply"
 
     ok = _generate_single_line(
         db,
@@ -620,8 +865,9 @@ def handle_proximity_reply(db, client, config, event):
         event_id,
         extra,
         responder,
-        message_event_id=int(extra.get('scene_id', 0) or 0)
-        or event_id,
+        message_event_id=int(
+            extra.get('scene_id', 0) or 0
+        ) or event_id,
         topic=topic,
         player_message=extra.get(
             'player_message', ''
@@ -631,10 +877,13 @@ def handle_proximity_reply(db, client, config, event):
         ),
         label='proximity_reply',
     )
+
     _mark_event(
-        db, event_id,
+        db,
+        event_id,
         'completed' if ok else 'skipped',
     )
+
     return ok
 
 
@@ -703,28 +952,98 @@ def _player_say_single_prompt(
     speaker: Dict,
     player_message: str,
     history: List[Dict],
+    config: Optional[Dict] = None,
 ) -> PromptParts:
+    mode = get_chatter_mode(config or {})
+    is_rp = mode == 'roleplay'
+    is_npc = bool(speaker.get('is_npc'))
     zone_name = extra.get('zone_name', 'the area')
     subzone_name = extra.get('subzone_name', '')
     player_name = extra.get(
         'player_name', 'the player'
     )
     speaker_desc = _describe_speaker(db, speaker)
+
+    bot_state = {}
+    bot_states = extra.get('bot_states') or {}
+
+    if (
+        not is_npc
+        and isinstance(bot_states, dict)
+    ):
+        speaker_guid = speaker.get('id')
+        if speaker_guid is not None:
+            bot_state = bot_states.get(
+                str(speaker_guid), {}
+            )
+
+    factual_context = build_bot_state_context(
+        bot_state
+    )
     nearby_names = extra.get('nearby_names') or []
 
-    lines = [
-        "You write extremely short, immersive World "
-        "of Warcraft in-world /say lines.",
-        "message must be 8-15 words, grounded, "
-        "local, and low-stakes.",
-        "Keep it lore-friendly. No modern memes, no "
-        "AI talk, no markdown.",
-        "",
-        f"Speaker: {speaker_desc}",
-        f"Zone: {zone_name}",
-    ]
+    if is_rp or is_npc:
+        lines = [
+            "You write extremely short, immersive World "
+            "of Warcraft in-world /say lines.",
+            "Message must be 8-15 words, grounded, "
+            "local, and low-stakes.",
+            "Keep it lore-friendly. No modern memes, no "
+            "AI talk, no markdown.",
+            "",
+            f"Speaker: {speaker_desc}",
+            f"Zone: {zone_name}",
+        ]
+    else:
+        lines = [
+            "Reply to the nearby player like a real WoW "
+            "player casually typing in /say while playing.",
+            "You are the PLAYER controlling this character, "
+            "not an NPC roleplaying the character.",
+            "Keep the reply casual and usually short. "
+            "Fragments, lowercase, shorthand, missing "
+            "punctuation, and occasional typos are normal.",
+            "WoW shorthand and occasional internet slang are "
+            "fine when natural. Do not force memes, jokes, "
+            "sarcasm, or cleverness.",
+            "Answer what the player actually said. A simple "
+            "yeah, nah, lol, idk, ty, np, sec, or similar "
+            "short response can be completely appropriate.",
+            "Do not narrate the scenery or make the response "
+            "sound like fantasy dialogue.",
+            "No AI talk or markdown.",
+            "",
+            f"Speaker: {speaker_desc}",
+            f"Zone: {zone_name}",
+        ]
     if subzone_name:
         lines.append(f"Subzone: {subzone_name}")
+
+    if factual_context:
+        lines.append("")
+        lines.append(factual_context)
+
+    if not is_rp and not is_npc:
+        lines.extend([
+            "",
+            "FACTUAL RULES:",
+            "- The authoritative live bot state above "
+            "overrides chat history and previous messages "
+            "for specific factual claims.",
+            "- Use only that state for facts about your "
+            "level, quests, objectives, counts, inventory, "
+            "gear, professions, money, location, or activity.",
+            "- Never invent a quest name, quest objective, "
+            "mob, item, NPC, number, destination, or other "
+            "specific game-state fact.",
+            "- If the player asks for a fact that is not "
+            "present in the authoritative state, say you "
+            "don't know or aren't sure.",
+            "- Supplied [[quest:...]] and [[item:...]] "
+            "tokens are exact opaque strings. Copy one "
+            "exactly when relevant or omit it. Never create "
+            "or modify a token.",
+        ])
 
     addressed = extra.get('addressed_name', '')
     if addressed:
@@ -740,10 +1059,63 @@ def _player_say_single_prompt(
         "Respond naturally to the player's words."
     )
 
-    history_block = _format_history_block(history)
+    # In Normal mode, recent proximity chat is only
+    # background context. Simple greetings should not get
+    # dragged into whatever ambient topic happened earlier.
+    normalized_player_message = (
+        player_message.strip().lower().rstrip("!?.,")
+    )
+
+    simple_greetings = {
+        "hi",
+        "hey",
+        "hello",
+        "yo",
+        "sup",
+        "hiya",
+        "hey guys",
+        "hi guys",
+        "hello guys",
+        "yo guys",
+        "hey there",
+        "hello there",
+        "hi there",
+    }
+
+    include_history = True
+
+    if (
+        not is_rp
+        and not is_npc
+        and normalized_player_message in simple_greetings
+    ):
+        include_history = False
+
+    history_block = (
+        _format_history_block(history)
+        if include_history
+        else ""
+    )
+
     if history_block:
-        lines.append("")
-        lines.append(history_block)
+        lines.extend([
+            "",
+            "RECENT CHAT CONTEXT:",
+            "- The player's CURRENT message is the primary "
+            "thing you are responding to.",
+            "- The recent conversation below is background "
+            "only. Do not continue it unless the player's "
+            "current message clearly refers to it.",
+            "- Especially do not continue topics about "
+            "scenery, sunsets, sunrises, weather, the sky, "
+            "lighting, atmosphere, views, or how the area "
+            "looks unless the player explicitly brings one "
+            "of those things up.",
+            "- A new greeting, question, or subject can "
+            "completely replace the previous topic.",
+            "",
+            history_block,
+        ])
 
     addressable = list(nearby_names)
     addressable.insert(0, player_name)
@@ -756,7 +1128,7 @@ def _player_say_single_prompt(
 
     return append_json_instruction(
         "\n".join(lines) + "\n",
-        allow_action=True,
+        allow_action=is_rp or is_npc,
         skip_emote=False,
     )
 
@@ -767,77 +1139,252 @@ def _player_say_conversation_prompt(
     participants: List[Dict],
     player_message: str,
     history: List[Dict],
+    config: Optional[Dict] = None,
 ) -> PromptParts:
+    mode = get_chatter_mode(config or {})
+    is_rp = mode == 'roleplay'
+
     zone_name = extra.get('zone_name', 'the area')
     subzone_name = extra.get('subzone_name', '')
     player_name = extra.get(
         'player_name', 'the player'
     )
+
     max_lines = max(
         2, min(
             int(extra.get('max_lines', 3) or 3),
             len(participants) + 1,
         ),
     )
+
+    if not is_rp:
+        # A real player's /say does not need to trigger
+        # a whole group conversation. One reply is normal.
+        max_lines = random.randint(1, max_lines)
+
     roster = "\n".join(
         f"- {_describe_speaker(db, speaker)}"
         for speaker in participants
     )
+
     nearby_names = extra.get('nearby_names') or []
 
-    lines = [
-        "You write short World of Warcraft "
-        "overheard /say conversations.",
-        "Use only the provided speaker names.",
-        "Each message must be 6-14 words, natural, "
-        "and grounded in the immediate place.",
-        "Keep the exchange brief and immersive.",
-        "",
-        f"Zone: {zone_name}",
-    ]
+    bot_states = extra.get('bot_states') or {}
+    if not isinstance(bot_states, dict):
+        bot_states = {}
+
+    if is_rp:
+        lines = [
+            "You write short World of Warcraft "
+            "overheard /say conversations.",
+            "Use only the provided speaker names.",
+            "Each message must be 6-14 words, natural, "
+            "and grounded in the immediate place.",
+            "Keep the exchange brief and immersive.",
+            "",
+            f"Zone: {zone_name}",
+        ]
+    else:
+        lines = [
+            "Simulate nearby real World of Warcraft players "
+            "responding to another player's /say message.",
+            "Use only the provided speaker names.",
+            "The speakers are PLAYERS at their keyboards "
+            "controlling their characters. They are not "
+            "NPCs or characters roleplaying.",
+            "",
+            "Treat this like ordinary WoW player chat.",
+            "Most replies should be very short and low-effort.",
+            "One-word replies and fragments are normal.",
+            "Lowercase, shorthand, missing punctuation, and "
+            "occasional typos are normal.",
+            "Normal WoW shorthand like lol, gz, ty, np, mb, "
+            "brb, afk, oom, inv, sec, omw, and lfg is fine "
+            "when it naturally fits.",
+            "Occasional casual internet slang is fine, but "
+            "do not force slang or memes.",
+            "",
+            "At least one speaker should react to what the "
+            "player actually said.",
+            "One player answering is completely sufficient.",
+            "Do NOT turn a simple player message into a group "
+            "discussion just because several bots are nearby.",
+            "Other speakers may ignore the player entirely.",
+            "A speaker may talk more than once.",
+            "Do not make everyone agree, acknowledge each "
+            "other, or stay on the same subject.",
+            "Replies can be uncertain, distracted, mundane, "
+            "unhelpful, or incomplete when appropriate.",
+            "",
+            "Do not try to make the exchange interesting, "
+            "clever, funny, wholesome, or memorable.",
+            "Do not give it a story arc or conclusion.",
+            "Do not narrate gameplay, scenery, weather, "
+            "surroundings, or atmosphere.",
+            "Do not discuss the zone merely because its name "
+            "is provided.",
+            "Do not use fantasy dialogue.",
+            "Do not explain ordinary WoW terminology.",
+            "",
+            f"Zone for factual context only: {zone_name}",
+        ]
+
     if subzone_name:
-        lines.append(f"Subzone: {subzone_name}")
+        if is_rp:
+            lines.append(
+                f"Subzone: {subzone_name}"
+            )
+        else:
+            lines.append(
+                f"Current subzone for factual context only: "
+                f"{subzone_name}"
+            )
+
+    factual_states_added = False
+
+    for speaker in participants:
+        if speaker.get('is_npc'):
+            continue
+
+        speaker_guid = speaker.get('id')
+        if speaker_guid is None:
+            continue
+
+        bot_state = bot_states.get(
+            str(speaker_guid), {}
+        )
+
+        factual_context = build_bot_state_context(
+            bot_state
+        )
+
+        if not factual_context:
+            continue
+
+        if not factual_states_added:
+            lines.append("")
+            lines.append(
+                "AUTHORITATIVE LIVE BOT STATES:"
+            )
+            factual_states_added = True
+
+        speaker_name = speaker.get(
+            'name', 'Unknown'
+        )
+
+        lines.append("")
+        lines.append(
+            f"Live state for {speaker_name}:"
+        )
+        lines.append(factual_context)
+
+    if not is_rp:
+        lines.extend([
+            "",
+            "FACTUAL RULES:",
+            "- The authoritative live bot states above "
+            "override chat history and previous bot "
+            "messages for specific factual claims.",
+            "- Each PlayerBot may use ONLY the live state "
+            "listed under their own name for facts about "
+            "themselves.",
+            "- Never borrow another bot's level, quests, "
+            "objective counts, inventory, gear, "
+            "professions, money, location, or activity.",
+            "- Never invent a quest name, quest objective, "
+            "mob, item, NPC, number, destination, or other "
+            "specific game-state fact.",
+            "- If a requested fact is absent from that "
+            "speaker's live state, have them say they "
+            "don't know or aren't sure.",
+            "- Supplied [[quest:...]] and [[item:...]] "
+            "tokens are exact opaque strings. Copy one "
+            "exactly when relevant or omit it. Never "
+            "create or modify a token.",
+        ])
 
     addressed = extra.get('addressed_name', '')
-    if addressed:
-        lines.append(
-            f"The player ({player_name}) is "
-            f"addressing {addressed} directly."
-        )
-        lines.append(
-            f"IMPORTANT: The FIRST message in the "
-            f"array MUST be spoken by {addressed}, "
-            f"since the player is talking to them."
-        )
+
+    lines.append("")
     lines.append(
         f"A nearby player ({player_name}) said: "
         f"{player_message}"
     )
-    lines.append(
-        "Speakers should react to or acknowledge "
-        "the player's words."
-    )
+
+    if addressed:
+        lines.append(
+            f"The player is directly addressing "
+            f"{addressed}."
+        )
+        lines.append(
+            f"The FIRST message MUST be spoken by "
+            f"{addressed}."
+        )
+
+        if not is_rp:
+            lines.append(
+                f"{addressed} should respond to the player "
+                f"before anyone else says anything."
+            )
+
+    if is_rp:
+        lines.append(
+            "Speakers should react to or acknowledge "
+            "the player's words."
+        )
+    else:
+        lines.extend([
+            "At least one generated message must respond "
+            "naturally to the player's words.",
+            "Do not merely use the player's message as a "
+            "topic for the bots to discuss with each other.",
+            "If the player's message only needs a tiny reply, "
+            "a tiny reply is preferable.",
+        ])
+
     lines.append(
         f"Write EXACTLY {max_lines} messages."
     )
-    lines.append(
-        "Speakers may address each other or the "
-        "player by name."
-    )
+
+    if is_rp:
+        lines.append(
+            "Speakers may address each other or the "
+            "player by name."
+        )
+    else:
+        lines.append(
+            "Speakers may address the player or each other "
+            "when natural, but do not force names into replies."
+        )
 
     history_block = _format_history_block(history)
+
     if history_block:
         lines.append("")
         lines.append(history_block)
 
+        if not is_rp:
+            lines.append(
+                "Use recent conversation only when relevant. "
+                "Do not summarize it or force continuity."
+            )
+
     addressable = list(nearby_names)
     addressable.insert(0, player_name)
+
     if addressable:
-        lines.append(
-            "Also nearby: "
-            + ", ".join(addressable[:5])
-            + ". A speaker may address one of them."
-        )
+        if is_rp:
+            lines.append(
+                "Also nearby: "
+                + ", ".join(addressable[:5])
+                + ". A speaker may address one of them."
+            )
+        else:
+            lines.append(
+                "Other nearby players: "
+                + ", ".join(addressable[:5])
+                + ". Mention one only when it naturally fits."
+            )
 
     lines.append("Speakers:")
     lines.append(roster)
@@ -845,11 +1392,13 @@ def _player_say_conversation_prompt(
     speaker_names = [
         s.get('name', '') for s in participants
     ]
+
     return append_conversation_json_instruction(
         "\n".join(lines) + "\n",
         speaker_names,
         max_lines,
-        allow_action=True,
+        allow_action=is_rp,
+        require_all_speakers=is_rp,
     )
 
 
@@ -886,7 +1435,12 @@ def handle_proximity_player_say(
 
     speaker = participants[0]
     prompt = _player_say_single_prompt(
-        db, extra, speaker, player_message, history
+        db,
+        extra,
+        speaker,
+        player_message,
+        history,
+        config=config,
     )
     response = call_llm(
         client,
@@ -958,8 +1512,12 @@ def handle_proximity_player_conversation(
     )
 
     prompt = _player_say_conversation_prompt(
-        db, extra, participants,
-        player_message, history
+        db,
+        extra,
+        participants,
+        player_message,
+        history,
+        config=config,
     )
     max_lines = int(
         extra.get('max_lines', 3) or 3
@@ -1030,13 +1588,30 @@ def handle_proximity_player_conversation(
             "event %s fell back to single-line",
             event_id,
         )
+
+        # Prefer the explicitly addressed PlayerBot for
+        # fallback instead of blindly using participants[0].
+        fallback_speaker = participants[0]
+        addressed_name = extra.get(
+            'addressed_name', ''
+        )
+
+        if addressed_name:
+            for candidate in participants:
+                if (
+                    candidate.get('name', '').lower()
+                    == addressed_name.lower()
+                ):
+                    fallback_speaker = candidate
+                    break
+
         fallback = _generate_single_line(
             db,
             client,
             config,
             event_id,
             extra,
-            participants[0],
+            fallback_speaker,
             player_message=player_message,
             label=(
                 'proximity_player_conversation'

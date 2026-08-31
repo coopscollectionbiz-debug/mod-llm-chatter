@@ -736,6 +736,31 @@ std::string BuildBaseEventJson(
     bool playerAddressed,
     uint32 maxLines)
 {
+    std::string botStates = "{";
+    bool firstBotState = true;
+
+    for (auto const& speaker : speakers)
+    {
+        // NPCs do not have PlayerBot state.
+        if (speaker.isNPC || !speaker.bot)
+            continue;
+
+        if (!firstBotState)
+            botStates += ",";
+
+        firstBotState = false;
+
+        uint32 botGuid =
+            speaker.bot->GetGUID().GetCounter();
+
+        botStates += "\"" +
+            std::to_string(botGuid) + "\":{";
+        botStates += BuildBotStateJson(speaker.bot);
+        botStates += "}";
+    }
+
+    botStates += "}";
+
     return std::string("{")
         + "\"player_guid\":"
         + std::to_string(
@@ -766,9 +791,10 @@ std::string BuildBaseEventJson(
         + std::to_string(maxLines)
         + ",\"participants\":"
         + BuildParticipantsJson(speakers)
+        + ",\"bot_states\":"
+        + botStates
         + "}";
 }
-
 void QueueProximityEvent(
     Player* player, char const* eventType,
     std::vector<ProximityCandidate> const& speakers,
@@ -890,32 +916,27 @@ bool QueueNamedPlayerSayProximityEvent(
     float radius = static_cast<float>(
         sLLMChatterConfig
             ->_proxChatterPlayerSayScanRadius);
+
+    // Direct player /say interaction is for nearby
+    // PlayerBots. Party membership does not matter:
+    // local /say should still be able to address them.
     std::vector<ProximityCandidate> candidates;
     CollectNearbyBots(player, radius, candidates);
-    CollectNearbyNPCs(player, radius, candidates);
     DeduplicateCandidates(candidates);
-    if (candidates.empty())
-        return false;
 
-    Group* playerGroup = player->GetGroup();
-    std::vector<ProximityCandidate> nonParty;
-    for (auto const& c : candidates)
-    {
-        if (c.isNPC
-            || !IsSameGroup(c.bot, playerGroup))
-            nonParty.push_back(c);
-    }
-    if (nonParty.empty())
+    if (candidates.empty())
         return false;
 
     ProximityCandidate const* named =
         FindNamedCandidate(
-            player, nonParty, safeMsg);
+            player, candidates, safeMsg);
+
     if (!named)
         return false;
 
     std::vector<ProximityCandidate> speaker = {
         *named};
+
     QueuePlayerSayProximityEvent(
         player,
         "proximity_player_say",
@@ -924,6 +945,7 @@ bool QueueNamedPlayerSayProximityEvent(
         1,
         safeMsg,
         named->name);
+
     return true;
 }
 
@@ -944,14 +966,14 @@ void HandleProximityPlayerSayNewScene(
     float radius = static_cast<float>(
         sLLMChatterConfig
             ->_proxChatterPlayerSayScanRadius);
+
+    // Player /say is heard by nearby PlayerBots.
+    // NPCs do not participate in normal player chat.
     std::vector<ProximityCandidate> candidates;
     CollectNearbyBots(player, radius, candidates);
-    CollectNearbyNPCs(player, radius, candidates);
     DeduplicateCandidates(candidates);
 
-    // Filter out cooled-down candidates BEFORE
-    // speaker selection so we never silently drop
-    // a player-initiated /say when others are free.
+    // Filter cooled-down bots before selecting speakers.
     candidates.erase(
         std::remove_if(
             candidates.begin(), candidates.end(),
@@ -968,30 +990,16 @@ void HandleProximityPlayerSayNewScene(
     if (candidates.empty())
         return;
 
-    // Partition into party bots vs non-party
-    // (NPCs + non-grouped bots).
-    Group* playerGroup = player->GetGroup();
-    std::vector<ProximityCandidate> nonParty;
-    for (auto const& c : candidates)
-    {
-        if (c.isNPC
-            || !IsSameGroup(c.bot, playerGroup))
-            nonParty.push_back(c);
-    }
-
-    // If zero non-party candidates, skip — party
-    // chatter owns grouped-bot-only conversations.
-    if (nonParty.empty())
-        return;
-
-    // Prefer a nearby candidate explicitly named
-    // in /say, then the selected target.
+    // A named bot or selected bot gets priority.
+    // Unlike ambient chatter, party membership does not
+    // prevent a PlayerBot from answering local /say.
     ProximityCandidate const* targetCandidate =
         FindNamedCandidate(
-            player, nonParty, safeMsg);
+            player, candidates, safeMsg);
+
     if (!targetCandidate)
         targetCandidate =
-            FindSelectedCandidate(player, nonParty);
+            FindSelectedCandidate(player, candidates);
 
     std::string addressedName =
         targetCandidate
@@ -1012,58 +1020,40 @@ void HandleProximityPlayerSayNewScene(
     {
         size_t participantCount = std::min<size_t>(
             candidates.size(), 3);
+
         std::vector<ProximityCandidate> speakers(
             candidates.begin(),
             candidates.begin() + participantCount);
 
-        // If player has a direct candidate, ensure
-        // it is the first speaker.
+        // If the player addressed a specific bot,
+        // that bot must answer first.
         if (targetCandidate)
         {
             bool found = false;
-            for (size_t i = 0; i < speakers.size();
-                 ++i)
+
+            for (size_t i = 0; i < speakers.size(); ++i)
             {
                 if (SameCandidate(
                         speakers[i],
                         *targetCandidate))
                 {
-                    std::swap(speakers[0],
-                              speakers[i]);
+                    std::swap(
+                        speakers[0],
+                        speakers[i]);
                     found = true;
                     break;
                 }
             }
+
             if (!found)
                 speakers[0] = *targetCandidate;
-        }
-
-        // Ensure at least one non-party speaker.
-        bool hasNonParty = false;
-        for (auto const& s : speakers)
-        {
-            if (s.isNPC
-                || !IsSameGroup(
-                    s.bot, playerGroup))
-            {
-                hasNonParty = true;
-                break;
-            }
-        }
-        if (!hasNonParty && !nonParty.empty())
-        {
-            // Swap last speaker with a random
-            // non-party candidate.
-            std::shuffle(
-                nonParty.begin(), nonParty.end(),
-                _rng);
-            speakers.back() = nonParty.front();
         }
 
         uint32 maxLines = std::clamp<uint32>(
             sLLMChatterConfig
                 ->_proxChatterMaxConversationLines,
             2, 4);
+
         QueuePlayerSayProximityEvent(
             player,
             "proximity_player_conversation",
@@ -1072,25 +1062,24 @@ void HandleProximityPlayerSayNewScene(
             maxLines,
             safeMsg,
             addressedName);
+
         return;
     }
 
-    // Single speaker: prefer the direct target,
-    // then any non-party candidate.
     ProximityCandidate chosen;
+
     if (targetCandidate)
     {
         chosen = *targetCandidate;
     }
     else
     {
-        std::shuffle(
-            nonParty.begin(), nonParty.end(),
-            _rng);
-        chosen = nonParty.front();
+        chosen = candidates.front();
     }
+
     std::vector<ProximityCandidate> speaker = {
         chosen};
+
     QueuePlayerSayProximityEvent(
         player,
         "proximity_player_say",
@@ -1116,6 +1105,7 @@ void MaybeQueueProximityScene(Player* player)
 
     uint32 effectiveChance =
         ComputeEffectiveChance(player);
+
     if (effectiveChance == 0
         || urand(1, 100) > effectiveChance)
         return;
@@ -1123,9 +1113,11 @@ void MaybeQueueProximityScene(Player* player)
     float radius = static_cast<float>(
         sLLMChatterConfig
             ->_proxChatterScanRadius);
+
+    // Ambient proximity chatter represents nearby
+    // PlayerBots talking in /say.
     std::vector<ProximityCandidate> candidates;
     CollectNearbyBots(player, radius, candidates);
-    CollectNearbyNPCs(player, radius, candidates);
     DeduplicateCandidates(candidates);
 
     if (candidates.empty())
@@ -1139,6 +1131,7 @@ void MaybeQueueProximityScene(Player* player)
         urand(1, 100)
         <= sLLMChatterConfig
                ->_proxChatterPlayerAddressChance;
+
     bool wantsConversation =
         candidates.size() >= 2
         && urand(1, 100)
@@ -1149,30 +1142,16 @@ void MaybeQueueProximityScene(Player* player)
     {
         size_t participantCount = std::min<size_t>(
             candidates.size(), 3);
+
         std::vector<ProximityCandidate> speakers(
             candidates.begin(),
             candidates.begin() + participantCount);
-
-        // If all speakers are party bots, skip —
-        // idle party chat already handles that.
-        Group* playerGroup = player->GetGroup();
-        bool allPartyBots = playerGroup != nullptr;
-        for (auto const& s : speakers)
-        {
-            if (s.isNPC
-                || !IsSameGroup(s.bot, playerGroup))
-            {
-                allPartyBots = false;
-                break;
-            }
-        }
-        if (allPartyBots)
-            return;
 
         uint32 maxLines = std::clamp<uint32>(
             sLLMChatterConfig
                 ->_proxChatterMaxConversationLines,
             2, 4);
+
         QueueProximityEvent(
             player,
             "proximity_conversation",
@@ -1180,24 +1159,27 @@ void MaybeQueueProximityScene(Player* player)
             candidates,
             playerAddressed,
             maxLines);
+
         return;
     }
 
-    // Filter to non-party candidates only — party
-    // chatter owns grouped-bot conversations.
-    Group* grp = player->GetGroup();
+    // Avoid duplicating idle party chatter for a
+    // single ambient /say line when possible.
+    Group* playerGroup = player->GetGroup();
+
     std::vector<ProximityCandidate> nonParty;
     for (auto const& c : candidates)
     {
-        if (c.isNPC
-            || !IsSameGroup(c.bot, grp))
+        if (!IsSameGroup(c.bot, playerGroup))
             nonParty.push_back(c);
     }
+
     if (nonParty.empty())
         return;
 
     std::vector<ProximityCandidate> speaker = {
         nonParty.front()};
+
     QueueProximityEvent(
         player,
         "proximity_say",
@@ -1337,6 +1319,13 @@ void HandleProximityPlayerSay(
         return;
 
     ProximityScene* scene = FindBestScene(player);
+
+    // Player-initiated /say should continue an existing
+    // scene only when its last speaker is a PlayerBot.
+    // NPCs must not take ownership of normal player chat.
+    if (scene && scene->lastSpeakerIsNPC)
+        scene = nullptr;
+
     if (!scene)
     {
         HandleProximityPlayerSayNewScene(
@@ -1346,12 +1335,21 @@ void HandleProximityPlayerSay(
 
     ProximityParticipant responder;
     responder.id = scene->lastSpeakerId;
-    responder.isNPC = scene->lastSpeakerIsNPC;
+    responder.isNPC = false;
     responder.name = scene->lastSpeakerName;
+
     WorldObject* target =
         ResolveParticipantObject(player, responder);
+
+    // If the old scene's bot is no longer available,
+    // try another nearby PlayerBot instead of dropping
+    // the player's message.
     if (!target)
+    {
+        HandleProximityPlayerSayNewScene(
+            player, safeMsg);
         return;
+    }
 
     std::string json = std::string("{")
         + "\"scene_id\":"

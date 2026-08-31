@@ -26,7 +26,7 @@ from chatter_db import (
 from chatter_shared import (
     get_zone_name, get_dungeon_flavor,
     format_location_label,
-    build_bot_identity,
+    build_bot_identity, get_chatter_mode,
 )
 from chatter_llm import call_llm, get_llm_client
 
@@ -631,51 +631,140 @@ def _call_llm_for_memory(
         ),
     }.get(memory_type, "a shared moment")
 
-    prompt = (
-        f"{build_bot_identity(bot_name, bot_race, bot_class, bot_gender)} "
-        f"in World of Warcraft.\n"
-    )
-    if player_name:
-        prompt += (
-            f"Player companion: {player_name}\n"
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
+
+    if is_rp:
+        prompt = (
+            f"{build_bot_identity(bot_name, bot_race, bot_class, bot_gender)} "
+            f"in World of Warcraft.\n"
         )
-    if location:
-        prompt += f"Location: {location}\n"
-    prompt += (
-        f"\nContext: {type_desc}\n"
-    )
-    if event_context:
-        prompt += f"What happened: {event_context}\n"
-    prompt += (
-        f"Mood: {mood}\n"
-        f"Expression style: {style}\n\n"
-        f"Write a 1-2 sentence first-person memory "
-        f"from your perspective about this moment. "
-        f"This is a private journal entry, not "
-        f"spoken aloud. Be specific about what "
-        f"happened.\n\n"
-        f"Respond in JSON:\n"
-        f'{{"memory": "your memory text", '
-        f'"emote": "one_word_emote"}}\n\n'
-        f"Rules:\n"
-        f"- Memory must be 1-2 sentences\n"
-        f"- First person perspective\n"
-        f"- No quotes inside the memory text\n"
-        f"- Only reference the location given above"
-        f" — never invent or guess a location\n"
-        f"- Emote is optional (null if none)\n"
-    )
-    if player_name:
+
+        if player_name:
+            prompt += (
+                f"Player companion: {player_name}\n"
+            )
+
+        if location:
+            prompt += f"Location: {location}\n"
+
         prompt += (
-            f"- When the memory involves the player,"
-            f" refer to them by name"
-            f" ({player_name}) — never use generic"
-            f" terms like 'a traveler' or 'someone'"
-            f" or 'a stranger'\n"
+            f"\nContext: {type_desc}\n"
         )
-    prompt += (
-        f"- Just the JSON, nothing else"
-    )
+
+        if event_context:
+            prompt += (
+                f"What happened: {event_context}\n"
+            )
+
+        prompt += (
+            f"Mood: {mood}\n"
+            f"Expression style: {style}\n\n"
+            f"Write a 1-2 sentence first-person memory "
+            f"from your perspective about this moment. "
+            f"This is a private journal entry, not "
+            f"spoken aloud. Be specific about what "
+            f"happened.\n\n"
+            f"Respond in JSON:\n"
+            f'{{"memory": "your memory text", '
+            f'"emote": "one_word_emote"}}\n\n'
+            f"Rules:\n"
+            f"- Memory must be 1-2 sentences\n"
+            f"- First person perspective\n"
+            f"- No quotes inside the memory text\n"
+            f"- Only reference the location given above"
+            f" — never invent or guess a location\n"
+            f"- Emote is optional (null if none)\n"
+        )
+
+        if player_name:
+            prompt += (
+                f"- When the memory involves the player,"
+                f" refer to them by name"
+                f" ({player_name}) — never use generic"
+                f" terms like 'a traveler' or 'someone'"
+                f" or 'a stranger'\n"
+            )
+
+        prompt += (
+            f"- Just the JSON, nothing else"
+        )
+
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player "
+            f"controlling a {bot_class} character.\n"
+        )
+
+        if player_name:
+            prompt += (
+                f"The player you grouped with is "
+                f"{player_name}.\n"
+            )
+
+        if location:
+            prompt += (
+                f"Location: {location}\n"
+            )
+
+        prompt += (
+            f"Memory type: {type_desc}\n"
+        )
+
+        if event_context:
+            prompt += (
+                f"What happened: {event_context}\n"
+            )
+
+        prompt += (
+            "\nWrite a short factual memory of this "
+            "gameplay moment from this player's "
+            "perspective. This is internal memory data, "
+            "not something being typed into chat. "
+            "Preserve useful concrete details that could "
+            "help the player remember what happened "
+            "later.\n\n"
+            "Do not roleplay the character. "
+            "Do not write fantasy prose. "
+            "Do not make it poetic, dramatic, nostalgic, "
+            "heroic, sentimental, or profound unless the "
+            "event itself genuinely requires that context. "
+            "Do not invent motivations, relationships, "
+            "feelings, dialogue, lore, or events that were "
+            "not provided. "
+            "Treat deaths, wipes, loot, quests, PvP, "
+            "dungeons, and travel as things that happened "
+            "while playing WoW, not as literal adventures "
+            "experienced by a fantasy character.\n\n"
+            "Use one short sentence whenever possible. "
+            "Plain wording is preferred. "
+            "First person is fine, but this should read "
+            "like a remembered gameplay fact rather than "
+            "a diary entry.\n\n"
+            "Respond in JSON:\n"
+            '{"memory": "memory text", '
+            '"emote": null}\n\n'
+            "Rules:\n"
+            "- Usually one short sentence\n"
+            "- Be specific about what actually happened\n"
+            "- No quotes inside the memory text\n"
+            "- Only reference the location given above; "
+            "never invent or guess a location\n"
+            "- Do not invent details\n"
+            "- Use null for emote\n"
+        )
+
+        if player_name:
+            prompt += (
+                f"- When relevant, refer to the player "
+                f"as {player_name}; do not replace their "
+                f"name with fantasy terms like traveler, "
+                f"adventurer, companion, or stranger\n"
+            )
+
+        prompt += (
+            "- Just the JSON, nothing else"
+        )
 
     # Plain-string prompt path — not routed through
     # append_json_instruction, so inject the language
@@ -840,8 +929,8 @@ def flush_session_memories(
                     target_guid, {}
                 )
                 context = (
-                    "Reflecting on time spent with "
-                    "party companions"
+                    "Grouped and played together during "
+                    "this party session"
                 )
                 memory_executor.submit(
                     _execute_generate_memory,

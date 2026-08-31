@@ -8,7 +8,7 @@ Both use run_single_reaction() from chatter_shared.py.
 Created in Phase 1 (shared raid base). Called by BG handlers
 (Phase 2) and future PvE raid handlers.
 """
-
+import json
 import logging
 import random
 from typing import Any, Callable, Dict, List, Optional
@@ -136,6 +136,60 @@ def get_crowd_bots(extra_data: dict) -> List[int]:
     """Return bot GUIDs outside player's sub-group."""
     return extra_data.get('raid_bot_guids', [])
 
+def get_persisted_bot_state(
+    db, group_id: int, bot_guid: int
+) -> Dict[str, Any]:
+    """Load the latest persisted authoritative bot state."""
+    if not group_id or not bot_guid:
+        return {}
+
+    cursor = db.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT bot_state_json
+            FROM llm_group_bot_traits
+            WHERE group_id = %s
+              AND bot_guid = %s
+            LIMIT 1
+            """,
+            (group_id, bot_guid),
+        )
+
+        row = cursor.fetchone()
+
+        if not row:
+            return {}
+
+        raw_state = row.get('bot_state_json')
+
+        if not raw_state:
+            return {}
+
+        if isinstance(raw_state, dict):
+            return raw_state
+
+        if isinstance(raw_state, str):
+            parsed = json.loads(raw_state)
+
+            if isinstance(parsed, dict):
+                return parsed
+
+        return {}
+
+    except (TypeError, ValueError, json.JSONDecodeError):
+        LOG.warning(
+            "Invalid bot_state_json for bot %s "
+            "group %s",
+            bot_guid,
+            group_id,
+            exc_info=True,
+        )
+        return {}
+
+    finally:
+        cursor.close()
 
 def get_lightweight_bot_data(
     db, bot_guid: int
@@ -302,6 +356,14 @@ def fire_subgroup_worker(
                 bot_guid, group_id)
             return {}
 
+    bot_state = get_persisted_bot_state(
+        db,
+        group_id,
+        bot_guid,
+    )
+
+    trait_data['bot_state'] = bot_state
+
     bot_name = trait_data['bot_name']
 
     # get_bot_traits() doesn't return race/class
@@ -427,6 +489,16 @@ def fire_raid_worker(
             "No character data for bot %s",
             bot_guid)
         return {}
+
+    group_id = int(extra_data.get('group_id', 0))
+
+    bot_state = get_persisted_bot_state(
+        db,
+        group_id,
+        bot_guid,
+    )
+
+    bot_data['bot_state'] = bot_state
 
     bot_name = bot_data['bot_name']
 

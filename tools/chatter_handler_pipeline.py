@@ -8,6 +8,7 @@ extract_fields, build_prompt, and optional
 post_success callback.
 """
 
+import json
 import logging
 import random
 
@@ -83,6 +84,52 @@ def _build_bot_from_db(db, bot_guid, bot_name):
         'level': row['level'],
         'gender': get_gender_label(row['gender']),
     }
+
+def _load_reactor_bot_state(
+    db, group_id, bot_guid, bot_name
+):
+    """Load the persisted authoritative state for the
+    final reacting bot selected by the group pipeline.
+    """
+    cursor = db.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT bot_state_json
+        FROM llm_group_bot_traits
+        WHERE group_id = %s
+          AND bot_guid = %s
+        LIMIT 1
+        """,
+        (group_id, bot_guid),
+    )
+    row = cursor.fetchone()
+    cursor.close()
+
+    if not row:
+        return {}
+
+    raw_bot_state = row.get('bot_state_json')
+
+    if not raw_bot_state:
+        return {}
+
+    try:
+        if isinstance(raw_bot_state, str):
+            state = json.loads(raw_bot_state)
+        elif isinstance(raw_bot_state, dict):
+            state = raw_bot_state
+        else:
+            return {}
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid bot_state_json for %s",
+            bot_name,
+            exc_info=True,
+        )
+        return {}
+
+    return state if isinstance(state, dict) else {}
+
 
 
 def _maybe_talent_context(
@@ -223,6 +270,21 @@ def run_group_handler(
             return False
     else:
         bot = _build_bot_from_extra(extra_data)
+
+    # Load authoritative persisted state for the
+    # FINAL reactor selected by this handler. This is
+    # intentionally done after reactor resolution so
+    # another bot's state can never be inherited from
+    # the original event actor.
+    bot_state = _load_reactor_bot_state(
+        db, group_id, bot_guid, bot_name
+    )
+    bot['bot_state'] = bot_state
+
+    # Keep extra_data compatible with existing group
+    # prompt builders, which expect bot_state inside
+    # the event/context wrapper.
+    extra_data['bot_state'] = bot_state
 
     try:
         # 9. Build context

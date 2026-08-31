@@ -31,6 +31,7 @@ from chatter_shared import (
     calculate_dynamic_delay,
     parse_conversation_response,
     parse_extra_data,
+    get_chatter_mode,
 )
 from chatter_text import parse_single_response
 
@@ -164,49 +165,99 @@ def _shared_prompt_lines(
     faction: str,
     player_name: str,
     maximum: int,
+    chatter_mode: str = 'roleplay',
 ) -> List[str]:
-    lines = [
-        "Write natural in-character World of Warcraft "
-        "Guild Chat.",
-        f"The guild is \"{guild_name}\".",
-    ]
+    is_rp = (chatter_mode == 'roleplay')
+
+    if is_rp:
+        lines = [
+            "Write natural in-character World of Warcraft "
+            "Guild Chat.",
+            f"The guild is \"{guild_name}\".",
+        ]
+    else:
+        lines = [
+            "Write natural World of Warcraft Guild Chat "
+            "between real players typing while they play.",
+            f"The guild is \"{guild_name}\".",
+            "The speakers are players controlling their "
+            "characters, not fantasy characters roleplaying "
+            "in Azeroth.",
+        ]
+
     for participant in participants:
         lines.extend(
-            _participant_identity_lines(participant)
+            _participant_identity_lines(
+                participant,
+                chatter_mode,
+            )
         )
 
-    if faction:
+    if is_rp and faction:
         lines.append(
             f"They fight for the {faction}. Never "
             f"insult or mock the {faction}, their own "
             "faction."
         )
+
     lines.extend(
         _guild_location_lines(participants, False)
     )
+
     lines.extend([
         "",
         f"{player_name}, a real guild member, has just "
         "logged in.",
-        "Greet them as a familiar guildmate, not as a "
-        "stranger or a newly recruited member.",
-        "Keep every greeting warm, casual, and brief. "
-        "It may acknowledge their return, ask what they "
-        "are doing, or offer a small in-character wish.",
-        "Do not invent where they have been, how long "
-        "they were absent, or what they intend to do.",
-        "Guild Chat reaches across Azeroth. Never imply "
-        "the speakers can see, touch, or stand beside "
-        "the player or one another.",
-        "Each line is spoken text only: no narrator "
-        "text, roleplay asterisks, slash commands, "
-        "emotes, or name prefixes.",
-        "Stay fully in Azeroth and avoid game-mechanic "
-        "terms such as DPS, specs, talents, mobs, XP, "
-        "levels, rotations, addons, or players behind "
-        "screens.",
-        f"Hard limit: {maximum} characters per message.",
+        "Treat them as an existing guildmate, not as a "
+        "stranger or newly recruited member.",
+        "Do not invent where they have been, how long they "
+        "were absent, or what they intend to do.",
+        "Guild Chat is remote chat. Never imply speakers "
+        "can physically see, touch, or stand beside the "
+        "player or one another.",
+        "Each line is chat text only: no narrator text, "
+        "roleplay asterisks, slash commands, emotes, or "
+        "name prefixes.",
     ])
+
+    if is_rp:
+        lines.extend([
+            "Keep every greeting warm, casual, and brief. "
+            "It may acknowledge their return, ask what they "
+            "are doing, or offer a small in-character wish.",
+            "Stay fully in Azeroth and avoid game-mechanic "
+            "terms such as DPS, specs, talents, mobs, XP, "
+            "levels, rotations, addons, or players behind "
+            "screens.",
+        ])
+    else:
+        lines.extend([
+            "Write the way real guildmates casually react "
+            "when someone logs in.",
+            "A greeting can be as simple as hi, yo, sup, "
+            "wb, hey, or nothing more elaborate than that.",
+            "It may also casually ask what the player is "
+            "doing or mention normal WoW gameplay.",
+            "Gameplay terminology is completely normal: "
+            "quests, gear, levels, dungeons, raids, PvP, "
+            "specs, DPS, professions, AH, alts, addons, "
+            "loot, wipes, RNG, and similar terms.",
+            "Use normal WoW shorthand naturally: wb, gz, "
+            "grats, ty, np, brb, afk, lfg, inv, sec, omw, "
+            "etc.",
+            "Lowercase, missing punctuation, fragments, "
+            "one-word greetings, and occasional typos are "
+            "fine.",
+            "Do not make every greeting warm, enthusiastic, "
+            "clever, or elaborate.",
+            "A mundane or low-effort response is realistic.",
+            "Do not write fantasy dialogue.",
+        ])
+
+    lines.append(
+        f"Hard limit: {maximum} characters per message."
+    )
+
     return lines
 
 
@@ -217,19 +268,34 @@ def _build_single_prompt(
     player_name: str,
     name_requested: bool,
     maximum: int,
+    config: Dict,
 ):
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
     lines = _shared_prompt_lines(
         [participant],
         guild_name,
         faction,
         player_name,
         maximum,
+        chatter_mode,
     )
     lines.extend([
         "",
-        f"{participant['name']} gives exactly one "
-        "short greeting.",
-        "Aim for roughly 3 to 12 words.",
+        (
+            f"{participant['name']} gives exactly one "
+            "short greeting."
+            if is_rp
+            else
+            f"{participant['name']} reacts naturally to "
+            f"{player_name} logging in."
+        ),
+        (
+            "Aim for roughly 3 to 12 words."
+            if is_rp
+            else
+            "Often 1 to 8 words is enough."
+        ),
     ])
     if name_requested:
         lines.append(
@@ -251,55 +317,90 @@ def _build_multi_prompt(
     player_name: str,
     name_requested: bool,
     maximum: int,
+    config: Dict,
 ) -> Tuple[object, List[str]]:
     names = [
         participant['name']
         for participant in participants
     ]
+
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
+
     lines = _shared_prompt_lines(
         participants,
         guild_name,
         faction,
         player_name,
         maximum,
+        chatter_mode,
     )
-    lines.extend([
-        "",
-        "Generate one independent short greeting from "
-        "each selected guildmate.",
-        "Each bot greets the player from its own "
-        "perspective. Do not create a bot-to-bot "
-        "conversation.",
-        "Make the greetings clearly different from one "
-        "another. Do not repeat the same welcome-back "
-        "phrase or question.",
-        "Every selected bot speaks exactly once.",
-        "Aim for roughly 3 to 12 words per message.",
-        "MESSAGE SEQUENCE:",
-    ])
-    for index, name in enumerate(names):
-        instruction = (
-            f"  Message {index + 1} ({name}): "
-            "one distinct greeting"
+
+    if is_rp:
+        lines.extend([
+            "",
+            "Generate one independent short greeting from "
+            "each selected guildmate.",
+            "Each bot greets the player from its own "
+            "perspective. Do not create a bot-to-bot "
+            "conversation.",
+            "Make the greetings clearly different from one "
+            "another. Do not repeat the same welcome-back "
+            "phrase or question.",
+            "Every selected bot speaks exactly once.",
+            "Aim for roughly 3 to 12 words per message.",
+            "MESSAGE SEQUENCE:",
+        ])
+
+        for index, name in enumerate(names):
+            instruction = (
+                f"  Message {index + 1} ({name}): "
+                "one distinct greeting"
+            )
+            if index == 0 and name_requested:
+                instruction += (
+                    f"; naturally address {player_name} "
+                    "by name once"
+                )
+            elif index:
+                instruction += (
+                    "; do not repeat the player's name"
+                )
+            lines.append(instruction)
+
+        message_count = len(names)
+
+    else:
+        message_count = random.randint(
+            1,
+            min(2, len(names)),
         )
-        if index == 0 and name_requested:
-            instruction += (
-                f"; naturally address {player_name} "
-                "by name once"
-            )
-        elif index:
-            instruction += (
-                "; do not repeat the player's name"
-            )
-        lines.append(instruction)
+
+        lines.extend([
+            "",
+            "Generate a natural guild reaction to the "
+            "player logging in.",
+            "Not every available guildmate needs to greet "
+            "them.",
+            "One short greeting is completely normal.",
+            "A second guildmate may respond if it feels "
+            "natural.",
+            "Do not make everyone say welcome back.",
+            "Do not make every greeting distinct, polished, "
+            "or meaningful just for variety.",
+            "A speaker may simply say hi, yo, sup, wb, hey, "
+            "or something similarly low-effort.",
+            "Do not create a staged greeting scene.",
+        ])
 
     return (
         append_conversation_json_instruction(
             "\n".join(lines),
             names,
-            len(names),
+            message_count,
             allow_action=False,
             message_only=True,
+            require_all_speakers=is_rp,
         ),
         names,
     )
@@ -324,6 +425,7 @@ def _generate_single(
         player_name,
         name_requested,
         maximum,
+        config,
     )
     token_budget = max(80, _safe_int(config.get(
         'LLMChatter.GuildChatter.MaxTokens',
@@ -403,7 +505,10 @@ def _generate_multi(
         player_name,
         name_requested,
         maximum,
+        config,
     )
+    chatter_mode = get_chatter_mode(config)
+    is_rp = (chatter_mode == 'roleplay')
     base_tokens = max(100, _safe_int(config.get(
         'LLMChatter.GuildChatter.MaxTokens',
         200,
@@ -429,7 +534,9 @@ def _generate_multi(
     )[:len(names)]
 
     if not _valid_guild_conversation(
-        messages, names
+        messages,
+        names,
+        require_all_speakers=is_rp,
     ):
         repair_metadata = dict(metadata)
         repair_metadata['guild_repair'] = True
@@ -439,6 +546,7 @@ def _generate_multi(
                 prompt,
                 names,
                 message_only=True,
+                require_all_speakers=is_rp,
             ),
             config,
             max_tokens_override=token_budget,
@@ -454,7 +562,9 @@ def _generate_multi(
         )[:len(names)]
 
     if not _valid_guild_conversation(
-        messages, names
+        messages,
+        names,
+        require_all_speakers=is_rp,
     ):
         return []
 

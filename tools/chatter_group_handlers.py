@@ -3,6 +3,7 @@
 import logging
 import random
 import re
+import json
 from chatter_shared import (
     parse_extra_data,
     get_class_name,
@@ -381,6 +382,9 @@ def _maybe_raid_battle_cry(
         'race': '',
         'class': '',
         'traits': cry_bot.get('traits'),
+        'bot_state': cry_bot.get(
+            'bot_state', {}
+        ),
     }
     if row:
         bot_data['race'] = get_race_name(
@@ -632,6 +636,7 @@ def process_group_levelup_event(
                 speaker_talent_context=(
                     ctx['speaker_talent']),
                 stored_tone=ctx['stored_tone'],
+                extra_data=ctx['extra_data'],
             )
         ),
         needs_reactor_from_db=True,
@@ -823,6 +828,7 @@ def process_group_quest_complete_event(
                 ),
                 stored_tone=ctx['stored_tone'],
                 zone_id=ctx.get('zone_id', 0),
+                extra_data=ctx['extra_data'],
             )
         )
 
@@ -956,6 +962,7 @@ def process_group_quest_objectives_event(
                 ),
                 stored_tone=ctx['stored_tone'],
                 zone_id=ctx.get('zone_id', 0),
+                extra_data=ctx['extra_data'],
             )
         )
 
@@ -1266,6 +1273,7 @@ def process_group_achievement_event(
                     ctx['speaker_talent']),
                 stored_tone=ctx['stored_tone'],
                 map_id=ctx['map_id'],
+                extra_data=ctx['extra_data'],
             )
             if ctx['batched_names']
             else build_achievement_reaction_prompt(
@@ -1278,6 +1286,7 @@ def process_group_achievement_event(
                     ctx['speaker_talent']),
                 map_id=ctx['map_id'],
                 stored_tone=ctx['stored_tone'],
+                extra_data=ctx['extra_data'],
             )
         ),
         needs_map_id=True,
@@ -2201,6 +2210,9 @@ def process_group_nearby_object_event(
                 ),
                 map_id=ctx['obj_map_id'],
                 stored_tone=ctx['stored_tone'],
+                bot_state=ctx['bot'].get(
+                    'bot_state', {}
+                ),
             )
         )
         if ctx['speaker_talent']:
@@ -2259,7 +2271,8 @@ def _nearby_object_conversation(
         # Look up guid + traits from the traits table
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT bot_guid, trait1, trait2, trait3
+            SELECT bot_guid, trait1, trait2, trait3,
+                   bot_state_json
             FROM llm_group_bot_traits
             WHERE group_id = %s
                 AND bot_name = %s
@@ -2282,6 +2295,28 @@ def _nearby_object_conversation(
         char = cursor.fetchone()
         if not char:
             continue
+
+        bot_state = {}
+        raw_bot_state = row.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, str):
+                    bot_state = json.loads(
+                        raw_bot_state
+                    )
+                elif isinstance(
+                    raw_bot_state, dict
+                ):
+                    bot_state = raw_bot_state
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid bot_state_json for %s",
+                    name,
+                    exc_info=True,
+                )
+                bot_state = {}
+
         bots.append({
             'name': name,
             'class': get_class_name(
@@ -2290,6 +2325,7 @@ def _nearby_object_conversation(
             'race': get_race_name(char['race']),
             'level': char['level'],
             'gender': get_gender_label(char['gender']),
+            'bot_state': bot_state,
         })
 
     if len(bots) < 2:
@@ -2498,6 +2534,22 @@ def execute_player_msg_conversation(
         travel_state = build_travel_state_from_row(row)
         travel_context = format_travel_context(
             travel_state)
+        bot_state = {}
+        raw_bot_state = row.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, str):
+                    bot_state = json.loads(raw_bot_state)
+                elif isinstance(raw_bot_state, dict):
+                    bot_state = raw_bot_state
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid bot_state_json for %s",
+                    name,
+                    exc_info=True,
+                )
+                bot_state = {}
         bots.append({
             'name': name,
             'guid': guid,
@@ -2510,6 +2562,7 @@ def execute_player_msg_conversation(
             'travel_mode': travel_state.get('mode') or '',
             'travel_context': travel_context,
             'travel_state': travel_state,
+            'bot_state': bot_state,
         })
 
     if len(bots) < 2:
@@ -2704,7 +2757,8 @@ def _quest_conversation_pick_bots(
     for name in picked:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT bot_guid, trait1, trait2, trait3
+            SELECT bot_guid, trait1, trait2, trait3,
+                   bot_state_json
             FROM llm_group_bot_traits
             WHERE group_id = %s
                 AND bot_name = %s
@@ -2726,6 +2780,28 @@ def _quest_conversation_pick_bots(
         char = cursor.fetchone()
         if not char:
             continue
+
+        bot_state = {}
+        raw_bot_state = row.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, str):
+                    bot_state = json.loads(
+                        raw_bot_state
+                    )
+                elif isinstance(
+                    raw_bot_state, dict
+                ):
+                    bot_state = raw_bot_state
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid bot_state_json for %s",
+                    name,
+                    exc_info=True,
+                )
+                bot_state = {}
+
         bots.append({
             'name': name,
             'class': get_class_name(
@@ -2734,6 +2810,7 @@ def _quest_conversation_pick_bots(
             'race': get_race_name(char['race']),
             'level': char['level'],
             'gender': get_gender_label(char['gender']),
+            'bot_state': bot_state,
         })
 
     if len(bots) < 2:

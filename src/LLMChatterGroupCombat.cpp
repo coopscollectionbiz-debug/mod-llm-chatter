@@ -937,9 +937,30 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
                ->_groupPlayerMsgCooldown)
         return;
 
-    _groupPlayerMsgCooldowns[groupId] = now;
+_groupPlayerMsgCooldowns[groupId] = now;
 
-    std::string extraData = "{"
+// Refresh the authoritative live state snapshot for
+// every online PlayerBot in the group immediately before
+// Python handles the player's message. This ensures
+// questions about quests, objective progress, inventory,
+// equipment, money, professions, level, activity, etc.
+// are grounded in current PlayerBots state.
+for (auto const& ref : group->GetMemberSlots())
+{
+    Player* member =
+        ObjectAccessor::FindPlayer(ref.guid);
+
+    if (!member
+        || !IsPlayerBot(member)
+        || !member->IsInWorld())
+    {
+        continue;
+    }
+
+    UpdateGroupBotTravelState(member, groupId);
+}
+
+std::string extraData = "{"
         "\"player_name\":\"" +
             JsonEscape(playerName) + "\","
         "\"player_gender\":" +

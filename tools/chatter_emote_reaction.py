@@ -17,6 +17,7 @@ from chatter_shared import (
     build_bot_identity,
     append_json_instruction,
     get_gender_label,
+    get_chatter_mode,
 )
 from chatter_group_state import (
     _mark_event,
@@ -87,6 +88,7 @@ def handle_emote_reaction(db, client, config, event):
         p_name, emote, category,
         traits=traits,
         stored_tone=stored_tone,
+        config=config,
     )
 
     result = run_single_reaction(
@@ -123,23 +125,57 @@ def _build_reaction_prompt(
     p_name, emote, category,
     traits=None,
     stored_tone=None,
+    config=None,
 ):
-    tone = stored_tone or _pick_tone(category)
-    identity = build_bot_identity(
-        bot_name, bot_race, bot_class, bot_gender
+    mode = (
+        get_chatter_mode(config)
+        if config else 'normal'
     )
-    prompt = identity
-    if traits:
-        prompt += (
-            " Your personality: "
-            f"{', '.join(traits)}."
+    is_rp = (mode == 'roleplay')
+
+    if is_rp:
+        tone = stored_tone or _pick_tone(category)
+
+        prompt = build_bot_identity(
+            bot_name, bot_race,
+            bot_class, bot_gender,
         )
-    prompt += (
-        f" Your tone: {tone}. "
-        f"Your party member {p_name} "
-        f"just /{emote} at you. React {tone}. "
-        "1-2 sentences. "
-        "NEVER put /slash commands in your "
-        "response."
-    )
+
+        if traits:
+            prompt += (
+                " Your personality: "
+                f"{', '.join(traits)}."
+            )
+
+        prompt += (
+            f" Your tone: {tone}. "
+            f"Your party member {p_name} "
+            f"just /{emote} at you. "
+            f"React {tone}. "
+            "1-2 sentences. "
+            "NEVER put /slash commands in your "
+            "response."
+        )
+
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player. "
+            f"Your party member {p_name} just used "
+            f"/{emote} directly at you. "
+            "Reply like a real player casually reacting "
+            "in party chat. Keep it very short, usually "
+            "1-6 words. One word is completely fine. "
+            "Use the meaning of the emote naturally. "
+            "A wave might get 'hey', 'yo', or 'sup'. "
+            "A thank might get 'np'. "
+            "A cheer might get 'lol ty' or 'haha'. "
+            "A rude or silly emote might get 'bruh', "
+            "'lol', '???', or mild annoyance. "
+            "These are examples, not required phrases. "
+            "Do not force slang, humor, or a clever response. "
+            "Do not roleplay or narrate. "
+            "Do not explain what the emote means. "
+            "Do not put /slash commands in the response."
+        )
+
     return append_json_instruction(prompt)

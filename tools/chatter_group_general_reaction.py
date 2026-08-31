@@ -40,6 +40,7 @@ from chatter_shared import (
     get_subzone_name,
     get_zone_flavor,
     get_zone_name,
+    build_bot_state_context,
     insert_chat_message,
     parse_conversation_response,
     parse_extra_data,
@@ -91,6 +92,8 @@ def _fetch_group_candidates(
                t.is_mounted, t.is_flying,
                t.is_taxi_flying, t.is_on_transport,
                t.mount_display_id, t.transport_name,
+               t.bot_state_json,
+               t.bot_state_updated_at,
                c.class, c.race, c.level, c.gender
         FROM llm_group_bot_traits t
         JOIN characters c ON c.guid = t.bot_guid
@@ -299,6 +302,32 @@ def maybe_queue_group_general_reaction(
 
 def _row_to_bot(row: Dict) -> Dict:
     travel_state = build_travel_state_from_row(row)
+
+    bot_state = {}
+    raw_bot_state = row.get('bot_state_json')
+
+    if raw_bot_state:
+        try:
+            if isinstance(raw_bot_state, dict):
+                bot_state = raw_bot_state
+            else:
+                parsed_bot_state = json.loads(
+                    raw_bot_state
+                )
+                if isinstance(parsed_bot_state, dict):
+                    bot_state = parsed_bot_state
+        except (
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            logger.warning(
+                "Invalid bot_state_json for bot %s",
+                row.get('bot_guid'),
+                exc_info=True,
+            )
+            bot_state = {}
+
     return {
         'guid': int(row['bot_guid']),
         'name': row['bot_name'],
@@ -311,7 +340,10 @@ def _row_to_bot(row: Dict) -> Dict:
         'trait3': row.get('trait3') or '',
         'tone': row.get('tone') or '',
         'travel_state': travel_state,
-        'travel_context': format_travel_context(travel_state),
+        'travel_context': format_travel_context(
+            travel_state
+        ),
+        'bot_state': bot_state,
     }
 
 
@@ -324,6 +356,8 @@ def _fetch_group_bots(db, group_id: int, source_bot_guid: int) -> List[Dict]:
                t.is_mounted, t.is_flying,
                t.is_taxi_flying, t.is_on_transport,
                t.mount_display_id, t.transport_name,
+               t.bot_state_json,
+               t.bot_state_updated_at,
                c.class, c.race, c.level, c.gender
         FROM llm_group_bot_traits t
         JOIN characters c ON c.guid = t.bot_guid
@@ -430,12 +464,59 @@ def _build_statement_prompt(
         prompt += f"Personality traits: {traits}.\n"
     if bot.get('travel_context'):
         prompt += f"{bot['travel_context']}\n"
-    if loc.get('dungeon_flavor'):
-        prompt += f"Dungeon context: {loc['dungeon_flavor']}\n"
-    elif loc.get('zone_flavor'):
-        prompt += f"Zone context: {loc['zone_flavor']}\n"
-    if loc.get('subzone_lore'):
-        prompt += f"Subzone context: {loc['subzone_lore']}\n"
+
+    state_ctx = build_bot_state_context(
+        bot.get('bot_state', {})
+    )
+
+    if state_ctx:
+        prompt += (
+            "\nAUTHORITATIVE CURRENT STATE FOR "
+            f"{bot['name']}:\n"
+            f"{state_ctx}\n"
+        )
+
+        if not is_rp:
+            prompt += (
+                "LIVE STATE RULES:\n"
+                "- This state is authoritative for "
+                "specific facts about this bot.\n"
+                "- Never invent quests, objectives, "
+                "items, professions, equipment, money, "
+                "location, activity, or other personal "
+                "game-state facts.\n"
+                "- If a specific fact is absent, "
+                "do not guess it.\n"
+            )
+
+    if is_rp:
+        if loc.get('dungeon_flavor'):
+            prompt += (
+                f"Dungeon context: "
+                f"{loc['dungeon_flavor']}\n"
+            )
+        elif loc.get('zone_flavor'):
+            prompt += (
+                f"Zone context: "
+                f"{loc['zone_flavor']}\n"
+            )
+        if loc.get('subzone_lore'):
+            prompt += (
+                f"Subzone context: "
+                f"{loc['subzone_lore']}\n"
+            )
+    else:
+        if loc.get('dungeon_flavor'):
+            prompt += "Currently in a dungeon.\n"
+        elif loc.get('zone_name'):
+            prompt += (
+                f"Zone: {loc['zone_name']}\n"
+            )
+
+        if loc.get('subzone_name'):
+            prompt += (
+                f"Subzone: {loc['subzone_name']}\n"
+            )
     if chat_hist:
         prompt += f"{chat_hist}\n"
 
@@ -485,6 +566,12 @@ def _build_conversation_prompt(
 ) -> str:
     is_rp = (mode == 'roleplay')
     names = [b['name'] for b in bots]
+    if is_rp:
+        msg_count = len(bots)
+    else:
+        msg_count = random.randint(
+            1, min(3, len(bots))
+        )
     prompt = (
         "Generate a short party chat exchange between "
         f"{len(bots)} grouped bots reacting to something "
@@ -499,12 +586,35 @@ def _build_conversation_prompt(
         f"{source_bot['name']} by name. This is private "
         "party chat, not another General reply.\n"
     )
-    if loc.get('dungeon_flavor'):
-        prompt += f"Dungeon context: {loc['dungeon_flavor']}\n"
-    elif loc.get('zone_flavor'):
-        prompt += f"Zone context: {loc['zone_flavor']}\n"
-    if loc.get('subzone_lore'):
-        prompt += f"Subzone context: {loc['subzone_lore']}\n"
+    if is_rp:
+        if loc.get('dungeon_flavor'):
+            prompt += (
+                f"Dungeon context: "
+                f"{loc['dungeon_flavor']}\n"
+            )
+        elif loc.get('zone_flavor'):
+            prompt += (
+                f"Zone context: "
+                f"{loc['zone_flavor']}\n"
+            )
+
+        if loc.get('subzone_lore'):
+            prompt += (
+                f"Subzone context: "
+                f"{loc['subzone_lore']}\n"
+            )
+    else:
+        if loc.get('dungeon_flavor'):
+            prompt += "Currently in a dungeon.\n"
+        elif loc.get('zone_name'):
+            prompt += (
+                f"Zone: {loc['zone_name']}\n"
+            )
+
+        if loc.get('subzone_name'):
+            prompt += (
+                f"Subzone: {loc['subzone_name']}\n"
+            )
 
     prompt += "\nSpeakers:\n"
     for bot in bots:
@@ -525,6 +635,26 @@ def _build_conversation_prompt(
             line += f"; {bot['travel_context']}"
         prompt += line + "\n"
 
+        state_ctx = build_bot_state_context(
+            bot.get('bot_state', {})
+        )
+
+        if state_ctx:
+            prompt += (
+                "AUTHORITATIVE CURRENT STATE FOR "
+                f"{bot['name']}:\n"
+                f"{state_ctx}\n"
+            )
+    if not is_rp:
+        prompt += (
+            "\nLIVE STATE RULES: Each speaker's "
+            "authoritative state belongs ONLY to that "
+            "speaker. Never borrow another bot's quests, "
+            "items, professions, equipment, money, "
+            "location, objectives, activity, or other "
+            "personal facts. If a specific fact is absent "
+            "from that speaker's state, do not invent it.\n"
+        )
     if chat_hist:
         prompt += f"\n{chat_hist}\n"
 
@@ -538,18 +668,34 @@ def _build_conversation_prompt(
             "\nGuidelines: Sound like normal people "
             "chatting in a game; keep it brief.\n"
         )
-    prompt += (
-        f"- {names[0]} speaks first and mentions "
-        f"{source_bot['name']} by name\n"
-        "- Later speakers build on that party reaction\n"
-        "- Each bot speaks exactly once\n"
-        f"- {player_name} is listening in the party\n"
-    )
+    if is_rp:
+        prompt += (
+            f"- {names[0]} speaks first and mentions "
+            f"{source_bot['name']} by name\n"
+            "- Later speakers build on that party reaction\n"
+            "- Each bot speaks exactly once\n"
+            f"- {player_name} is listening in the party\n"
+        )
+    else:
+        prompt += (
+            f"- {names[0]} speaks first and mentions "
+            f"{source_bot['name']} by name\n"
+            "- Not every available bot needs to respond\n"
+            "- A bot may speak more than once if natural\n"
+            "- Do not force later speakers to build on "
+            "the previous message\n"
+            "- Replies can be brief, mundane, amused, "
+            "confused, dismissive, or just one word\n"
+            "- Do not turn this into a polished group "
+            "discussion\n"
+            f"- {player_name} is listening in the party\n"
+        )
     return append_conversation_json_instruction(
         prompt,
         names,
-        len(bots),
+        msg_count,
         allow_action=is_rp,
+        require_all_speakers=is_rp,
     )
 
 

@@ -22,6 +22,7 @@ from chatter_shared import (
     get_gender_label,
     get_race_name,
     strip_speaker_prefix,
+    get_chatter_mode,
 )
 from chatter_constants import PERSONALITY_TRAITS
 from chatter_constants import GOOGLE_OPENAI_BASE_URL
@@ -1136,9 +1137,18 @@ def assign_bot_traits(
         except Exception:
             pass
 
-    # Generate LLM-derived tone if not already set
+    # Persistent authored tone/backstory are RP features.
+    # In Normal mode the bot is a real WoW player, not a
+    # character being written for a story. The ordinary
+    # personality traits are enough to give players some
+    # consistency without making their chat theatrical.
+    mode = get_chatter_mode(config) if config else 'roleplay'
+    is_rp = (mode == 'roleplay')
+
     tone = None
-    if config and bot_class and bot_race:
+    backstory = None
+
+    if is_rp and config and bot_class and bot_race:
         try:
             tone = _generate_bot_tone(
                 db, config, bot_guid, group_id,
@@ -1148,9 +1158,6 @@ def assign_bot_traits(
         except Exception:
             pass
 
-    # Generate LLM-derived backstory if not already set
-    backstory = None
-    if config and bot_class and bot_race:
         try:
             backstory = _generate_bot_backstory(
                 db, config, bot_guid, group_id,
@@ -1247,7 +1254,8 @@ def get_other_group_bot(db, group_id, exclude_guid):
                travel_mode, travel_context,
                is_mounted, is_flying,
                is_taxi_flying, is_on_transport,
-               mount_display_id, transport_name
+               mount_display_id, transport_name,
+               bot_state_json
         FROM llm_group_bot_traits
         WHERE group_id = %s AND bot_guid != %s
         ORDER BY RAND()
@@ -1256,6 +1264,28 @@ def get_other_group_bot(db, group_id, exclude_guid):
     row = cursor.fetchone()
     if row:
         travel_state = build_travel_state_from_row(row)
+
+        bot_state = {}
+        raw_bot_state = row.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, str):
+                    bot_state = json.loads(
+                        raw_bot_state
+                    )
+                elif isinstance(
+                    raw_bot_state, dict
+                ):
+                    bot_state = raw_bot_state
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid bot_state_json for %s",
+                    row.get('bot_name', 'Unknown'),
+                    exc_info=True,
+                )
+                bot_state = {}
+
         return {
             'guid': row['bot_guid'],
             'name': row['bot_name'],
@@ -1269,6 +1299,7 @@ def get_other_group_bot(db, group_id, exclude_guid):
             'travel_context': format_travel_context(
                 travel_state),
             'travel_state': travel_state,
+            'bot_state': bot_state,
         }
     return None
 
@@ -1344,20 +1375,38 @@ def _generate_farewell(
         if rp_ctx:
             rp_ctx = f"\n{rp_ctx}"
 
-    identity = build_bot_identity(
-        bot_name, bot_race, bot_class, bot_gender,
-    )
-    prompt = (
-        f"{identity}\n"
-        f"Personality: {trait_str}{rp_ctx}\n\n"
-        f"Write a short farewell message for when "
-        f"you leave a party. One sentence, under "
-        f"80 characters.\n"
-        f"{style}\n"
-        f"Rules:\n"
-        f"- No quotes, no emojis\n"
-        f"- Just the farewell text, nothing else"
-    )
+    if is_rp:
+        identity = build_bot_identity(
+            bot_name, bot_race, bot_class, bot_gender,
+        )
+        prompt = (
+            f"{identity}\n"
+            f"Personality: {trait_str}{rp_ctx}\n\n"
+            f"Write a short farewell message for when "
+            f"you leave a party. One sentence, under "
+            f"80 characters.\n"
+            f"{style}\n"
+            f"Rules:\n"
+            f"- No quotes, no emojis\n"
+            f"- Just the farewell text, nothing else"
+        )
+    else:
+        prompt = (
+            f"You are {bot_name}, a real WoW player "
+            f"controlling a {bot_class} character.\n\n"
+            f"You're leaving the party. Type a brief "
+            f"farewell like an actual player would.\n"
+            f"{style}\n"
+            f"Usually 1-6 words. One word is fine.\n"
+            f"Examples of the general level of effort: "
+            f"gtg, later, cya, ty guys, gg, thanks\n"
+            f"Do not copy an example unless it fits.\n"
+            f"Do not roleplay or write fantasy dialogue.\n"
+            f"Do not force humor, emotion, or personality.\n"
+            f"Rules:\n"
+            f"- No quotes, no emojis\n"
+            f"- Just the farewell text, nothing else"
+        )
     from chatter_shared import get_language_rule
     lang_rule = get_language_rule()
     if lang_rule:

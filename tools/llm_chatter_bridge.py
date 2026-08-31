@@ -102,6 +102,54 @@ logging.getLogger("openai").setLevel(logging.WARNING)
 # =============================================================================
 # REQUEST PROCESSING
 # =============================================================================
+def _load_bot_states_from_request(request):
+    """Parse authoritative live bot states carried
+    directly by the ambient C++ queue request."""
+    raw_states = request.get('bot_states_json')
+
+    if not raw_states:
+        return {}
+
+    if isinstance(raw_states, dict):
+        parsed = raw_states
+    else:
+        try:
+            parsed = json.loads(raw_states)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid bot_states_json on ambient "
+                "request %s",
+                request.get('id'),
+            )
+            return {}
+
+    if not isinstance(parsed, dict):
+        return {}
+
+    return parsed
+
+
+def _get_request_bot_state(
+    bot_states, bot_guid
+):
+    """Return one bot's state from a parsed ambient
+    bot_states_json payload."""
+    if not isinstance(bot_states, dict):
+        return None
+
+    state = bot_states.get(str(bot_guid))
+
+    if not isinstance(state, dict):
+        return None
+
+    # Support either an inner state dictionary or a
+    # future {"bot_state": {...}} wrapper.
+    wrapped = state.get('bot_state')
+    if isinstance(wrapped, dict):
+        return wrapped
+
+    return state
+
 def process_statement(
     db, cursor, client, config, request, bot: dict
 ):
@@ -201,6 +249,12 @@ def process_pending_requests(
         zone_id = request.get('zone_id', 0)
         request['zone_id'] = zone_id if zone_id else 0
 
+        # Ambient C++ captures authoritative live
+        # PlayerBot state when the request is queued.
+        bot_states = _load_bot_states_from_request(
+            request
+        )
+
         if request_type == 'statement':
             raw_class = request['bot1_class']
             raw_race = request['bot1_race']
@@ -218,7 +272,11 @@ def process_pending_requests(
                     else raw_race
                 ),
                 'level': request['bot1_level'],
-                'zone': request['bot1_zone']
+                'zone': request['bot1_zone'],
+                'bot_state': _get_request_bot_state(
+                    bot_states,
+                    request['bot1_guid'],
+                ),
             }
             success = process_statement(
                 db, cursor, client,
@@ -263,6 +321,10 @@ def process_pending_requests(
                         f'{prefix}_level'
                     ],
                     'zone': zone,
+                    'bot_state': _get_request_bot_state(
+                        bot_states,
+                        request[f'{prefix}_guid'],
+                    ),
                 }
 
             # Bot 1 (always present)
@@ -339,10 +401,13 @@ def fetch_pending_events(db, config, max_count):
     """
     cursor = db.cursor(dictionary=True)
 
-    # Single unified query — parallel processing
+    # Single unified query â€” parallel processing
     # makes transport-specific priority redundant
+    # First fetch only event IDs. Sorting SELECT e.* can force
+    # MySQL to filesort large TEXT/JSON event rows and exhaust
+    # sort_buffer_size.
     cursor.execute("""
-        SELECT e.*
+        SELECT e.id
         FROM llm_chatter_events e
         WHERE e.status = 'pending'
           AND (e.react_after IS NULL
@@ -357,6 +422,7 @@ def fetch_pending_events(db, config, max_count):
               OR e.event_type LIKE 'raid_%%'
               OR e.event_type = 'player_general_msg'
               OR e.event_type = 'player_enters_zone'
+              OR e.event_type = 'bot_player_whisper'
               OR e.event_type LIKE 'proximity_%%'
               OR e.event_type LIKE 'guild_%%'
               OR (
@@ -389,7 +455,31 @@ def fetch_pending_events(db, config, max_count):
                  e.created_at ASC
         LIMIT %s
     """, (max_count,))
-    candidates = cursor.fetchall()
+
+    id_rows = cursor.fetchall()
+    candidate_ids = [row['id'] for row in id_rows]
+
+    if not candidate_ids:
+        return []
+
+    placeholders = ",".join(["%s"] * len(candidate_ids))
+    cursor.execute(
+        f"SELECT * FROM llm_chatter_events "
+        f"WHERE id IN ({placeholders})",
+        tuple(candidate_ids),
+    )
+
+    rows_by_id = {
+        row['id']: row
+        for row in cursor.fetchall()
+    }
+
+    # Restore the priority/created_at order from the ID query.
+    candidates = [
+        rows_by_id[event_id]
+        for event_id in candidate_ids
+        if event_id in rows_by_id
+    ]
 
     claimed = []
     for event in candidates:
@@ -801,7 +891,7 @@ def process_single_event(event, client, config):
             # group has no traits rows (already
             # cleaned up after player logout /
             # group disband), mark expired and skip.
-            # Lifecycle events are exempt — see
+            # Lifecycle events are exempt â€” see
             # _ORPHAN_GUARD_EXEMPT at module scope.
             if (event_type.startswith('bot_group_')
                     and event_type
@@ -827,7 +917,7 @@ def process_single_event(event, client, config):
                 else:
                     logger.warning(
                         "bot_group_* event %s has"
-                        " no _group_id — orphan"
+                        " no _group_id â€” orphan"
                         " guard skipped",
                         event_type,
                     )
@@ -841,12 +931,12 @@ def process_single_event(event, client, config):
                 )
             return handler(db, client, config, event)
 
-        # Unknown event type — no handler registered.
+        # Unknown event type â€” no handler registered.
         # Mark as skipped so it doesn't block the
         # queue indefinitely.
         logger.warning(
             "Unknown event_type '%s' (id=%s)"
-            " — skipping",
+            " â€” skipping",
             event_type, event_id,
         )
         cursor.execute(
@@ -1374,7 +1464,7 @@ def main():
             'LLMChatter.UseEventSystem', '1'
         ) == '1'
     )
-    # Master GroupChatter toggle (read once — bridge config
+    # Master GroupChatter toggle (read once â€” bridge config
     # is static until restart). Gates the direct periodic
     # group producers (idle chatter, bot questions) so they
     # do not spend LLM calls or pollute chat history when
@@ -1862,7 +1952,7 @@ def main():
             if has_critical_failure(results):
                 logger.error("=" * 60)
                 logger.error(
-                    "mod-llm-chatter HEALTH CHECK FAILED — "
+                    "mod-llm-chatter HEALTH CHECK FAILED â€” "
                     "bots will not chat. Fix the items marked "
                     "[FAIL] above."
                 )
@@ -1951,7 +2041,7 @@ def main():
     bot_question_future = None
     legacy_future = None
     tone_regen_future = None
-    # Track online→offline transition for full wipe
+    # Track onlineâ†’offline transition for full wipe
     was_players_online = True
 
     def _harvest_future(f, name):
@@ -2048,7 +2138,7 @@ def main():
                     any_real_players_online(db)
                 )
 
-                # Transition online → offline: wipe
+                # Transition online â†’ offline: wipe
                 # all ephemeral session data once
                 if (
                     was_players_online
@@ -2105,7 +2195,7 @@ def main():
                     last_db_snapshot = current_time
 
                 # Legacy requests (General ambient chatter)
-                # Runs freely every cycle — no deferral
+                # Runs freely every cycle â€” no deferral
                 if players_online and not legacy_future:
                     legacy_future = (
                         executor.submit(

@@ -437,12 +437,8 @@ def build_event_context(event: dict) -> str:
         )
         context_parts.append(desc)
         context_parts.append(
-            "This weather has been going on for a "
-            "while. React naturally - complain about "
-            "it, comment on how it affects travel or "
-            "mood, or find something positive about "
-            "it. Do NOT react as if the weather just "
-            "started."
+            "This weather has been going on for a while. "
+            "It did not just start."
         )
 
     elif event_type == 'transport_arrives':

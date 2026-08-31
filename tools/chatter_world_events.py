@@ -32,6 +32,7 @@ from chatter_prompts import (
     build_event_statement_prompt,
 )
 from chatter_shared import (
+    get_chatter_mode,
     get_zone_name,
     get_class_name,
     get_race_name,
@@ -65,6 +66,31 @@ def _normalize_bot(bot):
         )
     return bot
 
+def _attach_world_event_states(
+    bots, extra_data
+):
+    """Attach authoritative C++ live-state snapshots
+    and restrict candidates to bots that have one.
+    """
+    states = extra_data.get('bot_states')
+
+    if not isinstance(states, dict) or not states:
+        return bots
+
+    grounded = []
+
+    for bot in bots:
+        guid = str(bot.get('bot1_guid', ''))
+        state = states.get(guid)
+
+        if not isinstance(state, dict):
+            continue
+
+        bot = dict(bot)
+        bot['bot_state'] = state
+        grounded.append(bot)
+
+    return grounded
 
 def _resolve_bots(db, event, extra_data, zone_id):
     """Find eligible bots for a world event.
@@ -95,16 +121,47 @@ def _resolve_bots(db, event, extra_data, zone_id):
                 cursor, guid_list
             )
         ]
+
+        bots = _attach_world_event_states(
+            bots, extra_data
+        )
+
         cursor.close()
         return (bots or None), True
 
-    # Zone-specific or global candidate query
-    bots = [
-        _normalize_bot(b)
-        for b in get_zone_bot_candidates(
-            cursor, zone_id=zone_id
-        )
-    ]
+    # Zone-specific or global candidate query.
+    # If C++ supplied authoritative live-state
+    # snapshots, query those exact bot GUIDs so
+    # every candidate has matching state.
+    states = extra_data.get('bot_states')
+
+    if isinstance(states, dict) and states:
+        state_guids = []
+
+        for guid in states.keys():
+            try:
+                state_guids.append(int(guid))
+            except (TypeError, ValueError):
+                continue
+
+        bots = [
+            _normalize_bot(b)
+            for b in get_bots_by_guid(
+                cursor, state_guids
+            )
+        ]
+    else:
+        bots = [
+            _normalize_bot(b)
+            for b in get_zone_bot_candidates(
+                cursor, zone_id=zone_id
+            )
+        ]
+
+    bots = _attach_world_event_states(
+        bots, extra_data
+    )
+
     cursor.close()
 
     if not bots:
@@ -184,6 +241,7 @@ def _deliver_conversation(
             'zone': get_zone_name(
                 b.get('zone_id', zone_id)
             ),
+            'bot_state': b.get('bot_state'),
         })
 
     bot_names = [b['name'] for b in formatted]
@@ -474,9 +532,37 @@ def process_weather_change_event(
     db, client, config, event,
 ):
     """Bots react to weather transitions."""
-    return _process_world_event(
+    mode = get_chatter_mode(config)
+
+    # RP keeps the full world-event behavior,
+    # including possible multi-bot conversations.
+    if mode == 'roleplay':
+        return _process_world_event(
+            db, client, config, event,
+            fatigue_exempt=True,
+        )
+
+    # Normal mode may notice an actual weather
+    # transition, but it should be one brief player
+    # reaction rather than a group conversation.
+    event_id = event['id']
+    zone_id = event.get('zone_id')
+    extra_data = parse_extra_data(
+        event.get('extra_data'),
+        event_id,
+        event.get('event_type', ''),
+    ) or {}
+
+    bots, _ = _resolve_bots(
+        db, event, extra_data, zone_id
+    )
+    if not bots:
+        mark_event(db, event_id, 'skipped')
+        return False
+
+    return _deliver_statement(
         db, client, config, event,
-        fatigue_exempt=True,
+        bots, extra_data, zone_id,
     )
 
 
@@ -484,6 +570,15 @@ def process_weather_ambient_event(
     db, client, config, event,
 ):
     """Bots comment on ongoing weather."""
+    mode = get_chatter_mode(config)
+
+    # Normal-mode players should not periodically
+    # discuss weather just because it is happening.
+    # Keep ambient weather chatter for RP only.
+    if mode != 'roleplay':
+        mark_event(db, event['id'], 'skipped')
+        return False
+
     return _process_world_event(
         db, client, config, event,
         fatigue_exempt=True,

@@ -215,6 +215,8 @@ CREATE TABLE IF NOT EXISTS `llm_group_bot_traits` (
     `mount_display_id` INT UNSIGNED NOT NULL DEFAULT 0,
     `transport_name` VARCHAR(128) DEFAULT NULL,
     `travel_updated_at` TIMESTAMP NULL DEFAULT NULL,
+    `bot_state_json` MEDIUMTEXT DEFAULT NULL,
+    `bot_state_updated_at` TIMESTAMP NULL DEFAULT NULL,
     `farewell_msg` VARCHAR(255) DEFAULT NULL,
     `backstory` TEXT DEFAULT NULL,
     `assigned_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -29,6 +29,7 @@ from chatter_shared import (
     insert_chat_message,
     build_anti_repetition_context,
     build_bot_identity_with_level,
+    build_bot_state_context,
     get_recent_zone_messages,
     append_json_instruction,
     parse_single_response,
@@ -347,6 +348,7 @@ def _build_general_response_prompt(
     zone_name, chat_history, mode,
     recent_messages=None, allow_action=True,
     link_context="",
+    bot_state=None,
     speaker_talent_context=None,
     target_talent_context=None,
     zone_flavor="",
@@ -361,8 +363,9 @@ def _build_general_response_prompt(
     tone = pick_random_tone(mode)
     mood = pick_random_mood(mode)
     twist = maybe_get_creative_twist(
-        chance=1.0, mode=mode
-    )
+        chance=1.0 if is_rp else 0.08,
+        mode=mode,
+)
 
     rp_context = ""
     if is_rp:
@@ -391,19 +394,21 @@ def _build_general_response_prompt(
         )
     else:
         style = (
-            "Reply like a real WoW player typing "
-            "in General chat — the energy of "
-            "Trade chat or a WoW subreddit thread. "
-            "Use internet slang and gamer shorthand "
-            "naturally, throw in a joke or meme "
-            "reference if it fits, and don't shy "
-            "away from a little snark or friendly "
-            "trash talk. Reference zones, classes, "
-            "abilities, and creatures by name like "
-            "a player would, not a lore book."
+            "Reply like a real WoW player casually "
+            "typing in General chat while playing. "
+            "Keep it low-effort and conversational. "
+            "Lowercase, fragments, abbreviations, "
+            "WoW shorthand, and occasional internet "
+            "slang are natural when they fit. "
+            "Do not sound like an NPC, lore writer, "
+            "Reddit essay, or scripted comedian."
         )
 
-    env_lines = build_environmental_context_lines()
+    env_lines = (
+        build_environmental_context_lines()
+        if is_rp
+        else []
+    )
 
     identity = build_bot_identity_with_level(
         bot_name,
@@ -416,6 +421,34 @@ def _build_general_response_prompt(
         f"{identity}\n"
         f"Your personality: {trait_str}\n"
     )
+
+    factual_context = build_bot_state_context(
+        bot_state or {}
+    )
+    if factual_context:
+        prompt += f"\n{factual_context}\n"
+
+        if not is_rp:
+            prompt += (
+                "\nLIVE STATE RULES:\n"
+                "- The authoritative live bot state above "
+                "overrides chat history, previous bot "
+                "messages, personality, and other context "
+                "for specific factual claims.\n"
+                "- Never invent a quest name, quest "
+                "objective, objective count, mob, item, "
+                "level, profession, equipment, money "
+                "amount, destination, or other specific "
+                "game-state fact.\n"
+                "- If the player asks for a specific fact "
+                "that is not present in the live state, "
+                "say you don't know or aren't sure rather "
+                "than making something up.\n"
+                "- Supplied [[quest:...]] and [[item:...]] "
+                "tokens are exact opaque strings. Copy a "
+                "token exactly when relevant or omit it. "
+                "Never create or modify a token.\n"
+            )
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
     if target_talent_context:
@@ -427,15 +460,27 @@ def _build_general_response_prompt(
     if twist:
         prompt += f"Creative twist: {twist}\n"
 
-    address_hint = (
-        f"- Address {player_name} by name "
-        f"somewhere in your reply (not always "
-        f"at the start)\n"
-    )
+    address_hint = ""
+    if is_rp and random.random() < 0.4:
+        address_hint = (
+            f"- You may address {player_name} by "
+            f"name in your reply\n"
+        )
 
-    prompt += (
-        f"You are in {zone_name}."
-    )
+    if is_rp:
+        prompt += (
+            f"You are in {zone_name}."
+        )
+    else:
+        prompt += (
+            f"You are in {zone_name}. "
+            f"This location is factual gameplay context only, "
+            f"not a conversation topic. Do not comment on "
+            f"scenery, weather, lighting, brightness, darkness, "
+            f"the sky, atmosphere, landscape, views, ambience, "
+            f"or the zone's 'vibe'. Do not turn the player's "
+            f"message into an observation about the area."
+        )
     if env_lines:
         prompt += "\n" + "\n".join(env_lines)
     if is_rp and zone_flavor:
@@ -461,19 +506,21 @@ def _build_general_response_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Lean into internet slang and abbreviations "
-        f"naturally — lol, lmao, ngl, tbh, fr, imo, "
-        f"ikr, bruh, no cap, W, L, ratio, mid, cope, "
-        f"based, cringe, skill issue, git gud. Don't "
-        f"use them all in one message, but don't hold "
-        f"back either — sound like a real online "
-        f"player, not a formal writer. Basic WoW "
-        f"terms always fine (dps, tank, healer, gg, "
-        f"buff, nerf)\n"
+        f"- Use normal WoW shorthand and casual internet "
+        f"language when it fits. Things like lol, lmao, "
+        f"tbh, ngl, bruh, rip, gz, omw, sec, mb, dps, "
+        f"tank, healer, gg, buff, and nerf are fine. "
+        f"Do not force slang or memes into every reply\n"
         f"- NEVER use brackets [] around creature, "
         f"NPC, zone, or faction names - write them "
         f"as plain text\n"
-        f"- Respond to what {player_name} said\n"
+        f"- Respond directly to what {player_name} said. "
+        f"Do not ignore it and introduce an unrelated topic\n"
+        f"- In Normal mode, never make scenery, weather, "
+        f"lighting, brightness, the sky, atmosphere, "
+        f"landscape, zone appearance, or the area's vibe "
+        f"the subject of the reply. Location names are "
+        f"practical gameplay context only\n"
         f"{address_hint}"
         f"- Reflect your personality traits\n"
         f"- Don't repeat what they said\n"
@@ -511,6 +558,7 @@ def _build_general_followup_prompt(
     zone_name, chat_history, mode,
     recent_messages=None, allow_action=True,
     link_context="",
+    bot_state=None,
     speaker_talent_context=None,
     target_talent_context=None,
     zone_flavor="",
@@ -552,21 +600,19 @@ def _build_general_followup_prompt(
         )
     else:
         style = (
-            "Reply like a real WoW player typing "
-            "in General chat — the energy of "
-            "Trade chat or a WoW subreddit thread. "
-            "Use internet slang and gamer shorthand "
-            "naturally, throw in a joke or meme "
-            "reference if it fits, and don't shy "
-            "away from a little snark or friendly "
-            "trash talk. Reference zones, classes, "
-            "abilities, and creatures by name like "
-            "a player would, not a lore book."
+            "Reply like a real WoW player casually "
+            "typing in General chat while playing. "
+            "Keep it low-effort and conversational. "
+            "Lowercase, fragments, abbreviations, "
+            "WoW shorthand, and occasional internet "
+            "slang are natural when they fit. "
+            "Do not sound like an NPC, lore writer, "
+            "Reddit essay, or scripted comedian."
         )
 
-    # 40% chance to address someone by name
+    # Explicit name-addressing is mainly an RP feature.
     address_hint = ""
-    if random.random() < 0.4:
+    if is_rp and random.random() < 0.4:
         target = random.choice(
             [player_name, first_bot_name]
         )
@@ -586,6 +632,34 @@ def _build_general_followup_prompt(
         f"{identity}\n"
         f"Your personality: {trait_str}\n"
     )
+
+    factual_context = build_bot_state_context(
+        bot_state or {}
+    )
+    if factual_context:
+        prompt += f"\n{factual_context}\n"
+
+        if not is_rp:
+            prompt += (
+                "\nLIVE STATE RULES:\n"
+                "- The authoritative live bot state above "
+                "overrides chat history, previous bot "
+                "messages, personality, and other context "
+                "for specific factual claims.\n"
+                "- Never invent a quest name, quest "
+                "objective, objective count, mob, item, "
+                "level, profession, equipment, money "
+                "amount, destination, or other specific "
+                "game-state fact.\n"
+                "- If the player asks for a specific fact "
+                "that is not present in the live state, "
+                "say you don't know or aren't sure rather "
+                "than making something up.\n"
+                "- Supplied [[quest:...]] and [[item:...]] "
+                "tokens are exact opaque strings. Copy a "
+                "token exactly when relevant or omit it. "
+                "Never create or modify a token.\n"
+            )
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
     if target_talent_context:
@@ -593,8 +667,20 @@ def _build_general_followup_prompt(
     prompt += (
         f"Your tone: {tone}\n"
         f"Your mood: {mood}\n"
-        f"You are in {zone_name}."
     )
+
+    if is_rp:
+        prompt += f"You are in {zone_name}."
+    else:
+        prompt += (
+            f"You are in {zone_name}. "
+            f"This location is factual gameplay context only, "
+            f"not a conversation topic. Do not comment on "
+            f"scenery, weather, lighting, brightness, darkness, "
+            f"the sky, atmosphere, landscape, views, ambience, "
+            f"or the zone's 'vibe'. Do not turn the conversation "
+            f"into an observation about the area."
+        )
     if is_rp and zone_flavor:
         prompt += f"\nZone context: {zone_flavor}"
     if is_rp and subzone_lore:
@@ -621,25 +707,36 @@ def _build_general_followup_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Lean into internet slang and abbreviations "
-        f"naturally — lol, lmao, ngl, tbh, fr, imo, "
-        f"ikr, bruh, no cap, W, L, ratio, mid, cope, "
-        f"based, cringe, skill issue, git gud. Don't "
-        f"use them all in one message, but don't hold "
-        f"back either — sound like a real online "
-        f"player, not a formal writer. Basic WoW "
-        f"terms always fine (dps, tank, healer, gg, "
-        f"buff, nerf)\n"
+        f"- Normal WoW shorthand is natural: gz, ty, "
+        f"np, mb, brb, afk, oom, lfg, inv, sec, omw, "
+        f"dps, tank, healer, gg\n"
+        f"- Occasional casual internet language like "
+        f"lol, lmao, tbh, ngl, bruh, or rip is fine "
+        f"when it actually fits; do not force slang "
+        f"or memes into every reply\n"
         f"- NEVER use brackets [] around creature, "
         f"NPC, zone, or faction names - write them "
         f"as plain text\n"
         f"- Don't repeat what others said\n"
+        f"- Stay on the subject of what {player_name} said "
+        f"or {first_bot_name}'s response. Do not introduce "
+        f"an unrelated topic just to make the reply interesting\n"
+        f"- In Normal mode, never make scenery, weather, "
+        f"lighting, brightness, the sky, atmosphere, "
+        f"landscape, zone appearance, or the area's vibe "
+        f"the subject of the reply. Location names are "
+        f"practical gameplay context only\n"
         f"{address_hint}"
         f"- Keep it brief - General channel\n"
         f"- Reflect your personality traits"
     )
-    spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
+    spices = (
+        pick_personality_spices(
+            mode=mode,
+            spice_count_override=_spice_count,
+        )
+        if is_rp
+        else []
     )
     if spices:
         prompt += (
@@ -750,6 +847,20 @@ def process_general_player_msg_event(
         bot1_traits = primary['bot1_traits']
         is_conversation = primary['is_conversation']
 
+        # Live authoritative state was captured in C++
+        # when the player sent the General message.
+        bot_states = extra_data.get('bot_states', {})
+        bot1_state = {}
+
+        if isinstance(bot_states, dict):
+            bot1_state = bot_states.get(
+                str(bot1_guid),
+                bot_states.get(bot1_guid, {})
+            )
+
+        if not isinstance(bot1_state, dict):
+            bot1_state = {}
+
         # Talent context injection
         speaker_talent = None
         target_talent = None
@@ -796,6 +907,7 @@ def process_general_player_msg_event(
             recent_messages=recent_msgs,
             allow_action=allow_action,
             link_context=link_context,
+            bot_state=bot1_state,
             speaker_talent_context=speaker_talent,
             target_talent_context=target_talent,
             zone_flavor=zone_flavor,
@@ -900,6 +1012,7 @@ def process_general_player_msg_event(
                     recent_msgs=recent_msgs,
                     allow_action=allow_action,
                     link_context=link_context,
+                    bot_states=bot_states,
                     speaker_talent_context=(
                         speaker_talent
                     ),
@@ -938,6 +1051,7 @@ def process_general_player_msg_event(
                             recent_msgs=recent_msgs,
                             allow_action=allow_action,
                             link_context=link_context,
+                            bot_states=bot_states,
                             speaker_talent_context=(
                                 speaker_talent
                             ),
@@ -985,6 +1099,7 @@ def _general_followup(
     recent_msgs=None,
     allow_action=True,
     link_context="",
+    bot_states=None,
     speaker_talent_context=None,
     target_talent_context=None,
     zone_flavor="",
@@ -1004,6 +1119,19 @@ def _general_followup(
         return
 
     bot2_guid = random.choice(other_guids)
+
+    # Match the second speaker to the authoritative
+    # live state captured when the player spoke.
+    bot2_state = {}
+    if isinstance(bot_states, dict):
+        bot2_state = bot_states.get(
+            str(bot2_guid),
+            bot_states.get(bot2_guid, {})
+        )
+
+    if not isinstance(bot2_state, dict):
+        bot2_state = {}
+
     bot2_info = _get_bot_info(db, bot2_guid)
     if not bot2_info:
         return
@@ -1046,6 +1174,7 @@ def _general_followup(
         recent_messages=recent_msgs,
         allow_action=allow_action,
         link_context=link_context,
+        bot_state=bot2_state,
         speaker_talent_context=(
             bot2_speaker_talent
         ),
@@ -1148,6 +1277,7 @@ def _build_general_continuation_prompt(
     zone_name, chat_history, mode,
     recent_messages=None, allow_action=True,
     remaining_messages=3, link_context="",
+    bot_state=None,
     speaker_talent_context=None,
     target_talent_context=None,
     zone_flavor="",
@@ -1192,16 +1322,16 @@ def _build_general_continuation_prompt(
         )
     else:
         style = (
-            "Reply like a real WoW player typing "
-            "in General chat — the energy of "
-            "Trade chat or a WoW subreddit thread. "
-            "Use internet slang and gamer shorthand "
-            "naturally, throw in a joke or meme "
-            "reference if it fits, and don't shy "
-            "away from a little snark or friendly "
-            "trash talk. Reference zones, classes, "
-            "abilities, and creatures by name like "
-            "a player would, not a lore book."
+            "Reply like a real WoW player casually "
+            "typing in General chat while playing. "
+            "Keep it low-effort and conversational. "
+            "Lowercase, fragments, abbreviations, "
+            "WoW shorthand, and occasional internet "
+            "slang are natural when they fit. "
+            "A dry joke or mildly salty comment is fine, "
+            "but do not force memes, snark, or trash talk. "
+            "Do not sound like an NPC, lore writer, "
+            "Reddit essay, or scripted comedian."
         )
 
     # Format the conversation thread
@@ -1214,13 +1344,17 @@ def _build_general_continuation_prompt(
         )
     thread_text = "\n".join(thread_lines)
 
-    # Pick someone to maybe address by name
+    # Explicit name-addressing is mainly an RP feature.
     other_names = list(set(
         e['name'] for e in conversation_thread
         if e['name'] != bot_name
     ))
     address_hint = ""
-    if other_names and random.random() < 0.4:
+    if (
+        is_rp
+        and other_names
+        and random.random() < 0.4
+    ):
         target = random.choice(other_names)
         address_hint = (
             f"- You may address {target} by "
@@ -1238,6 +1372,34 @@ def _build_general_continuation_prompt(
         f"{identity}\n"
         f"Your personality: {trait_str}\n"
     )
+
+    factual_context = build_bot_state_context(
+        bot_state or {}
+    )
+    if factual_context:
+        prompt += f"\n{factual_context}\n"
+
+        if not is_rp:
+            prompt += (
+                "\nLIVE STATE RULES:\n"
+                "- The authoritative live bot state above "
+                "overrides chat history, previous bot "
+                "messages, personality, and other context "
+                "for specific factual claims.\n"
+                "- Never invent a quest name, quest "
+                "objective, objective count, mob, item, "
+                "level, profession, equipment, money "
+                "amount, destination, or other specific "
+                "game-state fact.\n"
+                "- If the player asks for a specific fact "
+                "that is not present in the live state, "
+                "say you don't know or aren't sure rather "
+                "than making something up.\n"
+                "- Supplied [[quest:...]] and [[item:...]] "
+                "tokens are exact opaque strings. Copy a "
+                "token exactly when relevant or omit it. "
+                "Never create or modify a token.\n"
+            )
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
     if target_talent_context:
@@ -1245,8 +1407,20 @@ def _build_general_continuation_prompt(
     prompt += (
         f"Your tone: {tone}\n"
         f"Your mood: {mood}\n"
-        f"You are in {zone_name}."
     )
+
+    if is_rp:
+        prompt += f"You are in {zone_name}."
+    else:
+        prompt += (
+            f"You are in {zone_name}. "
+            f"This location is factual gameplay context only, "
+            f"not a conversation topic. Do not comment on "
+            f"scenery, weather, lighting, brightness, darkness, "
+            f"the sky, atmosphere, landscape, views, ambience, "
+            f"or the zone's 'vibe'. Do not turn the conversation "
+            f"into an observation about the area."
+        )
     if is_rp and zone_flavor:
         prompt += f"\nZone context: {zone_flavor}"
     if is_rp and subzone_lore:
@@ -1272,24 +1446,30 @@ def _build_general_continuation_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Lean into internet slang and abbreviations "
-        f"naturally — lol, lmao, ngl, tbh, fr, imo, "
-        f"ikr, bruh, no cap, W, L, ratio, mid, cope, "
-        f"based, cringe, skill issue, git gud. Don't "
-        f"use them all in one message, but don't hold "
-        f"back either — sound like a real online "
-        f"player, not a formal writer. Basic WoW "
-        f"terms always fine (dps, tank, healer, gg, "
-        f"buff, nerf)\n"
+        f"- Normal WoW shorthand is natural: gz, ty, "
+        f"np, mb, brb, afk, oom, lfg, inv, sec, omw, "
+        f"dps, tank, healer, gg\n"
+        f"- Occasional casual internet language like "
+        f"lol, lmao, tbh, ngl, bruh, or rip is fine "
+        f"when it actually fits; do not force slang "
+        f"or memes into every reply\n"
         f"- NEVER use brackets [] around creature, "
         f"NPC, zone, or faction names - write them "
         f"as plain text\n"
         f"- Don't repeat what others said\n"
+        f"- Stay on the subject of the current conversation. "
+        f"Do not introduce an unrelated topic just to make "
+        f"the reply interesting\n"
+        f"- In Normal mode, never make scenery, weather, "
+        f"lighting, brightness, the sky, atmosphere, "
+        f"landscape, zone appearance, or the area's vibe "
+        f"the subject of the reply. Location names are "
+        f"practical gameplay context only\n"
         f"{address_hint}"
         f"- Keep it brief - General channel\n"
         f"- Reflect your personality traits"
     )
-    if remaining_messages <= 2:
+    if is_rp and remaining_messages <= 2:
         prompt += (
             f"\n- The conversation should feel "
             f"like it's winding down naturally"
@@ -1328,6 +1508,7 @@ def _general_extended_conversation(
     recent_msgs=None,
     allow_action=True,
     link_context="",
+    bot_states=None,
     speaker_talent_context=None,
     target_talent_context=None,
     zone_flavor="",
@@ -1369,11 +1550,27 @@ def _general_extended_conversation(
             'guid': bot1_guid,
             'name': bot1_name,
             'traits': bot1_traits,
+            'bot_state': (
+                bot_states.get(
+                    str(bot1_guid),
+                    bot_states.get(bot1_guid, {})
+                )
+                if isinstance(bot_states, dict)
+                else {}
+            ),
         },
         {
             'guid': bot2_guid,
             'name': bot2_name,
             'traits': bot2_traits,
+            'bot_state': (
+                bot_states.get(
+                    str(bot2_guid),
+                    bot_states.get(bot2_guid, {})
+                )
+                if isinstance(bot_states, dict)
+                else {}
+            ),
         },
     ]
 
@@ -1386,10 +1583,21 @@ def _general_extended_conversation(
         bot3_guid = random.choice(other_guids)
         bot3_info = _get_bot_info(db, bot3_guid)
         if bot3_info:
+            bot3_state = {}
+            if isinstance(bot_states, dict):
+                bot3_state = bot_states.get(
+                    str(bot3_guid),
+                    bot_states.get(bot3_guid, {})
+                )
+
+            if not isinstance(bot3_state, dict):
+                bot3_state = {}
+
             participants.append({
                 'guid': bot3_guid,
                 'name': bot3_info['name'],
                 'traits': _pick_random_traits(),
+                'bot_state': bot3_state,
             })
 
     # Track who spoke last to avoid repeats
@@ -1482,6 +1690,7 @@ def _general_extended_conversation(
             allow_action=allow_action,
             remaining_messages=remaining,
             link_context=link_context,
+            bot_state=speaker.get('bot_state', {}),
             speaker_talent_context=(
                 sp_speaker_talent
             ),

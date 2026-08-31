@@ -23,6 +23,6 @@ void CheckDayNightTransition(
     std::string& lastTimePeriod);
 void CheckAmbientWeather();
 void CheckActiveHolidays();
-void TryTriggerChatter();
+void TryTriggerChatter(bool capitalsOnly);
 
 #endif

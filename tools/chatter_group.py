@@ -30,6 +30,7 @@ import logging
 import random
 import threading
 import time
+import json
 
 # Module-level config defaults (set by init_group_config)
 _chat_history_limit = 10
@@ -69,9 +70,9 @@ from chatter_shared import (
     stagger_if_needed,
     build_zone_metadata,
     get_player_zone,
-    strip_conversation_actions,
-    append_conversation_json_instruction,
+    build_bot_state_context,
     select_conversation_message_count,
+    strip_conversation_actions,
 )
 from chatter_db import (
     get_character_info_by_name,
@@ -569,16 +570,15 @@ def process_group_event(db, client, config, event):
                     )
                     if zone_name:
                         mem_text = (
-                            f"Met {player_name} and"
-                            f" began adventuring"
-                            f" together in"
-                            f" {zone_name}."
+                            f"First grouped with "
+                            f"{player_name} in "
+                            f"{zone_name}."
                         )
+
                     else:
                         mem_text = (
-                            f"Met {player_name} and"
-                            f" began adventuring"
-                            f" together."
+                            f"First grouped with "
+                            f"{player_name}."
                         )
                     mc = db.cursor()
                     mc.execute(
@@ -1530,7 +1530,9 @@ def process_group_player_msg_event(
                travel_mode, travel_context,
                is_mounted, is_flying,
                is_taxi_flying, is_on_transport,
-               mount_display_id, transport_name
+               mount_display_id, transport_name,
+               bot_state_json,
+               bot_state_updated_at
         FROM llm_group_bot_traits
         WHERE group_id = %s
     """, (group_id,))
@@ -1575,6 +1577,26 @@ def process_group_player_msg_event(
     travel_state = build_travel_state_from_row(bot_row)
     travel_context = format_travel_context(travel_state)
 
+    bot_state = {}
+    raw_bot_state = bot_row.get('bot_state_json')
+
+    if raw_bot_state:
+        try:
+            if isinstance(raw_bot_state, dict):
+                bot_state = raw_bot_state
+            else:
+                parsed_bot_state = json.loads(raw_bot_state)
+
+                if isinstance(parsed_bot_state, dict):
+                    bot_state = parsed_bot_state
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning(
+                "Invalid bot_state_json for bot %s",
+                bot_guid,
+                exc_info=True,
+            )
+            bot_state = {}
+
     # Get bot class/race from characters table
     cursor.execute("""
         SELECT class, race, level, gender
@@ -1597,6 +1619,7 @@ def process_group_player_msg_event(
         'travel_mode': travel_state.get('mode') or '',
         'travel_context': travel_context,
         'travel_state': travel_state,
+        'bot_state': bot_state,
     }
 
 
@@ -1703,6 +1726,7 @@ def process_group_player_msg_event(
                 'travel_mode': travel_state.get('mode') or '',
                 'travel_context': travel_context,
                 'travel_state': travel_state,
+                'bot_state': bot_state,
             }
             try:
                 conv_ok = (
@@ -2117,6 +2141,9 @@ def _try_second_bot_response(
         'travel_mode': bot2_travel_state.get('mode') or '',
         'travel_context': bot2_travel_context,
         'travel_state': bot2_travel_state,
+        'bot_state': second.get(
+            'bot_state', {}
+        ),
     }
 
     # Get updated history (includes first bot's msg)
@@ -2407,13 +2434,22 @@ def _build_composition_comment_prompt(
         if ctx:
             rp_context = f"\n{ctx}"
 
-    prompt = (
-        f"{build_bot_identity_from_dict(bot, suffix='.')}\n"
-        f"Your personality: {trait_str}"
-        f"\nYour tone: "
-        f"{stored_tone or pick_random_tone(mode)}"
-        f"{rp_context}\n"
-    )
+    if is_rp:
+        prompt = (
+            f"{build_bot_identity_from_dict(bot, suffix='.')}\n"
+            f"Your personality: {trait_str}"
+            f"\nYour tone: "
+            f"{stored_tone or pick_random_tone(mode)}"
+            f"{rp_context}\n"
+        )
+    else:
+        prompt = (
+            f"You are {bot['name']}, a real WoW player "
+            f"controlling a {bot['class']} character.\n"
+            f"General personality tendencies: "
+            f"{trait_str}.\n"
+            f"Keep them subtle; do not perform a persona.\n"
+        )
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
     prompt += (
@@ -2445,8 +2481,11 @@ def _build_composition_comment_prompt(
         )
     else:
         style = (
-            "Make a brief, casual comment about "
-            "the group composition."
+            "React like a real WoW player looking at the "
+            "group setup. Keep it casual and low-effort. "
+            "Usually 1-8 words. Normal WoW shorthand, "
+            "lowercase, fragments, or mild salt are fine. "
+            "Do not force a joke or clever observation."
         )
 
     prompt += (
@@ -2455,15 +2494,17 @@ def _build_composition_comment_prompt(
         f"characters). No greetings — you already "
         f"said hello."
     )
-    spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
-    )
-    if spices:
-        prompt += (
-            "\nBackground feelings (texture, "
-            "not the topic): "
-            + "; ".join(spices)
+    if is_rp:
+        spices = pick_personality_spices(
+            mode=mode,
+            spice_count_override=_spice_count
         )
+        if spices:
+            prompt += (
+                "\nBackground feelings (texture, "
+                "not the topic): "
+                + "; ".join(spices)
+            )
     return append_json_instruction(
         prompt, allow_action
     )
@@ -2690,6 +2731,10 @@ def build_idle_chatter_prompt(
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
 
+    factual_context = build_bot_state_context(
+        bot.get('bot_state', {})
+    )
+
     # --------------------------------------------------
     # LEAN MEMORY PATH — when memories are present,
     # strip away distracting content and make the
@@ -2702,7 +2747,6 @@ def build_idle_chatter_prompt(
         ]
         sanitized = [s for s in sanitized if s]
         if sanitized:
-            tone = stored_tone or pick_random_tone(mode)
             p_label = (
                 player_name
                 or 'your party leader'
@@ -2710,17 +2754,52 @@ def build_idle_chatter_prompt(
             mem_lines = '\n'.join(
                 f"  - {m}" for m in sanitized
             )
-            prompt = (
-                f"{build_bot_identity_from_dict(bot, suffix='.')}\n"
-                f"Your personality: {trait_str}\n"
-                f"Your tone: {tone}\n"
-            )
+            if is_rp:
+                tone = stored_tone or pick_random_tone(mode)
+                prompt = (
+                    f"{build_bot_identity_from_dict(bot, suffix='.')}\n"
+                    f"Your personality: {trait_str}\n"
+                    f"Your tone: {tone}\n"
+                )
+            else:
+                prompt = (
+                    f"You are {bot['name']}, a real WoW player "
+                    f"controlling a {bot['class']} character.\n"
+                    f"General personality tendencies: "
+                    f"{trait_str}.\n"
+                    f"Keep them subtle; do not perform a persona.\n"
+                )
             if speaker_talent_context:
                 prompt += (
                     f"{speaker_talent_context}\n"
                 )
             if travel_context:
                 prompt += f"{travel_context}\n"
+
+            if factual_context:
+                prompt += (
+                    "\nAUTHORITATIVE CURRENT STATE FOR "
+                    f"{bot['name']}:\n"
+                    f"{factual_context}\n"
+                )
+
+                if not is_rp:
+                    prompt += (
+                        "LIVE STATE RULES:\n"
+                        "- Current live state overrides "
+                        "memories and personality for "
+                        "specific facts about this bot.\n"
+                        "- Memories describe past events; "
+                        "do not treat an old memory as the "
+                        "bot's current state.\n"
+                        "- Never invent a specific quest, "
+                        "item, profession, amount, objective, "
+                        "equipment item, location, or other "
+                        "game-state fact.\n"
+                        "- If a specific fact is absent from "
+                        "the live state, do not guess it.\n"
+                    )
+
             # Detect solo bot: no other bots in
             # group. `members` includes bots + players;
             # we are alone if removing this bot and the
@@ -2735,15 +2814,13 @@ def build_idle_chatter_prompt(
                 solo_bot = (len(other_bots) == 0)
             prompt += (
                 f"\n<past_memories>\n"
-                f"Your memories from past "
-                f"adventures with {p_label}:\n"
+                f"Things you remember from previous "
+                f"gameplay with {p_label}:\n"
                 f"{mem_lines}\n"
-                f"Reference one of these memories "
-                f"clearly — mention the place, "
-                f"creature, or moment by name so "
-                f"{p_label} would recognise the "
-                f"callback. Keep it natural "
-                f"(not a full retelling).\n"
+                f"You may reference one concrete detail "
+                f"from a previous gameplay moment. Keep "
+                f"it casual and do not turn it into a "
+                f"story or sentimental callback.\n"
                 f"</past_memories>\n\n"
             )
             if solo_bot and player_name:
@@ -2799,7 +2876,8 @@ def build_idle_chatter_prompt(
     # --------------------------------------------------
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
-        chance=1.0, mode=mode
+        chance=0.4 if is_rp else 0.1,
+        mode=mode,
     )
     # Detect dungeon/BG before topic selection so we
     # can skip AMBIENT topics when inside an instance
@@ -2846,12 +2924,19 @@ def build_idle_chatter_prompt(
     in_dungeon = dungeon_flav is not None
     bg_name = BG_MAP_NAMES.get(map_id)
     if in_dungeon:
-        rp_context += (
-            f"\nDungeon context: {dungeon_flav}"
-        )
-        if dungeon_bosses:
-            boss_list = ', '.join(dungeon_bosses[:6])
-            rp_context += f"\nBosses here: {boss_list}"
+        if is_rp:
+            rp_context += (
+                f"\nDungeon context: {dungeon_flav}"
+            )
+            if dungeon_bosses:
+                boss_list = ', '.join(
+                    dungeon_bosses[:6]
+                )
+                rp_context += (
+                    f"\nBosses here: {boss_list}"
+                )
+        else:
+            rp_context += "\nCurrently in a dungeon."
     elif bg_name:
         rp_context += f"\nBattleground: {bg_name}"
     else:
@@ -2878,28 +2963,35 @@ def build_idle_chatter_prompt(
                     f"\nSubzone: {subzone_name}"
                 )
 
-    # Environmental context (time sometimes,
-    # weather only overworld)
-    weather_arg = (
-        None if in_dungeon else current_weather
-    )
-    for line in build_environmental_context_lines(
-        weather_arg
-    ):
-        rp_context += f"\n{line}"
-
-    # Dead bot awareness — let the LLM know so it
-    # can produce fitting dialogue (gallows humor,
-    # pleas for a rez, floor commentary, etc.)
-    if bot.get('is_dead'):
-        rp_context += (
-            "\nYou are DEAD — lying on the ground "
-            "as a ghost. Speak accordingly: dark "
-            "humor, complain about the cold floor, "
-            "ask for a resurrection, or comment on "
-            "the view from down here. Do NOT pretend "
-            "you are alive or give tactical advice."
+    # Atmospheric environmental context is RP-only.
+    if is_rp:
+        weather_arg = (
+            None if in_dungeon else current_weather
         )
+        for line in build_environmental_context_lines(
+            weather_arg
+        ):
+            rp_context += f"\n{line}"
+
+    # Dead-character awareness.
+    if bot.get('is_dead'):
+        if is_rp:
+            rp_context += (
+                "\nYou are DEAD — lying on the ground "
+                "as a ghost. Speak accordingly: dark "
+                "humor, complain about the cold floor, "
+                "ask for a resurrection, or comment on "
+                "the view from down here. Do NOT pretend "
+                "you are alive or give tactical advice."
+            )
+        else:
+            rp_context += (
+                "\nYour character is dead right now. "
+                "If relevant, react like a WoW player: "
+                "rez?, rip, mb, running back, etc. "
+                "Do not narrate being a ghost, the floor, "
+                "or the scenery."
+            )
 
     if members:
         others = [
@@ -2923,12 +3015,14 @@ def build_idle_chatter_prompt(
         )
     else:
         style = (
-            "Say something in party chat like a "
-            "real WoW player — casual, slangy, "
-            "maybe a little salty. Talk about the "
-            "game naturally, as a player not a "
-            "character. Reference zones, classes, "
-            "abilities, and creatures by name."
+            "Type like a real WoW player during a quiet "
+            "moment. Keep it casual and low-effort. Most "
+            "messages should be 1-8 words. Lowercase, "
+            "fragments, shorthand, missing punctuation, "
+            "and occasional typos are fine. It can be "
+            "mundane, distracted, confused, annoyed, "
+            "helpful, salty, or funny. Do not force a "
+            "topic, joke, insight, or conversation starter."
         )
 
     # Address direction
@@ -2947,18 +3041,57 @@ def build_idle_chatter_prompt(
             f"You can use their name."
         )
 
-    prompt = (
-        f"{build_bot_identity_from_dict(bot)}\n"
-        f"Your personality: {trait_str}\n"
-    )
+    if is_rp:
+        prompt = (
+            f"{build_bot_identity_from_dict(bot)}\n"
+            f"Your personality: {trait_str}\n"
+            f"Your tone: {tone}\n"
+        )
+    else:
+        prompt = (
+            f"You are {bot['name']}, a real WoW player "
+            f"controlling a {bot['class']} character.\n"
+            f"General personality tendencies: "
+            f"{trait_str}.\n"
+            f"Keep them subtle; do not perform a persona.\n"
+        )
+
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
-    prompt += (
-        f"Your tone: {tone}\n"
-    )
+
     if travel_context:
         prompt += f"{travel_context}\n"
-    if backstory:
+
+    if factual_context:
+        prompt += (
+            "\nAUTHORITATIVE CURRENT STATE FOR "
+            f"{bot['name']}:\n"
+            f"{factual_context}\n"
+        )
+
+        if not is_rp:
+            prompt += (
+                "LIVE STATE RULES:\n"
+                "- This live state is authoritative for "
+                "specific facts about your character.\n"
+                "- It overrides personality, chat history, "
+                "memories, and other context when they "
+                "conflict about current game state.\n"
+                "- You may casually mention facts supported "
+                "by this state when relevant.\n"
+                "- Never invent a specific quest, objective, "
+                "mob, item, NPC, amount, profession, "
+                "equipment item, destination, location, "
+                "or current activity.\n"
+                "- If a specific fact is absent from the "
+                "state, do not guess it.\n"
+                "- Supplied [[quest:...]] and [[item:...]] "
+                "tokens are exact opaque strings. Copy them "
+                "exactly when relevant or omit them. Never "
+                "create or modify a token.\n"
+            )
+
+    if is_rp and backstory:
         prompt += (
             f"\n<backstory>\n"
             f"Your history: {backstory}\n"
@@ -2967,6 +3100,7 @@ def build_idle_chatter_prompt(
             f"it.\n"
             f"</backstory>\n"
         )
+
     if twist:
         prompt += f"Creative twist: {twist}\n"
 
@@ -2984,25 +3118,43 @@ def build_idle_chatter_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Reflect your personality traits\n"
+        f"- Let personality affect wording naturally; "
+        f"do not force it\n"
         f"- Just a natural idle comment\n"
         f"- Don't repeat jokes or themes "
         f"already said in chat\n"
-        f"- NEVER claim to have killed a creature, "
-        f"looted an item, completed a quest, "
-        f"or made a trade\n"
-        f"- Stick to observation, opinion, banter, "
-        f"and small talk"
     )
-    spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
-    )
-    if spices:
+
+    if is_rp:
         prompt += (
-            "\nBackground feelings (texture, "
-            "not the topic): "
-            + "; ".join(spices)
+            "- Stay consistent with the supplied "
+            "game context."
         )
+    else:
+        prompt += (
+            "- Specific gameplay claims must be "
+            "supported by your authoritative live state.\n"
+            "- Do not describe scenery, atmosphere, "
+            "weather, or zone vibes unless the player "
+            "explicitly brought them up.\n"
+            "- Do not force an observation or small-talk "
+            "topic just because the group is quiet.\n"
+            "- Ordinary gameplay chatter, complaints, "
+            "questions, shorthand, dry comments, or even "
+            "a one-word message are all fine."
+        )
+
+    if is_rp:
+        spices = pick_personality_spices(
+            mode=mode,
+            spice_count_override=_spice_count
+        )
+        if spices:
+            prompt += (
+                "\nBackground feelings (texture, "
+                "not the topic): "
+                + "; ".join(spices)
+            )
     anti_rep = build_anti_repetition_context(
         recent_messages
     )
@@ -3050,9 +3202,14 @@ def build_idle_conversation_prompt(
     is_rp = (mode == 'roleplay')
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
-    msg_count = select_conversation_message_count(
-        num_bots, 4, 4
-    )
+    if is_rp:
+        msg_count = select_conversation_message_count(
+            num_bots, 4, 4
+        )
+    else:
+        msg_count = select_conversation_message_count(
+            num_bots, 1, 4
+        )
 
     # --------------------------------------------------
     # LEAN MEMORY PATH — when any bot has memories,
@@ -3090,13 +3247,22 @@ def build_idle_conversation_prompt(
             else:
                 speaker_desc = "four"
 
-            parts.append(
-                f"Generate a short party chat "
-                f"exchange between {speaker_desc} "
-                f"adventurers sharing memories "
-                f"from past adventures with "
-                f"{p_label}."
-            )
+            if is_rp:
+                parts.append(
+                    f"Generate a short party chat "
+                    f"exchange between {speaker_desc} "
+                    f"adventurers sharing memories "
+                    f"from past adventures with "
+                    f"{p_label}."
+                )
+            else:
+                parts.append(
+                    f"Generate casual WoW party chat "
+                    f"between some of these players. "
+                    f"They may briefly reference previous "
+                    f"gameplay with {p_label}. Do not turn "
+                    f"the memories into storytelling."
+                )
 
             # Compact bot identities — no worldview
             parts.append(
@@ -3115,19 +3281,50 @@ def build_idle_conversation_prompt(
                     " [DEAD]"
                     if bot.get('is_dead') else ""
                 )
-                parts.append(
-                    f"{bot['name']} is a level "
-                    f"{bot['level']} "
-                    f"{bot['race']} "
-                    f"{bot['class']} "
-                    f"(personality: {trait_str})"
-                    f"{dead_tag}"
-                )
+                if is_rp:
+                    parts.append(
+                        f"{bot['name']} is a level "
+                        f"{bot['level']} "
+                        f"{bot['race']} "
+                        f"{bot['class']} "
+                        f"(personality: {trait_str})"
+                        f"{dead_tag}"
+                    )
+                else:
+                    parts.append(
+                        f"{bot['name']}: level "
+                        f"{bot['level']} {bot['class']}"
+                        f"{dead_tag}"
+                    )
                 if bot.get('travel_context'):
                     parts.append(
                         f"{bot['name']} travel state: "
                         f"{bot['travel_context']}"
                     )
+
+                bot_state_ctx = build_bot_state_context(
+                    bot.get('bot_state', {})
+                )
+
+                if bot_state_ctx:
+                    parts.append(
+                        "AUTHORITATIVE CURRENT STATE FOR "
+                        f"{bot['name']}:\n"
+                        f"{bot_state_ctx}"
+                    )
+
+            if not is_rp:
+                parts.append(
+                    "LIVE STATE RULES: Each bot's "
+                    "authoritative state belongs ONLY to "
+                    "that bot. Never borrow another "
+                    "speaker's quests, items, professions, "
+                    "equipment, money, location, activity, "
+                    "or other personal facts. Current live "
+                    "state overrides old memories when they "
+                    "conflict. If a specific current fact "
+                    "is absent, do not guess it."
+                )
 
             # Per-bot memory blocks
             for b in bots:
@@ -3196,6 +3393,7 @@ def build_idle_conversation_prompt(
                 bot_names,
                 msg_count,
                 allow_action=allow_action,
+                require_all_speakers=is_rp,
             )
     # memories_map was empty or all sanitized away
     # — fall through to the normal full prompt.
@@ -3231,12 +3429,19 @@ def build_idle_conversation_prompt(
     in_dungeon = dungeon_flav is not None
     bg_name = BG_MAP_NAMES.get(map_id)
     if in_dungeon:
-        parts.append(
-            f"Dungeon context: {dungeon_flav}"
-        )
-        if dungeon_bosses:
-            boss_list = ', '.join(dungeon_bosses[:6])
-            parts.append(f"Bosses here: {boss_list}")
+        if is_rp:
+            parts.append(
+                f"Dungeon context: {dungeon_flav}"
+            )
+            if dungeon_bosses:
+                boss_list = ', '.join(
+                    dungeon_bosses[:6]
+                )
+                parts.append(
+                    f"Bosses here: {boss_list}"
+                )
+        else:
+            parts.append("Currently in a dungeon.")
     elif bg_name:
         parts.append(f"Battleground: {bg_name}")
     else:
@@ -3261,14 +3466,16 @@ def build_idle_conversation_prompt(
                     f"Subzone: {subzone_name}"
                 )
 
-    # Environmental context: time sometimes,
-    # weather only overworld
-    weather_arg = (
-        None if in_dungeon else current_weather
-    )
-    parts.extend(
-        build_environmental_context_lines(weather_arg)
-    )
+    # Atmospheric environmental context is RP-only.
+    if is_rp:
+        weather_arg = (
+            None if in_dungeon else current_weather
+        )
+        parts.extend(
+            build_environmental_context_lines(
+                weather_arg
+            )
+        )
 
     # Precompute shared race context once per unique
     # race to avoid duplicating worldview/lore for
@@ -3303,18 +3510,38 @@ def build_idle_conversation_prompt(
             " [DEAD - lying on the ground]"
             if bot.get('is_dead') else ""
         )
-        parts.append(
-            f"{bot['name']} is a level "
-            f"{bot['level']} {bot['race']} "
-            f"{bot['class']} "
-            f"(personality: {trait_str})"
-            f"{dead_tag}"
-        )
+        if is_rp:
+            parts.append(
+                f"{bot['name']} is a level "
+                f"{bot['level']} {bot['race']} "
+                f"{bot['class']} "
+                f"(personality: {trait_str})"
+                f"{dead_tag}"
+            )
+        else:
+            parts.append(
+                f"{bot['name']}: level "
+                f"{bot['level']} {bot['class']} "
+                f"(general tendencies: {trait_str})"
+                f"{dead_tag}"
+            )
         if bot.get('travel_context'):
             parts.append(
                 f"  {bot['name']} travel state: "
                 f"{bot['travel_context']}"
             )
+
+        bot_state_ctx = build_bot_state_context(
+            bot.get('bot_state', {})
+        )
+
+        if bot_state_ctx:
+            parts.append(
+                "AUTHORITATIVE CURRENT STATE FOR "
+                f"{bot['name']}:\n"
+                f"{bot_state_ctx}"
+            )
+
         if is_rp:
             race = bot.get('race', '')
             cls = bot.get('class', '')
@@ -3345,9 +3572,20 @@ def build_idle_conversation_prompt(
                 if shared_class:
                     parts.append(f"  {shared_class}")
                 seen_classes.add(cls_role_key)
-
+    if not is_rp:
+        parts.append(
+            "LIVE STATE RULES: Each speaker has their "
+            "own authoritative current state above. "
+            "A speaker may use ONLY their own state for "
+            "specific personal gameplay facts. Never "
+            "borrow quests, items, professions, equipment, "
+            "money, objectives, location, activity, or "
+            "other facts from another bot. If a specific "
+            "fact is absent from that speaker's state, "
+            "do not invent or guess it."
+        )
     # Inject backstories for participating bots
-    if backstory_map:
+    if is_rp and backstory_map:
         bs_lines = []
         for bot in bots:
             bs = backstory_map.get(bot['name'])
@@ -3384,48 +3622,49 @@ def build_idle_conversation_prompt(
     if topic:
         parts.append(f"Topic: {topic}")
 
-    # Tone and twist
-    tone = pick_random_tone(mode)
+    # Authored tone is RP-only.
+    if is_rp:
+        tone = pick_random_tone(mode)
+        parts.append(f"Overall tone: {tone}")
+
     twist = maybe_get_creative_twist(
-        chance=1.0, mode=mode
+        chance=0.4 if is_rp else 0.1,
+        mode=mode,
     )
-    parts.append(f"Overall tone: {tone}")
     if twist:
         parts.append(f"Creative twist: {twist}")
 
-    # Fixed message count keeps idle conversation
-    # volume constant regardless of group size.
-    # Bots still all participate via round-robin
+    # RP mode keeps the structured mood/length sequence.
+    # Normal mode lets the model choose speakers and flow
+    # more naturally without forced round-robin participation
     # speaker assignment (bot_names[i % num_bots]).
-    mood_sequence = (
-        generate_conversation_mood_sequence(
-            msg_count, mode
+    if is_rp:
+        mood_sequence = (
+            generate_conversation_mood_sequence(
+                msg_count, mode
+            )
         )
-    )
-    length_sequence = (
-        generate_conversation_length_sequence(
-            msg_count
+        length_sequence = (
+            generate_conversation_length_sequence(
+                msg_count
+            )
         )
-    )
 
-    twist_log = (
-        f", twist={twist}" if twist else ""
-    )
-
-    parts.append(
-        "\nMOOD AND LENGTH SEQUENCE "
-        "(follow for each message):"
-    )
-    for i, mood in enumerate(mood_sequence):
-        speaker = bot_names[i % num_bots]
         parts.append(
-            f"  Message {i+1} ({speaker}): "
-            f"mood={mood}, "
-            f"length={length_sequence[i]}"
+            "\nMOOD AND LENGTH SEQUENCE "
+            "(follow for each message):"
         )
+
+        for i, mood in enumerate(mood_sequence):
+            speaker = bot_names[i % num_bots]
+            parts.append(
+                f"  Message {i+1} ({speaker}): "
+                f"mood={mood}, "
+                f"length={length_sequence[i]}"
+            )
 
     # Natural flow instruction for 3+ bots
-    if num_bots > 2:
+    if is_rp and num_bots > 2:
         parts.append(
             "IMPORTANT: EVERY speaker MUST have "
             "at least one message — do NOT skip "
@@ -3461,42 +3700,61 @@ def build_idle_conversation_prompt(
         )
     else:
         parts.append(
-            "Guidelines: Sound like regular WoW "
-            "players chatting — could be any age, "
-            "mature and grounded; talk about the "
-            "game as players, not as characters; "
-            f"{length_hint}."
+            "Guidelines: These are real WoW players "
+            "typing while playing. Most messages are "
+            "1-8 words. Lowercase, fragments, shorthand, "
+            "missing punctuation, one-word replies, and "
+            "occasional typos are fine. Not every player "
+            "needs to speak. A speaker may talk more than "
+            "once. Someone may ignore or misunderstand the "
+            "topic. Do not force agreement, jokes, useful "
+            "comments, or a beginning-middle-end."
         )
 
-    parts.append(
-        "Do NOT mention quests, quest rewards, "
-        "items, spells, or trade. "
-        "NEVER claim to have just killed a "
-        "creature (past exploits is fine), "
-        "just looted an item (you can mention "
-        "items looted in the past), just "
-        "completed a quest (you can mention "
-        "quests completed in the past), "
-        "or made a trade. "
-        "Stick to observation, opinion, banter, "
-        "occasional philosophical consideration. "
-        "Don't repeat jokes or themes already "
-        "said in chat."
-    )
+    if is_rp:
+        parts.append(
+            "Stay consistent with supplied game "
+            "context. Do not invent unsupported "
+            "specific current gameplay facts. "
+            "Don't repeat jokes or themes already "
+            "said in chat."
+        )
+    else:
+        parts.append(
+            "Specific gameplay claims are allowed "
+            "when supported by that speaker's own "
+            "authoritative live state. Never invent "
+            "unsupported quests, objectives, mobs, "
+            "items, NPCs, amounts, professions, "
+            "equipment, locations, or activities. "
+            "Do not drift into scenery descriptions, "
+            "atmosphere, zone vibes, lore reflection, "
+            "philosophy, or sentimental observations. "
+            "These are players at their keyboards, "
+            "not characters discussing the world. "
+            "Complaints, questions, disagreement, "
+            "shorthand, mundane gameplay comments, "
+            "or barely responding are all fine. "
+            "Don't repeat jokes or themes already "
+            "said in chat."
+        )
+
     parts.append(
         "STRICT: Each message MUST be under "
         "120 characters. Short is better."
     )
 
-    spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
-    )
-    if spices:
-        parts.append(
-            "Background feelings (texture, "
-            "not the topic): "
-            + "; ".join(spices)
+    if is_rp:
+        spices = pick_personality_spices(
+            mode=mode,
+            spice_count_override=_spice_count
         )
+        if spices:
+            parts.append(
+                "Background feelings (texture, "
+                "not the topic): "
+                + "; ".join(spices)
+            )
 
     anti_rep = build_anti_repetition_context(
         recent_messages
@@ -3509,6 +3767,7 @@ def build_idle_conversation_prompt(
         bot_names,
         msg_count,
         allow_action=allow_action,
+        require_all_speakers=is_rp,
     )
 
 
@@ -3631,6 +3890,8 @@ def check_idle_group_chatter(
                    t.is_mounted, t.is_flying,
                    t.is_taxi_flying, t.is_on_transport,
                    t.mount_display_id, t.transport_name,
+                   t.bot_state_json,
+                   t.bot_state_updated_at,
                    COALESCE(c.health, 1) AS health
             FROM llm_group_bot_traits t
             LEFT JOIN characters c
@@ -3879,6 +4140,31 @@ def _idle_single_statement(
     ]
     stored_tone = bot_row.get('tone')
 
+    bot_state = {}
+    raw_bot_state = bot_row.get('bot_state_json')
+
+    if raw_bot_state:
+        try:
+            if isinstance(raw_bot_state, dict):
+                bot_state = raw_bot_state
+            else:
+                parsed_bot_state = json.loads(
+                    raw_bot_state
+                )
+                if isinstance(parsed_bot_state, dict):
+                    bot_state = parsed_bot_state
+        except (
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            logger.warning(
+                "Invalid bot_state_json for bot %s",
+                bot_guid,
+                exc_info=True,
+            )
+            bot_state = {}
+
     # Get class/race from characters table
     cursor = db.cursor(dictionary=True)
     cursor.execute("""
@@ -3900,6 +4186,7 @@ def _idle_single_statement(
         'gender': get_gender_label(char_row['gender']),
         'role': bot_row.get('role'),
         'is_dead': int(bot_row.get('health', 1)) == 0,
+        'bot_state': bot_state,
     }
     travel_state = {
         'mode': bot_row.get('travel_mode') or '',
@@ -4184,6 +4471,34 @@ def _idle_conversation(
                 'transport_name') or '',
         }
         travel_context = format_travel_context(travel_state)
+
+        bot_state = {}
+        raw_bot_state = br.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, dict):
+                    bot_state = raw_bot_state
+                else:
+                    parsed_bot_state = json.loads(
+                        raw_bot_state
+                    )
+                    if isinstance(
+                        parsed_bot_state, dict
+                    ):
+                        bot_state = parsed_bot_state
+            except (
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                logger.warning(
+                    "Invalid bot_state_json for bot %s",
+                    br.get('bot_guid'),
+                    exc_info=True,
+                )
+                bot_state = {}
+
         bot = {
             'guid': br['bot_guid'],
             'name': br['bot_name'],
@@ -4199,6 +4514,7 @@ def _idle_conversation(
             'travel_mode': travel_state.get('mode') or '',
             'travel_context': travel_context,
             'travel_state': travel_state,
+            'bot_state': bot_state,
         }
         bots.append(bot)
         traits_map[br['bot_name']] = [
@@ -4661,7 +4977,9 @@ def check_bot_questions(db, client, config):
         cursor.execute("""
             SELECT bot_guid, bot_name,
                    trait1, trait2, trait3, role,
-                   tone, backstory, zone, map
+                   tone, backstory, zone, map,
+                   bot_state_json,
+                   bot_state_updated_at
             FROM llm_group_bot_traits
             WHERE group_id = %s
             ORDER BY RAND()
@@ -4681,6 +4999,33 @@ def check_bot_questions(db, client, config):
             bot_row['trait3'],
         ]
         stored_tone = bot_row.get('tone')
+
+        bot_state = {}
+        raw_bot_state = bot_row.get('bot_state_json')
+
+        if raw_bot_state:
+            try:
+                if isinstance(raw_bot_state, dict):
+                    bot_state = raw_bot_state
+                else:
+                    parsed_bot_state = json.loads(
+                        raw_bot_state
+                    )
+                    if isinstance(
+                        parsed_bot_state, dict
+                    ):
+                        bot_state = parsed_bot_state
+            except (
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                logger.warning(
+                    "Invalid bot_state_json for bot %s",
+                    bot_guid,
+                    exc_info=True,
+                )
+                bot_state = {}
 
         # Get bot class/race/level
         cursor.execute("""
@@ -4704,6 +5049,7 @@ def check_bot_questions(db, client, config):
             'level': char_row['level'],
             'gender': get_gender_label(char_row['gender']),
             'role': bot_row.get('role'),
+            'bot_state': bot_state,
         }
 
         # Gather context

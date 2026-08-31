@@ -32,9 +32,17 @@ public:
     bool _enabled;
     bool _debugLog;
     uint32 _triggerIntervalSeconds;
+
+    // Normal outdoor-zone ambient General chatter
     uint32 _conversationChance;
     uint32 _triggerChance;
-    uint32 _cityChatterMultiplier;
+
+    // Capital-city ambient General chatter
+    uint32 _cityConversationChance;
+    uint32 _cityTriggerChance;
+    uint32 _capitalTriggerMinSeconds;
+    uint32 _capitalTriggerMaxSeconds;
+
     uint32 _maxPendingRequests;
     uint32 _maxBotsPerZone;
     uint32 _maxMessageLength;
