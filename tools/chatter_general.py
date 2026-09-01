@@ -440,10 +440,12 @@ def _build_general_response_prompt(
                 "level, profession, equipment, money "
                 "amount, destination, or other specific "
                 "game-state fact.\n"
-                "- If the player asks for a specific fact "
-                "that is not present in the live state, "
-                "say you don't know or aren't sure rather "
-                "than making something up.\n"
+                "- The live-state restriction applies to factual WoW "
+                "game-state claims. Harmless social details, opinions, "
+                "jokes, preferences, real-world topics, and conversational "
+                "personality may be improvised naturally.\n"
+                "- Do not say you don't know merely because a harmless "
+                "social answer is absent from live game state.\n"
                 "- Supplied [[quest:...]] and [[item:...]] "
                 "tokens are exact opaque strings. Copy a "
                 "token exactly when relevant or omit it. "
@@ -651,10 +653,12 @@ def _build_general_followup_prompt(
                 "level, profession, equipment, money "
                 "amount, destination, or other specific "
                 "game-state fact.\n"
-                "- If the player asks for a specific fact "
-                "that is not present in the live state, "
-                "say you don't know or aren't sure rather "
-                "than making something up.\n"
+                "- The live-state restriction applies to factual WoW "
+                "game-state claims. Harmless social details, opinions, "
+                "jokes, preferences, real-world topics, and conversational "
+                "personality may be improvised naturally.\n"
+                "- Do not say you don't know merely because a harmless "
+                "social answer is absent from live game state.\n"
                 "- Supplied [[quest:...]] and [[item:...]] "
                 "tokens are exact opaque strings. Copy a "
                 "token exactly when relevant or omit it. "
@@ -847,6 +851,15 @@ def process_general_player_msg_event(
         bot1_traits = primary['bot1_traits']
         is_conversation = primary['is_conversation']
 
+        player_info = get_character_info_by_name(
+            db, player_name,
+        )
+        player_guid = (
+            int(player_info.get('guid') or 0)
+            if player_info
+            else 0
+        )
+
         # Live authoritative state was captured in C++
         # when the player sent the General message.
         bot_states = extra_data.get('bot_states', {})
@@ -914,6 +927,35 @@ def process_general_player_msg_event(
             subzone_name=subzone_name,
             subzone_lore=subzone_lore,
         )
+
+        relationship_context = ""
+
+        if (
+            int(config.get(
+                'LLMChatter.Memory.Enable', 1
+            ))
+            and player_guid
+        ):
+            from chatter_memory import (
+                get_relationship_memory_context,
+            )
+
+            relationship_context = (
+                get_relationship_memory_context(
+                    db,
+                    bot1_guid,
+                    player_guid,
+                    player_name,
+                    count=4,
+                )
+            )
+
+        if relationship_context:
+            prompt1 = (
+                relationship_context
+                + "\n\n"
+                + prompt1
+            )
 
         max_tokens = int(config.get(
             'LLMChatter.MaxTokens', 200
@@ -998,6 +1040,25 @@ def process_general_player_msg_event(
         _store_general_chat(
             db, zone_id, bot1_name, True, msg1
         )
+
+        if player_guid:
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            queue_relationship_memory(
+                config,
+                bot1_guid,
+                player_guid,
+                event_context=(
+                    f"{player_name}: "
+                    f"{player_message[:250]}\n"
+                    f"{bot1_name}: {msg1[:250]}"
+                ),
+                source='general_player',
+                bot_name=str(bot1_name),
+                player_name=str(player_name),
+            )
 
         # Conversation mode: second bot follows up
         if is_conversation:
@@ -1143,6 +1204,15 @@ def _general_followup(
     bot2_gender = get_gender_label(bot2_info['gender'])
     bot2_traits = _pick_random_traits()
 
+    player_info = get_character_info_by_name(
+        db, player_name,
+    )
+    player_guid = (
+        int(player_info.get('guid') or 0)
+        if player_info
+        else 0
+    )
+
     # Recompute speaker talent for bot2
     bot2_speaker_talent = None
     talent_chance = int(config.get(
@@ -1185,6 +1255,55 @@ def _general_followup(
         subzone_name=subzone_name,
         subzone_lore=subzone_lore,
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_blocks = []
+
+        if player_guid:
+            player_memory = (
+                get_relationship_memory_context(
+                    db,
+                    bot2_guid,
+                    player_guid,
+                    player_name,
+                    count=4,
+                )
+            )
+
+            if player_memory:
+                relationship_blocks.append(
+                    player_memory
+                )
+
+        bot1_memory = (
+            get_relationship_memory_context(
+                db,
+                bot2_guid,
+                bot1_guid,
+                bot1_name,
+                count=3,
+            )
+        )
+
+        if bot1_memory:
+            relationship_blocks.append(
+                bot1_memory
+            )
+
+        if relationship_blocks:
+            prompt2 = (
+                "\n\n".join(
+                    relationship_blocks
+                )
+                + "\n\n"
+                + prompt2
+            )
 
     max_tokens = int(config.get(
         'LLMChatter.MaxTokens', 200
@@ -1260,6 +1379,56 @@ def _general_followup(
     _store_general_chat(
         db, zone_id, bot2_name, True, msg2
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        if player_guid:
+            queue_relationship_memory(
+                config,
+                bot2_guid,
+                player_guid,
+                event_context=(
+                    f"{player_name}: "
+                    f"{player_message[:220]}\n"
+                    f"{bot2_name}: {msg2[:220]}"
+                ),
+                source='general_player',
+                bot_name=str(bot2_name),
+                player_name=str(player_name),
+            )
+
+        transcript = (
+            f"{player_name}: "
+            f"{player_message[:180]}\n"
+            f"{bot1_name}: "
+            f"{bot1_response[:180]}\n"
+            f"{bot2_name}: {msg2[:180]}"
+        )
+
+        queue_relationship_memory(
+            config,
+            bot2_guid,
+            bot1_guid,
+            event_context=transcript,
+            source='general_bot',
+            bot_name=str(bot2_name),
+            player_name=str(bot1_name),
+        )
+
+        queue_relationship_memory(
+            config,
+            bot1_guid,
+            bot2_guid,
+            event_context=transcript,
+            source='general_bot',
+            bot_name=str(bot1_name),
+            player_name=str(bot2_name),
+        )
 
     return {
         'bot2_guid': bot2_guid,
@@ -1391,10 +1560,12 @@ def _build_general_continuation_prompt(
                 "level, profession, equipment, money "
                 "amount, destination, or other specific "
                 "game-state fact.\n"
-                "- If the player asks for a specific fact "
-                "that is not present in the live state, "
-                "say you don't know or aren't sure rather "
-                "than making something up.\n"
+                "- The live-state restriction applies to factual WoW "
+                "game-state claims. Harmless social details, opinions, "
+                "jokes, preferences, real-world topics, and conversational "
+                "personality may be improvised naturally.\n"
+                "- Do not say you don't know merely because a harmless "
+                "social answer is absent from live game state.\n"
                 "- Supplied [[quest:...]] and [[item:...]] "
                 "tokens are exact opaque strings. Copy a "
                 "token exactly when relevant or omit it. "
@@ -1611,6 +1782,15 @@ def _general_extended_conversation(
         'LLMChatter.MaxTokens', 200
     ))
 
+    player_info = get_character_info_by_name(
+        db, player_name,
+    )
+    player_guid = (
+        int(player_info.get('guid') or 0)
+        if player_info
+        else 0
+    )
+
     # cont_turn tracks how many continuation
     # RNG rolls we've made (0-indexed).
     # First continuation (turn 0) is guaranteed.
@@ -1702,6 +1882,69 @@ def _general_extended_conversation(
             subzone_lore=subzone_lore,
         )
 
+        if int(config.get(
+            'LLMChatter.Memory.Enable', 1
+        )):
+            from chatter_memory import (
+                get_relationship_memory_context,
+            )
+
+            relationship_blocks = []
+
+            if player_guid:
+                player_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        speaker['guid'],
+                        player_guid,
+                        player_name,
+                        count=3,
+                    )
+                )
+
+                if player_memory:
+                    relationship_blocks.append(
+                        player_memory
+                    )
+
+            spoken_bot_names = {
+                entry['name']
+                for entry in thread
+                if entry.get('is_bot')
+            }
+
+            for other in participants:
+                if (
+                    other['guid'] == speaker['guid']
+                    or other['name']
+                    not in spoken_bot_names
+                ):
+                    continue
+
+                bot_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        speaker['guid'],
+                        other['guid'],
+                        other['name'],
+                        count=2,
+                    )
+                )
+
+                if bot_memory:
+                    relationship_blocks.append(
+                        bot_memory
+                    )
+
+            if relationship_blocks:
+                prompt = (
+                    "\n\n".join(
+                        relationship_blocks
+                    )
+                    + "\n\n"
+                    + prompt
+                )
+
         if zone_meta is None:
             zone_meta = {}
         if sp_speaker_talent:
@@ -1776,6 +2019,98 @@ def _general_extended_conversation(
             db, zone_id,
             speaker['name'], True, msg
         )
+
+        if int(config.get(
+            'LLMChatter.Memory.Enable', 1
+        )):
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            if player_guid:
+                queue_relationship_memory(
+                    config,
+                    speaker['guid'],
+                    player_guid,
+                    event_context=(
+                        f"{player_name}: "
+                        f"{player_message[:220]}\n"
+                        f"{speaker['name']}: "
+                        f"{msg[:220]}"
+                    ),
+                    source='general_player',
+                    bot_name=str(
+                        speaker['name']
+                    ),
+                    player_name=str(
+                        player_name
+                    ),
+                )
+
+            # Pair-focused bot memories. Only bots that
+            # already spoke in this actual conversation
+            # are eligible counterparts.
+            prior_bot_lines = {}
+
+            for entry in thread:
+                if not entry.get('is_bot'):
+                    continue
+
+                prior_bot_lines[
+                    entry['name']
+                ] = entry['message']
+
+            for target in participants:
+                if (
+                    target['guid']
+                    == speaker['guid']
+                    or target['name']
+                    not in prior_bot_lines
+                ):
+                    continue
+
+                target_line = str(
+                    prior_bot_lines[
+                        target['name']
+                    ]
+                )
+
+                pair_context = (
+                    f"{player_name}: "
+                    f"{player_message[:160]}\n"
+                    f"{target['name']}: "
+                    f"{target_line[:180]}\n"
+                    f"{speaker['name']}: "
+                    f"{msg[:180]}"
+                )
+
+                queue_relationship_memory(
+                    config,
+                    speaker['guid'],
+                    target['guid'],
+                    event_context=pair_context,
+                    source='general_bot',
+                    bot_name=str(
+                        speaker['name']
+                    ),
+                    player_name=str(
+                        target['name']
+                    ),
+                )
+
+                queue_relationship_memory(
+                    config,
+                    target['guid'],
+                    speaker['guid'],
+                    event_context=pair_context,
+                    source='general_bot',
+                    bot_name=str(
+                        target['name']
+                    ),
+                    player_name=str(
+                        speaker['name']
+                    ),
+                )
 
         # Update thread and last speaker
         thread.append({

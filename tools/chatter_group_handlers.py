@@ -96,7 +96,10 @@ from chatter_handler_pipeline import (
     run_group_handler,
     _maybe_talent_context,
 )
-from chatter_memory import queue_memory
+from chatter_memory import (
+    queue_memory,
+    store_shared_group_experience,
+)
 from chatter_bg_prompts import (
     build_bg_achievement_prompt,
     build_bg_spell_cast_prompt,
@@ -200,7 +203,51 @@ def process_group_kill_event(
 
     The killing bot reacts to a boss/rare kill
     in party chat.
+
+    Boss kills also become deterministic shared
+    bot-to-bot experience memories even if nobody
+    speaks or the chatter reaction fails.
     """
+    event_id = event['id']
+
+    extra_data = parse_extra_data(
+        event.get('extra_data'),
+        event_id,
+        'bot_group_kill',
+    )
+
+    if not extra_data:
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+    group_id = int(
+        extra_data.get('group_id', 0) or 0
+    )
+
+    creature_name = str(
+        extra_data.get(
+            'creature_name', 'something'
+        ) or 'something'
+    ).strip()
+
+    is_boss = bool(int(
+        extra_data.get('is_boss', 0) or 0
+    ))
+
+    # Only bosses enter durable pair history.
+    # Rare kills retain their existing legacy
+    # post-success memory behavior below.
+    if group_id and is_boss and creature_name:
+        store_shared_group_experience(
+            config,
+            group_id,
+            memory_type='boss_kill',
+            factual_text=(
+                f"Defeated {creature_name}"
+            ),
+            dedupe_minutes=10,
+        )
+
     return run_group_handler(
         db, client, config, event,
         event_type_label='bot_group_kill',
@@ -222,7 +269,7 @@ def process_group_kill_event(
                 extra_data=ctx['extra_data'],
                 allow_action=not ctx[
                     'extra_data'].get(
-                    'is_battleground', False),
+                        'is_battleground', False),
                 speaker_talent_context=(
                     ctx['speaker_talent']),
                 stored_tone=ctx['stored_tone'],
@@ -236,6 +283,7 @@ def process_group_kill_event(
         ),
         label='reaction_kill',
         post_success=_kill_post_success,
+        pre_parsed_extra=extra_data,
     )
 
 def process_group_loot_event(
@@ -1811,7 +1859,44 @@ def process_group_dungeon_entry_event(
 
     The bot that entered a dungeon or raid instance
     reacts in party chat.
+
+    Entry also becomes deterministic shared bot-to-bot
+    experience memory even if nobody speaks.
     """
+    event_id = event['id']
+
+    extra_data = parse_extra_data(
+        event.get('extra_data'),
+        event_id,
+        'bot_group_dungeon_entry',
+    )
+
+    if not extra_data:
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+    group_id = int(
+        extra_data.get('group_id', 0) or 0
+    )
+
+    map_name = str(
+        extra_data.get(
+            'map_name', 'a dungeon'
+        ) or 'a dungeon'
+    ).strip()
+
+    # This is authoritative gameplay state, not
+    # conversational memory. Store it regardless
+    # of whether the LLM reaction succeeds.
+    if group_id and map_name:
+        store_shared_group_experience(
+            config,
+            group_id,
+            memory_type='dungeon',
+            factual_text=f"Entered {map_name}",
+            dedupe_minutes=30,
+        )
+
     return run_group_handler(
         db, client, config, event,
         event_type_label='bot_group_dungeon_entry',
@@ -1842,6 +1927,7 @@ def process_group_dungeon_entry_event(
             2, 4),
         inject_mood=False,
         label='reaction_dungeon_entry',
+        pre_parsed_extra=extra_data,
     )
 
 def _wipe_post_success(db, ctx, message):
@@ -1882,7 +1968,46 @@ def process_group_wipe_event(
 
     The designated bot reacts to a total party wipe
     in party chat.
+
+    The wipe itself becomes shared bot-to-bot
+    experience memory even if nobody speaks.
     """
+    event_id = event['id']
+
+    extra_data = parse_extra_data(
+        event.get('extra_data'),
+        event_id,
+        'bot_group_wipe',
+    )
+
+    if not extra_data:
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+    group_id = int(
+        extra_data.get('group_id', 0) or 0
+    )
+
+    killer_name = str(
+        extra_data.get('killer_name', '') or ''
+    ).strip()
+
+    if group_id:
+        factual_text = "Wiped as a group"
+
+        if killer_name:
+            factual_text = (
+                f"Wiped to {killer_name}"
+            )
+
+        store_shared_group_experience(
+            config,
+            group_id,
+            memory_type='wipe',
+            factual_text=factual_text,
+            dedupe_minutes=10,
+        )
+
     return run_group_handler(
         db, client, config, event,
         event_type_label='bot_group_wipe',
@@ -1909,6 +2034,7 @@ def process_group_wipe_event(
         mood_key='wipe',
         label='reaction_wipe',
         post_success=_wipe_post_success,
+        pre_parsed_extra=extra_data,
     )
 
 def process_group_corpse_run_event(
@@ -2612,6 +2738,97 @@ def execute_player_msg_conversation(
         map_id=map_id,
     )
 
+    # Direct multi-bot Party conversation gets silent,
+    # directional relationship memory for each speaker.
+    if (
+        int(config.get('LLMChatter.Memory.Enable', 1))
+        and player_info
+    ):
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        player_guid = int(
+            player_info.get('guid') or 0
+        )
+        memory_blocks = []
+
+        for participant in bots:
+            participant_guid = int(
+                participant.get('guid') or 0
+            )
+
+            if not participant_guid:
+                continue
+
+            participant_memories = []
+
+            if player_guid:
+                player_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        participant_guid,
+                        player_guid,
+                        player_name,
+                        count=3,
+                    )
+                )
+
+                if player_memory:
+                    participant_memories.append(
+                        player_memory
+                    )
+
+            for other in bots:
+                other_guid = int(
+                    other.get('guid') or 0
+                )
+
+                if (
+                    not other_guid
+                    or other_guid == participant_guid
+                ):
+                    continue
+
+                other_name = str(
+                    other.get('name')
+                    or 'the other party member'
+                )
+
+                bot_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        participant_guid,
+                        other_guid,
+                        other_name,
+                        count=2,
+                    )
+                )
+
+                if bot_memory:
+                    participant_memories.append(
+                        bot_memory
+                    )
+
+            if participant_memories:
+                memory_blocks.append(
+                    f"PRIVATE MEMORY FOR "
+                    f"{participant['name']} ONLY:\n"
+                    + "\n".join(participant_memories)
+                )
+
+        if memory_blocks:
+            prompt = (
+                "\n\n".join(memory_blocks)
+                + "\n\n"
+                + "MEMORY ISOLATION RULE: Each speaker may use "
+                + "ONLY the private memories labeled for that "
+                + "speaker. Never transfer, reveal, or infer another "
+                + "bot's private memories as if this speaker knew "
+                + "them.\n\n"
+                + prompt
+            )
+
     # Token budget: max_tokens * (1 + num_bots),
     # capped at 1000
     max_tokens = int(config.get(
@@ -2677,6 +2894,8 @@ def execute_player_msg_conversation(
     )
     cumulative_delay = 2.0
     prev_len = 0
+    successful_messages = []
+
     for seq, msg in enumerate(messages):
         msg_text = msg['message']
         text = strip_speaker_prefix(
@@ -2722,9 +2941,110 @@ def execute_player_msg_conversation(
             db, group_id, speaker_guid,
             msg['name'], True, text,
         )
+
+        successful_messages.append({
+            'guid': int(speaker_guid),
+            'name': str(msg['name']),
+            'message': text,
+        })
+
         prev_len = len(text)
 
-    return True
+    # Only actual generated and inserted conversation
+    # lines form durable relationship memories.
+    if (
+        successful_messages
+        and int(config.get(
+            'LLMChatter.Memory.Enable', 1
+        ))
+    ):
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        player_guid = (
+            int(player_info.get('guid') or 0)
+            if player_info
+            else 0
+        )
+
+        # Each bot that actually spoke may remember
+        # its exchange with the real player.
+        for entry in successful_messages:
+            if player_guid:
+                queue_relationship_memory(
+                    config,
+                    entry['guid'],
+                    player_guid,
+                    event_context=(
+                        f"{player_name}: "
+                        f"{player_message[:220]}\n"
+                        f"{entry['name']}: "
+                        f"{entry['message'][:220]}"
+                    ),
+                    source='party_player',
+                    bot_name=entry['name'],
+                    player_name=player_name,
+                )
+
+        # Bots that actually spoke together may form
+        # independent directional memories.
+        #
+        # Keep each memory strictly pair-focused so a third
+        # bot's line cannot leak into A -> B relationship memory.
+        if len(successful_messages) >= 2:
+            seen_pairs = set()
+
+            for source in successful_messages:
+                for target in successful_messages:
+                    if (
+                        source['guid']
+                        == target['guid']
+                    ):
+                        continue
+
+                    pair = (
+                        source['guid'],
+                        target['guid'],
+                    )
+
+                    if pair in seen_pairs:
+                        continue
+
+                    seen_pairs.add(pair)
+
+                    pair_lines = [
+                        f"{player_name}: "
+                        f"{player_message[:180]}"
+                    ]
+
+                    for entry in successful_messages:
+                        if entry['guid'] not in (
+                            source['guid'],
+                            target['guid'],
+                        ):
+                            continue
+
+                        pair_lines.append(
+                            f"{entry['name']}: "
+                            f"{entry['message'][:180]}"
+                        )
+
+                    pair_context = "\n".join(
+                        pair_lines[-5:]
+                    )
+
+                    queue_relationship_memory(
+                        config,
+                        source['guid'],
+                        target['guid'],
+                        event_context=pair_context,
+                        source='party_bot',
+                        bot_name=source['name'],
+                        player_name=target['name'],
+                    )
+
+    return bool(successful_messages)
 
 
 # ============================================================

@@ -767,10 +767,13 @@ def build_quest_statement_prompt(
                 )
 
         parts.append(
-            "The live quest state above is factual. You may "
-            "naturally mention exact progress shown there, "
-            "including how many objectives remain. Do not "
-            "invent any quest fact that is not shown."
+            "The live quest state above is factual, but General chat "
+            "is not a quest-progress diary. Do not announce exact "
+            "objective counts or how many remain merely to narrate "
+            "progress. Mention exact progress only when it is directly "
+            "useful to a help request, grouping, coordination, or a "
+            "practical question. Do not invent any quest fact that is "
+            "not shown."
         )
 
     elif quest.get('description') and random.random() < 0.4:
@@ -813,12 +816,12 @@ def build_quest_statement_prompt(
         ]
     else:
         quest_actions = [
-            "mentioning they are working on it",
             "asking if anyone else is doing it",
             "asking for help with it",
             "looking for group for it",
-            "briefly complaining about the quest",
-            "asking a general question about it",
+            "asking a practical question about it",
+            "asking whether anyone else had trouble with it",
+            "offering to group with others doing it",
         ]
     if random.random() < 0.6:
         parts.append(
@@ -2128,9 +2131,9 @@ def build_quest_conversation_prompt(
         angles = [
             "asking if anyone else is doing the quest",
             "asking for help with the quest",
-            "mentioning they are working on the quest",
-            "briefly complaining about the quest",
-            "asking a general question about the quest",
+            "asking a practical question about the quest",
+            "asking whether anyone else had trouble with it",
+            "offering to group with others doing the quest",
             "looking for group for the quest",
         ]
     if random.random() < 0.5:

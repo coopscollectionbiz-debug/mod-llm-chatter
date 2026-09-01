@@ -1296,7 +1296,7 @@ def process_group_join_batch_event(
                 welcome_delay = last_delay + 3
                 _batch_welcome(
                     db, client, config, wb,
-                    new_names, group_id, mode,
+                    greeted_bots, group_id, mode,
                     event_id, welcome_delay
                 )
 
@@ -1377,12 +1377,22 @@ def _find_existing_welcomer(
 
 def _batch_welcome(
     db, client, config, wb_info,
-    new_names, group_id, mode,
+    new_bots, group_id, mode,
     event_id, delay
 ):
     """Generate a welcome message from an existing
     bot addressed to the whole batch of newcomers.
     """
+    new_names = [
+        str(bot.get('name') or '')
+        for bot in new_bots
+        if int(bot.get('guid') or 0)
+        and str(bot.get('name') or '')
+    ]
+
+    if not new_names:
+        return
+
     wb_guid = wb_info['guid']
     wb_name = wb_info['name']
     wb_traits = wb_info['traits']
@@ -1423,6 +1433,62 @@ def _batch_welcome(
         speaker_talent_context=speaker_talent,
         stored_tone=wb_tone,
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_blocks = []
+
+        for newcomer in new_bots:
+            newcomer_guid = int(
+                newcomer.get('guid') or 0
+            )
+            newcomer_name = str(
+                newcomer.get('name') or ''
+            )
+
+            if (
+                not newcomer_guid
+                or not newcomer_name
+                or newcomer_guid == wb_guid
+            ):
+                continue
+
+            relationship_context = (
+                get_relationship_memory_context(
+                    db,
+                    wb_guid,
+                    newcomer_guid,
+                    newcomer_name,
+                    count=3,
+                )
+            )
+
+            if relationship_context:
+                relationship_blocks.append(
+                    relationship_context
+                )
+
+        if relationship_blocks:
+            prompt = (
+                "\n\n".join(
+                    relationship_blocks
+                )
+                + "\n\n"
+                + "These are private memories belonging "
+                + f"only to {wb_name}. Some newcomers may "
+                + "be familiar and others may be strangers. "
+                + "Use prior familiarity naturally when it "
+                + "fits, but do not pretend to know a "
+                + "newcomer with no relationship memory and "
+                + "do not force a callback merely to prove "
+                + "you remember someone.\n\n"
+                + prompt
+            )
 
     max_tokens = int(config.get(
         'LLMChatter.MaxTokens', 200
@@ -1467,6 +1533,57 @@ def _batch_welcome(
         db, group_id, wb_guid,
         wb_name, True, msg
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        for newcomer in new_bots:
+            newcomer_guid = int(
+                newcomer.get('guid') or 0
+            )
+            newcomer_name = str(
+                newcomer.get('name') or ''
+            )
+
+            if (
+                not newcomer_guid
+                or not newcomer_name
+                or newcomer_guid == wb_guid
+            ):
+                continue
+
+            pair_context = (
+                f"{newcomer_name} joined the party "
+                f"as part of a group of newcomers.\n"
+                f"{wb_name}: {msg[:220]}"
+            )
+
+            queue_relationship_memory(
+                config,
+                wb_guid,
+                newcomer_guid,
+                event_context=pair_context,
+                source='party_bot',
+                bot_name=str(wb_name),
+                player_name=str(newcomer_name),
+            )
+
+            queue_relationship_memory(
+                config,
+                newcomer_guid,
+                wb_guid,
+                event_context=pair_context,
+                source='party_bot',
+                bot_name=str(newcomer_name),
+                player_name=str(wb_name),
+            )
+
+
+
 
 
 
@@ -1783,30 +1900,31 @@ def process_group_player_msg_event(
 
         # Fetch memories for player message
         # response — RNG-gated like idle recall
-        msg_memories = None
+        relationship_context = ""
+        player_guid = 0
         memory_enabled = int(config.get(
             'LLMChatter.Memory.Enable', 1
         ))
+
         if memory_enabled and player_info:
-            recall_chance = int(config.get(
-                'LLMChatter.Memory'
-                '.IdleRecallChance', 30,
-            )) / 100.0
             player_guid = int(
                 player_info['guid']
             )
-            if (
-                player_guid
-                and random.random()
-                    < recall_chance
-            ):
-                msg_memories = get_bot_memories(
-                    db, bot_guid,
-                    player_guid, count=3,
-                    exclude_first_meeting=True,
+
+            if player_guid:
+                from chatter_memory import (
+                    get_relationship_memory_context,
                 )
-                if not msg_memories:
-                    msg_memories = None
+
+                relationship_context = (
+                    get_relationship_memory_context(
+                        db,
+                        bot_guid,
+                        player_guid,
+                        player_name,
+                        count=4,
+                    )
+                )
 
         prompt = build_player_response_prompt(
             bot, traits, player_name,
@@ -1821,16 +1939,24 @@ def process_group_player_msg_event(
             area_id=area_id,
             map_id=map_id,
             stored_tone=stored_tone,
-            memories=msg_memories,
             travel_context=travel_context,
         )
 
+        if relationship_context:
+            prompt = (
+                relationship_context
+                + "\n\n"
+                + prompt
+            )
+
         max_tokens = pick_random_max_tokens(config)
-        if msg_memories:
+
+        if relationship_context:
             max_tokens = max(max_tokens, 250)
+
         _pmsg_label = (
             'group_player_msg_memory'
-            if msg_memories
+            if relationship_context
             else 'group_player_msg'
         )
         _dflav_pmsg = get_dungeon_flavor(map_id)
@@ -1916,6 +2042,24 @@ def process_group_player_msg_event(
 
         # Second bot chance — MUTUAL EXCLUSION:
         # skip if conversation path was used
+        if player_guid and message:
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            queue_relationship_memory(
+                config,
+                bot_guid,
+                player_guid,
+                event_context=(
+                    f"{player_name}: {player_message[:250]}\n"
+                    f"{bot_name}: {message[:250]}"
+                ),
+                source='party_player',
+                bot_name=str(bot_name),
+                player_name=str(player_name),
+            )
+
         if not used_conversation:
             second_chance = int(config.get(
                 'LLMChatter.GroupChatter'
@@ -1941,21 +2085,8 @@ def process_group_player_msg_event(
                         exc_info=True,
                     )
 
-        # Memory: queue player_message memories
-        try:
-            if int(config.get(
-                'LLMChatter.Memory.Enable', 1
-            )):
-                _maybe_queue_player_msg_memory(
-                    config, group_id,
-                    player_message, all_bots,
-                    player_name=player_name,
-                )
-        except Exception:
-            logger.error(
-                "player_message memory failed",
-                exc_info=True,
-            )
+        # Durable direct relationship memory was already
+        # written from the actual successful responder above.
 
         _mark_event(db, event_id, 'completed')
         return True
@@ -2192,6 +2323,75 @@ def _try_second_bot_response(
         travel_context=bot2_travel_context,
     )
 
+    player_guid = 0
+    first_bot_name = ""
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_blocks = []
+
+        if player_info:
+            player_guid = int(
+                player_info['guid']
+            )
+
+            if player_guid:
+                player_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        bot2_guid,
+                        player_guid,
+                        player_name,
+                        count=4,
+                    )
+                )
+
+                if player_memory:
+                    relationship_blocks.append(
+                        player_memory
+                    )
+
+        if first_bot_guid:
+            cursor = db.cursor(dictionary=True)
+            cursor.execute(
+                "SELECT name FROM characters "
+                "WHERE guid = %s LIMIT 1",
+                (first_bot_guid,),
+            )
+            first_row = cursor.fetchone() or {}
+
+            first_bot_name = str(
+                first_row.get('name') or ''
+            )
+
+            if first_bot_name:
+                bot_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        bot2_guid,
+                        first_bot_guid,
+                        first_bot_name,
+                        count=2,
+                    )
+                )
+
+                if bot_memory:
+                    relationship_blocks.append(
+                        bot_memory
+                    )
+
+        if relationship_blocks:
+            prompt = (
+                "\n\n".join(relationship_blocks)
+                + "\n\n"
+                + prompt
+            )
+
     max_tokens = int(config.get(
         'LLMChatter.MaxTokens', 200
     ))
@@ -2245,6 +2445,55 @@ def _try_second_bot_response(
         db, group_id, bot2_guid,
         bot2_name, True, msg2
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        if player_guid:
+            queue_relationship_memory(
+                config,
+                bot2_guid,
+                player_guid,
+                event_context=(
+                    f"{player_name}: {player_message[:220]}\n"
+                    f"{bot2_name}: {msg2[:220]}"
+                ),
+                source='party_player',
+                bot_name=bot2_name,
+                player_name=player_name,
+            )
+
+        if first_bot_guid and first_bot_name:
+            transcript = (
+                f"{player_name}: {player_message[:180]}\n"
+                f"{first_bot_name}: "
+                f"{chat_hist[-220:] if chat_hist else ''}\n"
+                f"{bot2_name}: {msg2[:180]}"
+            )
+
+            queue_relationship_memory(
+                config,
+                bot2_guid,
+                first_bot_guid,
+                event_context=transcript,
+                source='party_bot',
+                bot_name=bot2_name,
+                player_name=first_bot_name,
+            )
+
+            queue_relationship_memory(
+                config,
+                first_bot_guid,
+                bot2_guid,
+                event_context=transcript,
+                source='party_bot',
+                bot_name=first_bot_name,
+                player_name=bot2_name,
+            )
 
 
 def _welcome_from_existing_bot(
@@ -2305,6 +2554,35 @@ def _welcome_from_existing_bot(
         stored_tone=wb_tone,
     )
 
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_context = (
+            get_relationship_memory_context(
+                db,
+                wb_guid,
+                new_bot_guid,
+                new_bot_name,
+                count=4,
+            )
+        )
+
+        if relationship_context:
+            prompt = (
+                relationship_context
+                + "\n\n"
+                + "This is a private memory of your "
+                + "relationship with the character who "
+                + "just joined. Use it naturally if relevant. "
+                + "Do not force a callback just to prove you "
+                + "remember them.\n\n"
+                + prompt
+            )
+
     max_tokens = int(config.get(
         'LLMChatter.MaxTokens', 200
     ))
@@ -2347,6 +2625,38 @@ def _welcome_from_existing_bot(
         db, group_id, wb_guid,
         wb_name, True, msg
     )
+
+    if int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        welcome_context = (
+            f"{new_bot_name} joined the party.\n"
+            f"{wb_name}: {msg[:240]}"
+        )
+
+        queue_relationship_memory(
+            config,
+            wb_guid,
+            new_bot_guid,
+            event_context=welcome_context,
+            source='party_bot',
+            bot_name=str(wb_name),
+            player_name=str(new_bot_name),
+        )
+
+        queue_relationship_memory(
+            config,
+            new_bot_guid,
+            wb_guid,
+            event_context=welcome_context,
+            source='party_bot',
+            bot_name=str(new_bot_name),
+            player_name=str(wb_name),
+        )
 
 
 def _get_group_role_summary(db, group_id):
@@ -4671,6 +4981,70 @@ def _idle_conversation(
             backstory_map=conv_backstory_map,
             allow_action=allow_action,
         )
+
+        # Durable bot-to-bot relationship memory is a
+        # separate layer from the legacy player memories_map.
+        # Every selected speaker sees only its own directional
+        # memories of the other selected bots.
+        if memory_enabled:
+            from chatter_memory import (
+                get_relationship_memory_context,
+            )
+
+            private_relationship_blocks = []
+
+            for speaker in bots:
+                speaker_memories = []
+
+                for other in bots:
+                    if other['guid'] == speaker['guid']:
+                        continue
+
+                    relationship_context = (
+                        get_relationship_memory_context(
+                            db,
+                            speaker['guid'],
+                            other['guid'],
+                            other['name'],
+                            count=2,
+                        )
+                    )
+
+                    if relationship_context:
+                        speaker_memories.append(
+                            relationship_context
+                        )
+
+                if speaker_memories:
+                    private_relationship_blocks.append(
+                        "PRIVATE MEMORY FOR "
+                        f"{speaker['name']} ONLY:\n"
+                        + "\n\n".join(
+                            speaker_memories
+                        )
+                    )
+
+            if private_relationship_blocks:
+                prompt = (
+                    "\n\n".join(
+                        private_relationship_blocks
+                    )
+                    + "\n\n"
+                    + "MEMORY ISOLATION RULE: Each speaker "
+                    + "may use ONLY the private relationship "
+                    + "memories explicitly labeled for that "
+                    + "speaker. Never transfer one bot's "
+                    + "memory, familiarity, opinion, joke, "
+                    + "or past experience to another bot. "
+                    + "Prior familiarity may affect the "
+                    + "conversation naturally, but do not "
+                    + "force a callback merely to prove that "
+                    + "someone remembers another character. "
+                    + "Current authoritative game state "
+                    + "overrides stale memory.\n\n"
+                    + prompt
+                )
+
         logger.info(
             "[IDLE] prompt snippet: %r",
             prompt[:300],
@@ -4731,6 +5105,7 @@ def _idle_conversation(
         # Insert messages with staggered delivery
         cumulative_delay = 2.0
         prev_len = 0
+        successful_messages = []
 
         for seq, msg in enumerate(messages):
             msg_text = msg['message']
@@ -4782,7 +5157,86 @@ def _idle_conversation(
                 msg['name'], True, text
             )
 
+            successful_messages.append({
+                'guid': speaker_guid,
+                'name': msg['name'],
+                'message': text,
+            })
+
             prev_len = len(text)
+
+        # Form/update durable relationships only among bots
+        # that actually spoke in this autonomous exchange.
+        if memory_enabled and len(successful_messages) >= 2:
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            actual_speakers = {}
+
+            for spoken in successful_messages:
+                actual_speakers[
+                    spoken['guid']
+                ] = spoken['name']
+
+            actual_guids = list(
+                actual_speakers.keys()
+            )
+
+            for i in range(len(actual_guids)):
+                guid_a = actual_guids[i]
+                name_a = actual_speakers[guid_a]
+
+                for j in range(
+                    i + 1,
+                    len(actual_guids),
+                ):
+                    guid_b = actual_guids[j]
+                    name_b = actual_speakers[guid_b]
+
+                    # Keep this memory pair-focused:
+                    # include only lines spoken by these
+                    # two characters, preserving order.
+                    pair_lines = []
+
+                    for spoken in successful_messages:
+                        if spoken['guid'] not in (
+                            guid_a,
+                            guid_b,
+                        ):
+                            continue
+
+                        pair_lines.append(
+                            f"{spoken['name']}: "
+                            f"{spoken['message'][:180]}"
+                        )
+
+                    if not pair_lines:
+                        continue
+
+                    pair_context = "\n".join(
+                        pair_lines[-6:]
+                    )
+
+                    queue_relationship_memory(
+                        config,
+                        guid_a,
+                        guid_b,
+                        event_context=pair_context,
+                        source='party_bot',
+                        bot_name=str(name_a),
+                        player_name=str(name_b),
+                    )
+
+                    queue_relationship_memory(
+                        config,
+                        guid_b,
+                        guid_a,
+                        event_context=pair_context,
+                        source='party_bot',
+                        bot_name=str(name_b),
+                        player_name=str(name_a),
+                    )
 
         with _last_idle_chatter_lock:
             _last_idle_chatter[group_id] = now

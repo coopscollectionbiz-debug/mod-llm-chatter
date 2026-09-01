@@ -1006,9 +1006,10 @@ def _player_say_single_prompt(
             "WoW shorthand and occasional internet slang are "
             "fine when natural. Do not force memes, jokes, "
             "sarcasm, or cleverness.",
-            "Answer what the player actually said. A simple "
-            "yeah, nah, lol, idk, ty, np, sec, or similar "
-            "short response can be completely appropriate.",
+            "Answer what the player actually said and follow "
+            "the conversational context naturally.",
+            "Very short replies are fine when they genuinely fit, "
+            "but do not default to lol, idk, or other filler.",
             "Do not narrate the scenery or make the response "
             "sound like fantasy dialogue.",
             "No AI talk or markdown.",
@@ -1036,9 +1037,16 @@ def _player_say_single_prompt(
             "- Never invent a quest name, quest objective, "
             "mob, item, NPC, number, destination, or other "
             "specific game-state fact.",
-            "- If the player asks for a fact that is not "
-            "present in the authoritative state, say you "
-            "don't know or aren't sure.",
+            "- The live-state restriction applies only to factual "
+            "WoW game-state claims such as quests, items, levels, "
+            "objective counts, NPCs, locations, inventory, gear, "
+            "professions, money, and current activity.",
+            "- Harmless social details, opinions, jokes, preferences, "
+            "real-world topics, and conversational personality may "
+            "be improvised naturally when they do not contradict "
+            "established conversation or character context.",
+            "- Do not say you don't know merely because a harmless "
+            "social or real-world answer is absent from live game state.",
             "- Supplied [[quest:...]] and [[item:...]] "
             "tokens are exact opaque strings. Copy one "
             "exactly when relevant or omit it. Never create "
@@ -1103,9 +1111,12 @@ def _player_say_single_prompt(
             "RECENT CHAT CONTEXT:",
             "- The player's CURRENT message is the primary "
             "thing you are responding to.",
-            "- The recent conversation below is background "
-            "only. Do not continue it unless the player's "
-            "current message clearly refers to it.",
+            "- Treat the recent conversation as authoritative "
+            "conversation history when the player's current message "
+            "refers to the same topic, joke, person, question, or idea.",
+            "- Maintain continuity with things you already said. "
+            "Do not contradict your own recent replies without a "
+            "natural correction or change of mind.",
             "- Especially do not continue topics about "
             "scenery, sunsets, sunrises, weather, the sky, "
             "lighting, atmosphere, views, or how the area "
@@ -1213,8 +1224,10 @@ def _player_say_conversation_prompt(
             "A speaker may talk more than once.",
             "Do not make everyone agree, acknowledge each "
             "other, or stay on the same subject.",
-            "Replies can be uncertain, distracted, mundane, "
-            "unhelpful, or incomplete when appropriate.",
+            "Replies can be brief, distracted, mundane, or imperfect "
+            "when appropriate. When the player is clearly sustaining a "
+            "conversation, follow the thread coherently instead of "
+            "becoming randomly uncertain or evasive.",
             "",
             "Do not try to make the exchange interesting, "
             "clever, funny, wholesome, or memorable.",
@@ -1294,9 +1307,13 @@ def _player_say_conversation_prompt(
             "- Never invent a quest name, quest objective, "
             "mob, item, NPC, number, destination, or other "
             "specific game-state fact.",
-            "- If a requested fact is absent from that "
-            "speaker's live state, have them say they "
-            "don't know or aren't sure.",
+            "- The live-state restriction applies only to factual "
+            "WoW game-state claims. Harmless social details, opinions, "
+            "jokes, preferences, real-world topics, and conversational "
+            "personality may be improvised naturally when consistent "
+            "with prior chat.",
+            "- Do not make a speaker say they don't know merely because "
+            "a harmless conversational answer is absent from live state.",
             "- Supplied [[quest:...]] and [[item:...]] "
             "tokens are exact opaque strings. Copy one "
             "exactly when relevant or omit it. Never "
@@ -1365,8 +1382,10 @@ def _player_say_conversation_prompt(
 
         if not is_rp:
             lines.append(
-                "Use recent conversation only when relevant. "
-                "Do not summarize it or force continuity."
+                "Use recent conversation whenever it is relevant to "
+                "the player's current message. Preserve established "
+                "facts, jokes, opinions, references, and conversational "
+                "context. Do not summarize it or force an unrelated topic."
             )
 
     addressable = list(nearby_names)
@@ -1442,6 +1461,36 @@ def handle_proximity_player_say(
         history,
         config=config,
     )
+
+    # Persistent bot <-> player memory is available during
+    # direct conversation regardless of where it was created.
+    bot_guid = int(
+        speaker.get('bot_guid', 0) or 0
+    )
+    if player_guid and bot_guid:
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_context = (
+            get_relationship_memory_context(
+                db,
+                bot_guid,
+                player_guid,
+                str(
+                    extra.get('player_name')
+                    or 'the player'
+                ),
+                count=4,
+            )
+        )
+
+        if relationship_context:
+            prompt = (
+                relationship_context
+                + "\n\n"
+                + prompt
+            )
     response = call_llm(
         client,
         prompt,
@@ -1477,6 +1526,39 @@ def handle_proximity_player_say(
         db, event_id,
         'completed' if ok else 'skipped',
     )
+
+    if ok and player_guid:
+        bot_guid = int(
+            speaker.get('bot_guid', 0) or 0
+        )
+        bot_reply = str(
+            parsed.get('message') or ''
+        ).strip()
+
+        if bot_guid and bot_reply:
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            queue_relationship_memory(
+                config,
+                bot_guid,
+                player_guid,
+                event_context=(
+                    f"{extra.get('player_name', 'Player')} "
+                    f"said: {player_message[:250]}\n"
+                    f"{speaker.get('name', 'Bot')} "
+                    f"replied: {bot_reply[:250]}"
+                ),
+                source='proximity_player',
+                bot_name=str(
+                    speaker.get('name') or ''
+                ),
+                player_name=str(
+                    extra.get('player_name') or ''
+                ),
+            )
+
     return ok
 
 
@@ -1519,6 +1601,89 @@ def handle_proximity_player_conversation(
         history,
         config=config,
     )
+
+    if player_guid:
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        memory_blocks = []
+        player_name = str(
+            extra.get('player_name') or 'the player'
+        )
+
+        for participant in participants:
+            participant_guid = int(
+                participant.get('bot_guid', 0) or 0
+            )
+            if not participant_guid:
+                continue
+
+            participant_memories = []
+
+            # This bot's private relationship with the real player.
+            relationship_context = (
+                get_relationship_memory_context(
+                    db,
+                    participant_guid,
+                    player_guid,
+                    player_name,
+                    count=3,
+                )
+            )
+            if relationship_context:
+                participant_memories.append(
+                    relationship_context
+                )
+
+            # This bot's directional memories of the other
+            # PlayerBots in the same conversation.
+            for other in participants:
+                other_guid = int(
+                    other.get('bot_guid', 0) or 0
+                )
+                if (
+                    not other_guid
+                    or other_guid == participant_guid
+                ):
+                    continue
+
+                other_name = str(
+                    other.get('name') or 'the other bot'
+                )
+
+                bot_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        participant_guid,
+                        other_guid,
+                        other_name,
+                        count=2,
+                    )
+                )
+                if bot_memory:
+                    participant_memories.append(
+                        bot_memory
+                    )
+
+            if participant_memories:
+                memory_blocks.append(
+                    f"PRIVATE MEMORY FOR "
+                    f"{participant.get('name', 'Bot')} ONLY:\n"
+                    + "\n".join(participant_memories)
+                )
+
+        if memory_blocks:
+            prompt = (
+                "\n\n".join(memory_blocks)
+                + "\n\n"
+                + "MEMORY ISOLATION RULE: Each speaker may use "
+                + "ONLY the private memories labeled for that "
+                + "speaker. Never transfer, reveal, or infer another "
+                + "bot's private memories as if this speaker knew "
+                + "them.\n\n"
+                + prompt
+            )
     max_lines = int(
         extra.get('max_lines', 3) or 3
     )
@@ -1561,15 +1726,19 @@ def handle_proximity_player_conversation(
     )
 
     inserted = 0
+    successful_lines = []
     cumulative_delay = 0
+
     for index, line in enumerate(parsed):
         speaker = speaker_by_name.get(
             line.get('name', '')
         )
         if not speaker:
             continue
+
         if index > 0:
             cumulative_delay += line_delay
+
         ok = _insert_proximity_line(
             db,
             event_id,
@@ -1579,8 +1748,139 @@ def handle_proximity_player_conversation(
             cumulative_delay,
             line,
         )
+
         if ok:
             inserted += 1
+
+            bot_reply = str(
+                line.get('message') or ''
+            ).strip()
+
+            successful_lines.append({
+                'speaker': speaker,
+                'message': bot_reply,
+            })
+
+            # This bot may form a memory with the real player.
+            if player_guid:
+                speaker_guid = int(
+                    speaker.get('bot_guid', 0) or 0
+                )
+
+                if speaker_guid and bot_reply:
+                    from chatter_memory import (
+                        queue_relationship_memory,
+                    )
+
+                    queue_relationship_memory(
+                        config,
+                        speaker_guid,
+                        player_guid,
+                        event_context=(
+                            f"{extra.get('player_name', 'Player')} "
+                            f"said: {player_message[:250]}\n"
+                            f"{speaker.get('name', 'Bot')} "
+                            f"replied: {bot_reply[:250]}"
+                        ),
+                        source='proximity_player',
+                        bot_name=str(
+                            speaker.get('name') or ''
+                        ),
+                        player_name=str(
+                            extra.get('player_name') or ''
+                        ),
+                    )
+
+    # Bots that actually spoke together may independently
+    # remember one another. Memories are directional:
+    # A -> B is distinct from B -> A.
+    if len(successful_lines) >= 2:
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        seen_pairs = set()
+
+        for source in successful_lines:
+            source_speaker = source['speaker']
+            source_guid = int(
+                source_speaker.get('bot_guid', 0) or 0
+            )
+
+            if not source_guid:
+                continue
+
+            for target in successful_lines:
+                target_speaker = target['speaker']
+                target_guid = int(
+                    target_speaker.get('bot_guid', 0) or 0
+                )
+
+                if (
+                    not target_guid
+                    or target_guid == source_guid
+                ):
+                    continue
+
+                pair = (source_guid, target_guid)
+
+                if pair in seen_pairs:
+                    continue
+
+                seen_pairs.add(pair)
+
+                # Keep this relationship memory pair-focused:
+                # player + source bot + target bot only.
+                pair_lines = [
+                    (
+                        f"{extra.get('player_name', 'Player')}: "
+                        f"{player_message[:180]}"
+                    )
+                ]
+
+                for entry in successful_lines:
+                    entry_speaker = entry['speaker']
+                    entry_guid = int(
+                        entry_speaker.get(
+                            'bot_guid', 0
+                        ) or 0
+                    )
+
+                    if entry_guid not in (
+                        source_guid,
+                        target_guid,
+                    ):
+                        continue
+
+                    entry_message = str(
+                        entry.get('message') or ''
+                    )
+
+                    if not entry_message:
+                        continue
+
+                    pair_lines.append(
+                        f"{entry_speaker.get('name', 'Bot')}: "
+                        f"{entry_message[:180]}"
+                    )
+
+                pair_context = "\n".join(
+                    pair_lines[-5:]
+                )
+
+                queue_relationship_memory(
+                    config,
+                    source_guid,
+                    target_guid,
+                    event_context=pair_context,
+                    source='proximity_bot',
+                    bot_name=str(
+                        source_speaker.get('name') or ''
+                    ),
+                    player_name=str(
+                        target_speaker.get('name') or ''
+                    ),
+                )
 
     if inserted == 0:
         logger.warning(

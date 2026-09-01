@@ -35,7 +35,10 @@ from chatter_raid_base import (
     DISPATCH_RAID_ONLY,
     DISPATCH_SUBGROUP_ONLY,
 )
-from chatter_memory import queue_memory
+from chatter_memory import (
+    queue_memory,
+    store_shared_group_experience,
+)
 from chatter_bg_prompts import (
     build_bg_match_start_prompt,
     build_bg_match_end_prompt,
@@ -111,63 +114,45 @@ def process_bg_match_end_event(
         'completed' if result else 'skipped')
     _mark_event(db, event_id, status)
 
-    # Memory: BG match result
-    if result:
-        try:
-            mem_chance = int(config.get(
-                'LLMChatter.Memory'
-                '.BGMatchGenerationChance', 25
-            ))
-            if random.random() * 100 < mem_chance:
-                won = extra_data.get('won', False)
-                bg_type_id = int(
-                    extra_data.get('bg_type_id', 0)
-                )
-                lore = BG_LORE.get(bg_type_id, {})
-                bg_name = lore.get(
-                    'name', 'a battleground'
-                )
-                group_id = int(
-                    extra_data.get('group_id', 0)
-                )
-                party_guids = get_subgroup_bots(
-                    extra_data
-                )
-                if party_guids and group_id:
-                    bot_guid = random.choice(
-                        party_guids
-                    )
-                    bot_data = (
-                        get_lightweight_bot_data(
-                            db, bot_guid
-                        )
-                    )
-                    if bot_data:
-                        queue_memory(
-                            config, group_id,
-                            bot_guid, 0,
-                            memory_type=(
-                                'bg_win' if won
-                                else 'bg_loss'
-                            ),
-                            event_context=(
-                                f"{'Won' if won else 'Lost'}"
-                                f" {bg_name}"
-                            ),
-                            bot_name=bot_data[
-                                'bot_name'],
-                            bot_class=bot_data.get(
-                                'class', ''),
-                            bot_race=bot_data.get(
-                                'race', ''),
-                            bot_gender=bot_data.get(
-                                'gender', ''),
-                        )
-        except Exception:
-            logger.error(
-                "bg_match memory failed",
-                exc_info=True,
+    # Deterministic shared BG experience.
+    #
+    # This is deliberately independent of whether an LLM
+    # reaction was generated successfully. The authoritative
+    # match-end event itself proves that these characters
+    # participated in the battleground together.
+    try:
+        won = bool(extra_data.get('won', False))
+        bg_type_id = int(
+            extra_data.get('bg_type_id', 0) or 0
+        )
+        lore = BG_LORE.get(bg_type_id, {})
+        bg_name = str(
+            lore.get('name')
+            or extra_data.get('bg_type')
+            or 'a battleground'
+        ).strip()
+        group_id = int(
+            extra_data.get('group_id', 0) or 0
+        )
+
+        if group_id:
+            store_shared_group_experience(
+                config,
+                group_id,
+                memory_type=(
+                    'bg_win' if won else 'bg_loss'
+                ),
+                factual_text=(
+                    f"{'Won' if won else 'Lost'} "
+                    f"{bg_name}"
+                ),
+                dedupe_minutes=30,
             )
+    except Exception:
+        logger.error(
+            "shared bg_match memory failed",
+            exc_info=True,
+        )
 
     return result
 

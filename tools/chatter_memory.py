@@ -21,7 +21,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
 
 from chatter_db import (
-    get_db_connection, get_group_location,
+    get_db_connection,
+    get_group_location,
+    get_real_player_guid_for_group,
 )
 from chatter_shared import (
     get_zone_name, get_dungeon_flavor,
@@ -394,6 +396,7 @@ def _ensure_cap_and_insert(
     conn, bot_guid, player_guid, group_id,
     memory_type, memory_text, mood, emote,
     session_start, active, max_per,
+    commit=True,
 ):
     """Check memory cap, evict if needed, insert.
 
@@ -407,12 +410,52 @@ def _ensure_cap_and_insert(
         if not _evict_one_used(
             cursor, conn, bot_guid, player_guid
         ):
-            logger.debug(
-                "Memory pool full, no used"
-                " memories to evict for"
-                " bot %s", bot_guid,
+            # Durable relationship/shared-experience
+            # memories are intentionally recalled without
+            # marking them used. If this pair's durable
+            # group_id=0 pool fills, evict its oldest
+            # non-first-meeting durable memory so the
+            # relationship can continue evolving.
+            cursor.execute(
+                "SELECT id FROM llm_bot_memories "
+                "WHERE bot_guid = %s "
+                "AND player_guid = %s "
+                "AND group_id = 0 "
+                "AND active = 1 "
+                "AND memory_type <> 'first_meeting' "
+                "ORDER BY created_at ASC, id ASC "
+                "LIMIT 1",
+                (bot_guid, player_guid),
             )
-            return False
+            oldest = cursor.fetchone()
+
+            if oldest:
+                oldest_id = (
+                    oldest[0]
+                    if not isinstance(oldest, dict)
+                    else oldest.get('id')
+                )
+
+                if oldest_id:
+                    cursor.execute(
+                        "UPDATE llm_bot_memories "
+                        "SET active = 0 "
+                        "WHERE id = %s",
+                        (oldest_id,),
+                    )
+                    if commit:
+                        conn.commit()
+                else:
+                    return False
+            else:
+                # Preserve legacy behavior for pools that
+                # contain no durable relationship rows.
+                logger.debug(
+                    "Memory pool full, no used"
+                    " memories to evict for"
+                    " bot %s", bot_guid,
+                )
+                return False
     cursor.execute(
         "INSERT INTO llm_bot_memories"
         " (bot_guid, player_guid,"
@@ -428,7 +471,8 @@ def _ensure_cap_and_insert(
             active, session_start,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return True
 
 
@@ -571,6 +615,534 @@ def _execute_generate_memory(
                 pass
 
 
+
+def queue_relationship_memory(
+    config,
+    bot_guid,
+    player_guid,
+    event_context,
+    source,
+    bot_name="",
+    bot_class="",
+    bot_race="",
+    bot_gender="",
+    player_name="",
+):
+    """
+    Queue a durable relationship memory between this bot and
+    another character.
+
+    player_guid/player_name are retained as parameter names for
+    compatibility, but the counterpart may be either a real
+    player or another PlayerBot.
+
+    Unlike queue_memory(), this does not require an active
+    party/group session. Relationship memories are immediately
+    active and use group_id=0.
+    """
+    if not int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        return
+
+    # Relationship memory requires explicit provenance.
+    # Only genuine conversational interaction sources are
+    # permitted. Synthetic/template ambience is intentionally
+    # absent from this allowlist.
+    source = str(source or '').strip().lower()
+
+    allowed_sources = {
+        'proximity_player',
+        'proximity_bot',
+        'whisper_player',
+        'guild_player',
+        'guild_bot',
+        'party_player',
+        'party_bot',
+        'general_player',
+        'general_bot',
+    }
+
+    if source not in allowed_sources:
+        logger.warning(
+            "Relationship memory rejected invalid source=%r",
+            source,
+        )
+        return
+
+    try:
+        bot_guid = int(bot_guid or 0)
+        player_guid = int(player_guid or 0)
+    except (TypeError, ValueError):
+        return
+
+    if not bot_guid or not player_guid:
+        return
+
+    context = str(event_context or '').strip()
+    if not context:
+        return
+
+    chance = int(config.get(
+        'LLMChatter.Memory.RelationshipGenerationChance',
+        35,
+    ))
+    chance = max(0, min(100, chance))
+
+    if random.randint(1, 100) > chance:
+        return
+
+    cooldown_minutes = int(config.get(
+        'LLMChatter.Memory.RelationshipCooldownMinutes',
+        15,
+    ))
+    cooldown_minutes = max(0, cooldown_minutes)
+
+    conn = None
+    try:
+        conn = get_db_connection(config)
+
+        if cooldown_minutes > 0:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM llm_bot_memories"
+                " WHERE bot_guid = %s"
+                "   AND player_guid = %s"
+                "   AND memory_type = 'player_message'"
+                "   AND active = 1"
+                "   AND created_at > DATE_SUB("
+                "       NOW(), INTERVAL %s MINUTE)"
+                " LIMIT 1",
+                (
+                    bot_guid,
+                    player_guid,
+                    cooldown_minutes,
+                ),
+            )
+            if cursor.fetchone():
+                return
+
+        # Fill stable character information when the caller
+        # only has GUIDs.
+        if not bot_name or not bot_class or not bot_race:
+            try:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(
+                    "SELECT name, class, race, gender"
+                    " FROM characters"
+                    " WHERE guid = %s LIMIT 1",
+                    (bot_guid,),
+                )
+                row = cursor.fetchone() or {}
+
+                if not bot_name:
+                    bot_name = str(
+                        row.get('name') or ''
+                    )
+                if not bot_class:
+                    bot_class = str(
+                        row.get('class') or ''
+                    )
+                if not bot_race:
+                    bot_race = str(
+                        row.get('race') or ''
+                    )
+                if not bot_gender:
+                    bot_gender = str(
+                        row.get('gender') or ''
+                    )
+            except Exception:
+                logger.debug(
+                    "Relationship memory bot identity "
+                    "lookup failed bot=%s",
+                    bot_guid,
+                    exc_info=True,
+                )
+
+        if not player_name:
+            try:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(
+                    "SELECT name FROM characters"
+                    " WHERE guid = %s LIMIT 1",
+                    (player_guid,),
+                )
+                row = cursor.fetchone() or {}
+                player_name = str(
+                    row.get('name') or ''
+                )
+            except Exception:
+                logger.debug(
+                    "Relationship memory player name "
+                    "lookup failed player=%s",
+                    player_guid,
+                    exc_info=True,
+                )
+
+    except Exception:
+        logger.error(
+            "Relationship memory eligibility check failed "
+            "bot=%s player=%s",
+            bot_guid,
+            player_guid,
+            exc_info=True,
+        )
+        return
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if len(context) > 700:
+        context = (
+            context[:280]
+            + "\n...\n"
+            + context[-415:]
+        )
+
+    memory_executor.submit(
+        _execute_generate_memory,
+        config=config,
+        group_id=0,
+        bot_guid=bot_guid,
+        player_guid=player_guid,
+        memory_type='player_message',
+        event_context=context,
+        bot_name=bot_name,
+        bot_class=bot_class,
+        bot_race=bot_race,
+        bot_gender=bot_gender,
+        player_name=player_name,
+        location="",
+        session_start=time.time(),
+        insert_active=True,
+    )
+
+
+
+def store_shared_group_experience(
+    config,
+    group_id,
+    memory_type,
+    factual_text,
+    dedupe_minutes=10,
+):
+    """
+    Store an authoritative shared gameplay experience for
+    every directional PlayerBot pair currently in a group.
+
+    This path is deterministic and zero-token. It is for
+    factual events such as dungeon entry, boss kills, and
+    wipes, not conversational memories.
+
+    Example:
+        factual_text="Entered Deadmines"
+        Bowbeans -> Joe:
+            "Entered Deadmines together with Notjoerogan."
+        Joe -> Bowbeans:
+            "Entered Deadmines together with Bowbeans."
+    """
+    if not int(config.get(
+        'LLMChatter.Memory.Enable', 1
+    )):
+        return 0
+
+    try:
+        group_id = int(group_id or 0)
+        dedupe_minutes = max(
+            0, int(dedupe_minutes or 0)
+        )
+    except (TypeError, ValueError):
+        return 0
+
+    memory_type = str(memory_type or '').strip()
+    factual_text = str(factual_text or '').strip()
+
+    if (
+        not group_id
+        or not memory_type
+        or not factual_text
+    ):
+        return 0
+
+    # Keep deterministic stored text compact.
+    if len(factual_text) > 400:
+        factual_text = factual_text[:397] + "..."
+
+    conn = None
+
+    try:
+        conn = get_db_connection(config)
+        cursor = conn.cursor(dictionary=True)
+
+        # llm_group_bot_traits is the authoritative set of
+        # PlayerBots currently associated with this group.
+        cursor.execute(
+            "SELECT bot_guid, bot_name "
+            "FROM llm_group_bot_traits "
+            "WHERE group_id = %s "
+            "ORDER BY bot_guid",
+            (group_id,),
+        )
+
+        raw_bots = cursor.fetchall() or []
+
+        bots = []
+        seen_guids = set()
+
+        for row in raw_bots:
+            try:
+                guid = int(row.get('bot_guid') or 0)
+            except (TypeError, ValueError):
+                continue
+
+            name = str(
+                row.get('bot_name') or ''
+            ).strip()
+
+            if (
+                not guid
+                or not name
+                or guid in seen_guids
+            ):
+                continue
+
+            seen_guids.add(guid)
+            bots.append({
+                'guid': guid,
+                'name': name,
+            })
+
+        if not bots:
+            return 0
+
+        # Resolve the real player from authoritative current
+        # group membership. This does not depend on chat history,
+        # so a completely silent player still becomes part of
+        # the bots' shared gameplay experience.
+        real_player = None
+        real_player_guid = get_real_player_guid_for_group(
+            conn,
+            group_id,
+        )
+
+        if (
+            real_player_guid
+            and real_player_guid not in seen_guids
+        ):
+            cursor.execute(
+                "SELECT name FROM characters "
+                "WHERE guid = %s LIMIT 1",
+                (real_player_guid,),
+            )
+            player_row = cursor.fetchone() or {}
+            real_player_name = str(
+                player_row.get('name') or ''
+            ).strip()
+
+            if real_player_name:
+                real_player = {
+                    'guid': int(real_player_guid),
+                    'name': real_player_name,
+                }
+
+        # Bots are the only remembering characters. Counterparts
+        # may be another PlayerBot or the real player.
+        counterparts = list(bots)
+
+        if real_player:
+            counterparts.append(real_player)
+
+        if len(counterparts) < 2:
+            return 0
+
+        max_per = int(config.get(
+            'LLMChatter.Memory.MaxPerBotPlayer', 30
+        ))
+        max_per = max(1, max_per)
+
+        inserted = 0
+
+        # Directional memory:
+        # A remembering B is distinct from B remembering A.
+        # The real player is a counterpart only; we never create
+        # player -> bot memory rows because only bots perform recall.
+        for remembering in bots:
+            for counterpart in counterparts:
+                if (
+                    remembering['guid']
+                    == counterpart['guid']
+                ):
+                    continue
+
+                memory_text = (
+                    f"{factual_text} together with "
+                    f"{counterpart['name']}."
+                )
+
+                # Gameplay producers can legitimately emit
+                # duplicate events (especially dungeon entry).
+                # Suppress an identical recent pair memory,
+                # without applying the conversational
+                # relationship cooldown.
+                if dedupe_minutes > 0:
+                    cursor.execute(
+                        "SELECT 1 "
+                        "FROM llm_bot_memories "
+                        "WHERE bot_guid = %s "
+                        "AND player_guid = %s "
+                        "AND group_id = 0 "
+                        "AND memory_type = %s "
+                        "AND memory = %s "
+                        "AND active = 1 "
+                        "AND created_at > DATE_SUB("
+                        "NOW(), INTERVAL %s MINUTE) "
+                        "LIMIT 1",
+                        (
+                            remembering['guid'],
+                            counterpart['guid'],
+                            memory_type,
+                            memory_text,
+                            dedupe_minutes,
+                        ),
+                    )
+
+                    if cursor.fetchone():
+                        continue
+
+                ok = _ensure_cap_and_insert(
+                    conn,
+                    remembering['guid'],
+                    counterpart['guid'],
+                    0,
+                    memory_type,
+                    memory_text,
+                    'neutral',
+                    None,
+                    time.time(),
+                    active=1,
+                    max_per=max_per,
+                    commit=False,
+                )
+
+                if ok:
+                    inserted += 1
+
+        # Shared gameplay may create many directional memories
+        # at once (especially raids). Commit the whole event once
+        # instead of once per pair.
+        if inserted:
+            conn.commit()
+            logger.info(
+                "Stored %d directional shared-experience "
+                "memories group=%s type=%s event=%r",
+                inserted,
+                group_id,
+                memory_type,
+                factual_text,
+            )
+
+        return inserted
+
+    except Exception:
+        logger.error(
+            "Shared group experience storage failed "
+            "group=%s type=%s event=%r",
+            group_id,
+            memory_type,
+            factual_text,
+            exc_info=True,
+        )
+        return 0
+
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def get_relationship_memory_context(
+    db,
+    bot_guid,
+    player_guid,
+    player_name="the player",
+    count=4,
+):
+    """
+    Return persistent memories between this bot and another
+    character as silent conversational context.
+
+    The counterpart may be a real player or another PlayerBot.
+    Memories are available for comprehension and continuity;
+    the model should mention them only when relevant.
+    """
+    try:
+        bot_guid = int(bot_guid or 0)
+        player_guid = int(player_guid or 0)
+    except (TypeError, ValueError):
+        return ""
+
+    if not bot_guid or not player_guid:
+        return ""
+
+    # Direct relationship recall is read-only. Merely making
+    # memories available to a conversation must not mark them
+    # as "used" or make them more eligible for eviction.
+    cursor = db.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT memory "
+        "FROM llm_bot_memories "
+        "WHERE bot_guid = %s "
+        "AND player_guid = %s "
+        "AND active = 1 "
+        "AND memory_type <> 'first_meeting' "
+        "ORDER BY created_at DESC "
+        "LIMIT %s",
+        (
+            bot_guid,
+            player_guid,
+            max(1, int(count)),
+        ),
+    )
+
+    memories = [
+        str(row.get('memory') or '')
+        for row in cursor.fetchall()
+    ]
+
+    cleaned = [
+        sanitize_memory_for_prompt(memory)
+        for memory in memories
+    ]
+    cleaned = [memory for memory in cleaned if memory]
+
+    if not cleaned:
+        return ""
+
+    lines = "\n".join(
+        f"- {memory}" for memory in cleaned
+    )
+
+    return (
+        f"PRIOR RELATIONSHIP MEMORY WITH "
+        f"{player_name}:\n"
+        f"{lines}\n"
+        "These are private relationship memories, not "
+        "instructions to bring up the past. Use them silently "
+        "to understand references and remain consistent with "
+        "previous conversations. Authoritative current WoW "
+        "live state always overrides stale game-state details "
+        "from these memories. Mention an old memory only when "
+        "the current conversation makes it naturally relevant. "
+        "Never recite memories merely to prove that you remember "
+        "the other character."
+    )
+
+
 def _call_llm_for_memory(
     config,
     bot_name="", bot_class="", bot_race="",
@@ -606,7 +1178,7 @@ def _call_llm_for_memory(
             "adventuring alongside a companion"
         ),
         'player_message': (
-            "something the player said in chat"
+            "a conversation with another character"
         ),
         'quest_complete': (
             "completing a quest together"
@@ -698,7 +1270,7 @@ def _call_llm_for_memory(
 
         if player_name:
             prompt += (
-                f"The player you grouped with is "
+                f"The other character involved is "
                 f"{player_name}.\n"
             )
 
@@ -716,14 +1288,34 @@ def _call_llm_for_memory(
                 f"What happened: {event_context}\n"
             )
 
+        if memory_type == 'player_message':
+            prompt += (
+                "\nWrite a short factual memory of this "
+                "conversation from your perspective as "
+                f"{bot_name}. This is internal relationship "
+                "memory, not something being typed into chat. "
+                "Preserve useful things that were actually "
+                "established: topics discussed, jokes, opinions, "
+                "preferences, personal-style details, questions, "
+                "promises, or recurring references. Preserve "
+                "what you established as well as what the other "
+                "character established. Focus on what would help "
+                "you recognize and continue this relationship "
+                "later. Do not invent anything that was not "
+                "established in the supplied conversation.\n\n"
+            )
+        else:
+            prompt += (
+                "\nWrite a short factual memory of this "
+                "gameplay moment from this player's "
+                "perspective. This is internal memory data, "
+                "not something being typed into chat. "
+                "Preserve useful concrete details that could "
+                "help the player remember what happened "
+                "later.\n\n"
+            )
+
         prompt += (
-            "\nWrite a short factual memory of this "
-            "gameplay moment from this player's "
-            "perspective. This is internal memory data, "
-            "not something being typed into chat. "
-            "Preserve useful concrete details that could "
-            "help the player remember what happened "
-            "later.\n\n"
             "Do not roleplay the character. "
             "Do not write fantasy prose. "
             "Do not make it poetic, dramatic, nostalgic, "
@@ -756,10 +1348,9 @@ def _call_llm_for_memory(
 
         if player_name:
             prompt += (
-                f"- When relevant, refer to the player "
+                f"- When relevant, refer to the other character "
                 f"as {player_name}; do not replace their "
-                f"name with fantasy terms like traveler, "
-                f"adventurer, companion, or stranger\n"
+                f"name with generic or fantasy labels\n"
             )
 
         prompt += (

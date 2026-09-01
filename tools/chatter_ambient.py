@@ -2737,6 +2737,13 @@ def process_statement(
             length_hint=rng_length,
         )
 
+    # Outdoor autonomous statements need the same public-channel
+    # restraint layer used by outdoor conversations.
+    if not is_capital and mode != 'roleplay':
+        prompt += _outdoor_general_guard(
+            [bot], zone_id, msg_type
+        )
+
     # Call LLM
     if speaker_talent:
         zone_meta['speaker_talent'] = (
@@ -2810,6 +2817,20 @@ def _outdoor_general_guard(bots, zone_id, msg_type):
         "",
         "OUTDOOR GENERAL CHAT RULES:",
         f"- Current authoritative zone: {zone_name}.",
+        "- General is a public zone broadcast, not a personal gameplay log.",
+        "- Every message should have a plausible social reason for other "
+        "players in the zone to hear it: ask for help, ask a practical "
+        "question, offer help or an item, seek a group, coordinate content, "
+        "trade, or make a remark that genuinely invites or contributes to "
+        "conversation.",
+        "- Do NOT broadcast routine personal progress such as ordinary kills, "
+        "pulls, quest counters, travel, looting, bag management, gathering, "
+        "or simply saying what you are currently doing.",
+        "- If the source event is mundane, do not narrate the event merely "
+        "because it happened. Use it only when it supports a believable "
+        "social purpose.",
+        "- Most messages should end normally. Do not habitually append lol, "
+        "lmao, haha, ugh, smh, bruh, or similar filler.",
         "- Stay in the current zone context.",
         "- NEVER invent boats, zeppelins, portals, cities, "
         "travel destinations, NPC locations, or local events.",

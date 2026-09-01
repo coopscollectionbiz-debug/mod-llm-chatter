@@ -463,9 +463,13 @@ def _shared_prompt_lines(
             "item, NPC, number, destination, profession, "
             "equipment item, or other specific game-state "
             "fact.",
-            "- If a requested fact is absent from that "
-            "guildmate's live state, say you don't know or "
-            "aren't sure instead of guessing.",
+            "- The live-state restriction applies only to factual "
+            "WoW game-state claims. Harmless social details, opinions, "
+            "jokes, preferences, real-world topics, and conversational "
+            "personality may be improvised naturally when consistent "
+            "with established conversation.",
+            "- Do not make a guildmate say they don't know merely because "
+            "a harmless social or real-world answer is absent from live state.",
             "- Supplied [[quest:...]] and [[item:...]] "
             "tokens are exact opaque strings. Copy one "
             "exactly when relevant or omit it. Never create "
@@ -486,8 +490,11 @@ def _shared_prompt_lines(
         "memory override authoritative current game state.",
         "Preserve unresolved questions and promises "
         "naturally; do not recite the memory.",
-        "Do not invent facts that are absent from both "
-        "the authoritative live state and conversation.",
+        "Do not invent specific WoW game-state facts that are absent "
+        "from both authoritative live state and conversation.",
+        "For harmless social conversation, opinions, jokes, preferences, "
+        "and ordinary real-world topics, improvise naturally while staying "
+        "consistent with things each guildmate has already said.",
         "Guild Chat is remote chat. Never imply the speakers "
         "can physically see, touch, or stand beside one "
         "another unless the context explicitly says they are "
@@ -519,7 +526,8 @@ def _shared_prompt_lines(
             "lfg, inv, sec, omw, etc.",
             "Casual internet language like lol, lmao, tbh, "
             "ngl, bruh, or rip is fine occasionally. Do not "
-            "force memes or slang into every reply.",
+            "force memes or slang into every reply, and avoid "
+            "repeating the same filler across nearby messages.",
             "Lowercase, fragments, missing punctuation, "
             "occasional typos, one-word replies, and "
             "incomplete thoughts are fine.",
@@ -820,6 +828,7 @@ def _generate_single_reply(
     name_requested: bool,
     question_requested: bool,
     metadata: Dict,
+    player_guid: int,
 ) -> List[Dict]:
     prompt = _build_single_prompt(
         participant,
@@ -833,6 +842,35 @@ def _generate_single_reply(
         question_requested,
         config,
     )
+
+    # Persistent relationship memory belongs only to this
+    # guildmate's relationship with this specific player.
+    bot_guid = _safe_int(
+        participant.get('guid')
+    )
+
+    if bot_guid and player_guid:
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_context = (
+            get_relationship_memory_context(
+                db,
+                bot_guid,
+                player_guid,
+                player_name,
+                count=4,
+            )
+        )
+
+        if relationship_context:
+            prompt = (
+                relationship_context
+                + "\n\n"
+                + prompt
+            )
+
     response = call_llm(
         client,
         prompt,
@@ -906,6 +944,7 @@ def _generate_multi_reply(
     name_requested: bool,
     question_requested: bool,
     metadata: Dict,
+    player_guid: int,
 ) -> List[Dict]:
     prompt, reference_plans, message_count = (
         _build_multi_prompt(
@@ -926,6 +965,93 @@ def _generate_multi_reply(
         participant['name']
         for participant in participants
     ]
+
+    # Each selected guildmate receives its own private
+    # relationship memories with the real player and with
+    # other PlayerBots participating in this conversation.
+    if player_guid:
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        memory_blocks = []
+
+        for participant in participants:
+            participant_guid = _safe_int(
+                participant.get('guid')
+            )
+            if not participant_guid:
+                continue
+
+            participant_memories = []
+
+            # This guildmate's relationship with the real player.
+            relationship_context = (
+                get_relationship_memory_context(
+                    db,
+                    participant_guid,
+                    player_guid,
+                    player_name,
+                    count=3,
+                )
+            )
+
+            if relationship_context:
+                participant_memories.append(
+                    relationship_context
+                )
+
+            # This guildmate's directional memories of the other
+            # PlayerBots participating in this response.
+            for other in participants:
+                other_guid = _safe_int(
+                    other.get('guid')
+                )
+
+                if (
+                    not other_guid
+                    or other_guid == participant_guid
+                ):
+                    continue
+
+                other_name = str(
+                    other.get('name') or 'the other guildmate'
+                )
+
+                bot_memory = (
+                    get_relationship_memory_context(
+                        db,
+                        participant_guid,
+                        other_guid,
+                        other_name,
+                        count=2,
+                    )
+                )
+
+                if bot_memory:
+                    participant_memories.append(
+                        bot_memory
+                    )
+
+            if participant_memories:
+                memory_blocks.append(
+                    f"PRIVATE MEMORY FOR "
+                    f"{participant['name']} ONLY:\n"
+                    + "\n".join(participant_memories)
+                )
+
+        if memory_blocks:
+            prompt = (
+                "\n\n".join(memory_blocks)
+                + "\n\n"
+                + "MEMORY ISOLATION RULE: Each speaker may use "
+                + "ONLY the private memories labeled for that "
+                + "speaker. Never transfer, reveal, or infer another "
+                + "bot's private memories as if this speaker knew "
+                + "them.\n\n"
+                + prompt
+            )
+
     chatter_mode = get_chatter_mode(config)
     is_rp = (chatter_mode == 'roleplay')
     base_tokens = _safe_int(config.get(
@@ -1379,6 +1505,7 @@ def process_guild_player_message_event(
             name_requested,
             question_requested,
             metadata,
+            player_guid,
         )
     else:
         messages = _generate_multi_reply(
@@ -1397,6 +1524,7 @@ def process_guild_player_message_event(
             name_requested,
             question_requested,
             metadata,
+            player_guid,
         )
 
     if not messages and len(responders) > 0:
@@ -1417,6 +1545,7 @@ def process_guild_player_message_event(
             name_requested,
             question_requested,
             metadata,
+            player_guid,
         )
 
     if (
@@ -1457,13 +1586,18 @@ def process_guild_player_message_event(
         config,
     )
     inserted = 0
+    successful_messages = []
+
     for sequence, message in enumerate(messages):
         name = message.get('name') or ''
         text = message.get('message') or ''
         guid = guid_by_name.get(name)
+
         if not guid or not text:
             continue
+
         cumulative_delay = reply_delays[sequence]
+
         insert_chat_message(
             db,
             bot_guid=guid,
@@ -1476,7 +1610,120 @@ def process_guild_player_message_event(
             player_guid=player_guid,
             owner_subsystem='guild',
         )
+
         inserted += 1
+        successful_messages.append({
+            'guid': guid,
+            'name': name,
+            'message': text,
+        })
+
+        # This guildmate may form a durable relationship memory
+        # with the real player from the exchange.
+        if player_guid:
+            from chatter_memory import (
+                queue_relationship_memory,
+            )
+
+            queue_relationship_memory(
+                config,
+                guid,
+                player_guid,
+                event_context=(
+                    f"{player_name}: {player_message[:250]}\n"
+                    f"{name}: {text[:250]}"
+                ),
+                source='guild_player',
+                bot_name=str(name),
+                player_name=str(player_name),
+            )
+
+    # Guildmates that actually spoke together may independently
+    # form directional memories of one another.
+    #
+    # Keep each memory strictly pair-focused so a third
+    # guildmate's line cannot leak into A -> B memory.
+    if len(successful_messages) >= 2:
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        seen_pairs = set()
+
+        for source in successful_messages:
+            source_guid = _safe_int(
+                source.get('guid')
+            )
+
+            if not source_guid:
+                continue
+
+            for target in successful_messages:
+                target_guid = _safe_int(
+                    target.get('guid')
+                )
+
+                if (
+                    not target_guid
+                    or target_guid == source_guid
+                ):
+                    continue
+
+                pair = (
+                    source_guid,
+                    target_guid,
+                )
+
+                if pair in seen_pairs:
+                    continue
+
+                seen_pairs.add(pair)
+
+                pair_lines = [
+                    f"{player_name}: "
+                    f"{player_message[:180]}"
+                ]
+
+                for entry in successful_messages:
+                    entry_guid = _safe_int(
+                        entry.get('guid')
+                    )
+
+                    if entry_guid not in (
+                        source_guid,
+                        target_guid,
+                    ):
+                        continue
+
+                    entry_message = str(
+                        entry.get('message') or ''
+                    )
+
+                    if not entry_message:
+                        continue
+
+                    pair_lines.append(
+                        f"{entry.get('name') or ''}: "
+                        f"{entry_message[:180]}"
+                    )
+
+                pair_context = "\n".join(
+                    pair_lines[-5:]
+                )
+
+                queue_relationship_memory(
+                    config,
+                    source_guid,
+                    target_guid,
+                    event_context=pair_context,
+                    source='guild_bot',
+                    bot_name=str(
+                        source.get('name') or ''
+                    ),
+                    player_name=str(
+                        target.get('name') or ''
+                    ),
+                )
 
     if not inserted:
         _mark_event(db, event_id, 'skipped')

@@ -2908,6 +2908,10 @@ def build_anti_repetition_context(
         "said in this area. You MUST NOT repeat or "
         "closely paraphrase ANY of them. Say something "
         "completely different.\n"
+        "STYLE REPETITION: Do not reuse the same casual filler or "
+        "reaction marker such as lol, lmao, haha, ugh, smh, or bruh "
+        "when it appears in recent messages. Most messages should not "
+        "need one of these at all.\n"
         f"{lines}"
         f"{lang_note}"
     )

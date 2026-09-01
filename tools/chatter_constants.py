@@ -2180,7 +2180,7 @@ CREATIVE_TWISTS = [
     "Use onomatopoeia",
     "Stretch a woooord for emphasis",
     "Use ALL CAPS for one word only",
-    "Add a random lol or haha mid-sentence",
+    "Use a clipped sentence fragment for emphasis",
     "Use excessive punctuation for one thing!!!",
     "Be overly casual with spelling",
     "Use gaming slang naturally",

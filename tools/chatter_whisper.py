@@ -247,10 +247,19 @@ AUTHORITATIVE LIVE CHARACTER STATE:
 The live state above is factual. If the player asks about
 your guild, level, location, activity, quests, equipment,
 money, professions, inventory, travel, or similar current
-facts, use that state and do not invent conflicting facts.
+WoW game-state facts, use that state and do not invent
+conflicting facts.
 
-If a fact is not available, respond naturally without
-inventing precise numbers or specific possessions.
+These grounding restrictions apply to factual WoW game-state
+claims, not ordinary social conversation. Harmless opinions,
+jokes, preferences, real-world topics, and conversational
+personality may be improvised naturally when they do not
+contradict the conversation.
+
+If a WoW game-state fact is unavailable, respond naturally
+without inventing precise numbers or specific possessions.
+Do not fall back to "idk" merely because a harmless social
+answer is not present in live state.
 
 RECENT PRIVATE CONVERSATION:
 {history_text}
@@ -263,7 +272,13 @@ Rules:
 - Usually write 1 short sentence; occasionally 2.
 - Keep it natural for WoW whisper chat.
 - Continue the existing conversation when there is one.
+- Treat recent conversation as authoritative for what you and
+  the player have already said; do not casually contradict it.
+- Recognize and build on jokes, puns, references, corrections,
+  and explanations introduced by the player.
 - You can joke, disagree, ask a question, or be casual.
+- Very short replies are fine when natural, but do not
+  repeatedly default to lol, idk, or similar filler.
 - Do not mention being an AI, bot, prompt, simulation,
   database, JSON, or language model.
 - Do not claim to perform game actions that were not
@@ -355,6 +370,27 @@ def process_player_bot_whisper_event(
             history,
         )
 
+        from chatter_memory import (
+            get_relationship_memory_context,
+        )
+
+        relationship_context = (
+            get_relationship_memory_context(
+                db,
+                bot_guid,
+                player_guid,
+                player_name,
+                count=4,
+            )
+        )
+
+        if relationship_context:
+            prompt = (
+                relationship_context
+                + "\n\n"
+                + prompt
+            )
+
         response = call_llm(
             client,
             prompt,
@@ -420,6 +456,49 @@ def process_player_bot_whisper_event(
         )
 
         mark_event(db, event_id, 'completed')
+
+        # Build a compact multi-turn transcript for durable
+        # relationship memory. The shared memory helper applies
+        # its own generation chance and cooldown.
+        memory_lines = []
+
+        for turn in history[-4:]:
+            prior_player = str(
+                turn.get('player') or ''
+            ).strip()
+            prior_bot = str(
+                turn.get('bot') or ''
+            ).strip()
+
+            if prior_player:
+                memory_lines.append(
+                    f"{player_name}: {prior_player[:180]}"
+                )
+            if prior_bot:
+                memory_lines.append(
+                    f"{bot_name}: {prior_bot[:180]}"
+                )
+
+        memory_lines.append(
+            f"{player_name}: {player_message[:220]}"
+        )
+        memory_lines.append(
+            f"{bot_name}: {message[:220]}"
+        )
+
+        from chatter_memory import (
+            queue_relationship_memory,
+        )
+
+        queue_relationship_memory(
+            config,
+            bot_guid,
+            player_guid,
+            event_context="\n".join(memory_lines),
+            source='whisper_player',
+            bot_name=bot_name,
+            player_name=player_name,
+        )
 
         logger.info(
             "bot_player_whisper player=%s bot=%s "
