@@ -6,6 +6,7 @@ This module owns:
 - pre-generated farewell storage
 """
 
+import json
 import logging
 import random
 import threading
