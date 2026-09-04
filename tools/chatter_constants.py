@@ -1606,7 +1606,7 @@ MSG_TYPE_SPELL = 100         # 5% chance (96-100)
 # Excluded: lore, faction history, world rumors (RP-only).
 # Also excluded: items, quests, quest rewards, spells, trade
 # (handled by dedicated message-type paths).
-AMBIENT_CHAT_TOPICS = [
+_AMBIENT_CHAT_TOPICS_LEGACY = [
     # Gameplay / What I'm doing
     'mentioning what they are doing right now',
     'wondering what to do next',
@@ -1688,9 +1688,60 @@ AMBIENT_CHAT_TOPICS = [
     'asking a simple question',
 ]
 
+
+# Topics for normal (out-of-character) mode.
+#
+# These are SOCIAL REASONS to type in General, not a checklist of
+# character activities to narrate. A generated line should feel like
+# something a human player actually bothered pressing Enter to say.
+#
+# Items, quests, quest rewards, spells, and trade also have dedicated
+# message-type paths, so this pool should not become a personal activity
+# journal for those systems.
+AMBIENT_CHAT_TOPICS = [
+    # Practical public-channel reasons
+    'asking the zone a practical question they actually want answered',
+    'asking for directions, a location, or how to get somewhere',
+    'asking whether anyone knows how a game mechanic or system works',
+    'asking for a quick recommendation or opinion from other players',
+    'asking whether other players have run into the same problem',
+    'warning other players about something useful or annoying',
+    'correcting or questioning something someone commonly says about the game',
+
+    # Group / social reasons
+    'trying to find other players for something specific',
+    'asking whether anyone nearby wants to team up',
+    'looking for a guild or asking what guilds are active',
+    'offering useful help without narrating their own progress',
+    'making a brief public request that makes sense in General chat',
+    'responding to the sort of question strangers commonly answer in zone chat',
+
+    # Opinions / disagreement
+    'giving a casual opinion about a class, spec, role, dungeon, or game system',
+    'disagreeing mildly with a common player opinion',
+    'complaining about an actually annoying part of the game',
+    'asking why players do something a certain way',
+    'making a quick comparison between two ways of playing',
+    'being pretty sure about something but not completely certain',
+
+    # Server / player culture
+    'commenting on something other players on the server are doing',
+    'asking about server habits, terminology, guilds, groups, or player culture',
+    'making a small joke or sarcastic remark that fits the current chat',
+    'saying something mundane or forgettable that a real player might type',
+    'briefly admitting a mistake, confusion, or wrong-chat moment',
+    'starting harmless small talk because other people are around',
+
+    # Game-adjacent / real-life conversation
+    'bringing up another game, show, movie, sport, technology, food, work, or everyday life',
+    'asking the channel a casual real-life or entertainment question',
+    'making an offhand comment about something outside WoW',
+    'continuing or starting ordinary nerdy internet conversation',
+]
+
 # Topics for roleplay mode — all normal topics plus in-character
 # lore, world flavor, faith, culture, and narrative entries.
-AMBIENT_CHAT_TOPICS_RP = AMBIENT_CHAT_TOPICS + [
+AMBIENT_CHAT_TOPICS_RP = _AMBIENT_CHAT_TOPICS_LEGACY + [
     # Lore / World
     'mentioning a rumor or piece of lore',
     'wondering about the history of this place',
@@ -3498,105 +3549,66 @@ REACTION_TONES = {
 # optional "topic idea" nudge.
 # =============================================================================
 GUILD_CHAT_TOPICS = [
-    # --- general gameplay ---
-    "what everyone is working on right now",
-    "asking if anyone needs help with something",
-    "complaining about a quest",
-    "a quest mob or item that refuses to drop",
-    "asking where something is",
-    "being lost or going the wrong way",
-    "leveling progress",
-    "an alt you're leveling",
-    "what zone people are questing in",
-    "whether a quest is worth doing",
-    "something annoying that just happened",
-    "something unexpectedly lucky that just happened",
+    # --- practical guild reasons ---
+    "asking guildmates a practical question they might actually answer",
+    "asking if anyone wants to run something together",
+    "asking for help, advice, directions, or a recommendation",
+    "asking whether anyone has a profession or item you need",
+    "offering useful help to another guildmate",
+    "checking whether anyone is doing a particular dungeon, raid, battleground, or activity",
+    "asking what people think about a class, spec, addon, item, dungeon, or game system",
 
-    # --- groups and dungeons ---
-    "asking if anyone wants to run a dungeon",
-    "looking for a tank or healer",
-    "a dungeon run that went badly",
-    "a dungeon run that went surprisingly well",
-    "waiting for someone to get to the dungeon",
-    "someone pulling too many mobs",
-    "a recent wipe",
-    "whether anyone needs a particular dungeon",
-    "asking if anyone has a group going",
-    "complaining about a long corpse run",
+    # --- WoW opinions and player culture ---
+    "a casual opinion about WoW that someone else might agree or disagree with",
+    "mild disagreement about a class, spec, dungeon, addon, or way of playing",
+    "complaining about an actually annoying part of the game",
+    "server gossip, guild gossip, or something other players have been doing",
+    "a strange group, dungeon, raid, battleground, or player interaction",
+    "an addon, UI choice, keybind, setting, or quality-of-life preference",
+    "alts, professions, gold, auction house prices, gearing, or future plans",
+    "asking why players commonly do something a certain way",
+    "comparing two ways of playing or two pieces of content",
 
-    # --- gear and loot ---
-    "a piece of gear that finally dropped",
-    "bad loot luck",
-    "good loot luck",
-    "whether an item is actually an upgrade",
-    "asking what dropped for someone",
-    "bags being completely full",
-    "needing to repair",
-    "saving gold for something expensive",
-    "being broke after buying something",
-    "an item that seems ridiculously overpriced",
+    # --- other games / entertainment / current interests ---
+    "another video game people in the guild are playing or waiting for",
+    "a current or upcoming game people have opinions about",
+    "something about GTA, Elder Scrolls, Call of Duty, Minecraft, or another game",
+    "a movie, television show, anime, book, streamer, YouTube video, or podcast",
+    "a trailer, announcement, release, update, or piece of entertainment news",
+    "sports, esports, a team, a player, or a recent game",
+    "technology, computers, phones, hardware, AI, or something online",
+    "internet culture, memes, social media, or something weird seen online",
 
-    # --- classes and characters ---
-    "whether a class or spec is fun",
-    "complaining about your class",
-    "being happy with your class",
-    "trying a different spec",
-    "asking how someone's character is going",
-    "a spell or ability you just got",
-    "something another class can do that you wish you could",
-    "deciding what alt to play next",
+    # --- ordinary real-life guild chatter ---
+    "food, dinner, snacks, coffee, or what somebody is eating",
+    "work, school, a commute, or being done with the day",
+    "weekend plans or something somebody is doing later",
+    "being tired, bored, distracted, busy, or unable to focus",
+    "weather or ordinary life outside the game when someone actually has a reason to mention it",
+    "asking the guild a random everyday question",
+    "mentioning a harmless preference or unpopular opinion",
+    "talking about something somebody bought, wants, watched, played, or tried",
 
-    # --- professions and economy ---
-    "asking if anyone has a profession you need",
-    "offering to craft something for a guildmate",
-    "asking for a profession material",
-    "the price of something on the auction house",
-    "trying to make some gold",
-    "being short on a crafting material",
-    "leveling a profession",
-    "something unexpectedly expensive on the auction house",
+    # --- persistent-room social behavior ---
+    "continuing something guildmates were already talking about",
+    "reacting to a guildmate's earlier opinion",
+    "following up on something a guildmate mentioned before",
+    "remembering an earlier joke, disagreement, plan, or shared experience",
+    "lightly teasing a guildmate about something they actually said or did",
+    "asking a guildmate how something they previously mentioned turned out",
+    "picking up an unfinished conversation without formally announcing the callback",
 
-    # --- PvP ---
-    "asking if anyone wants to queue for PvP",
-    "a battleground that just went badly",
-    "a battleground that just went well",
-    "complaining about getting repeatedly killed",
-    "an annoying enemy player",
-    "a close PvP fight",
-    "whether anyone else is doing battlegrounds",
-
-    # --- normal guild chatter ---
-    "saying hello after being quiet for a while",
-    "asking what everyone is up to",
-    "someone going AFK for a minute",
-    "someone getting food or a drink",
-    "being tired",
-    "playing way too late",
-    "having nothing useful to say",
-    "reacting to something another guildmate said",
-    "lightly teasing a guildmate",
-    "being bored",
-    "deciding what to do next",
-    "waiting on something",
-    "having terrible luck today",
-    "having unusually good luck today",
-    "a minor mistake you just made",
-    "realizing you forgot to do something",
-    "having to clear bag space again",
-    "wondering why you're still playing instead of sleeping",
-
-    # --- WoW/player talk ---
-    "an addon you use or need",
-    "changing your UI",
-    "keybinds or controls",
-    "lag or a connection hiccup",
-    "graphics or performance",
-    "something confusing about the game",
-    "something you remembered from another character",
-    "asking a basic game question",
-    "answering a basic game question",
-    "something in the game that makes no sense",
+    # --- mundane human chatter ---
+    "a dumb question that does not need to become a big conversation",
+    "a minor complaint",
+    "a small misunderstanding or correction",
+    "a random opinion nobody asked for",
+    "saying something brief and forgettable because guild chat is active",
+    "starting harmless small talk",
+    "a short reaction that might only get one reply",
+    "something ordinary that a real guildmate might type without trying to be interesting",
 ]
+
 GUILD_CHAT_TOPICS_RP = [
     "the dangers of the road you're traveling",
     "a rumor overheard in the last town",

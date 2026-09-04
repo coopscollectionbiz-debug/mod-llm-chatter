@@ -5,6 +5,11 @@ import threading
 import time
 from typing import Any, Optional
 
+from chatter_current_topics import (
+    get_current_topic_context,
+    has_vague_current_topic_reference,
+)
+
 from chatter_constants import (
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_GOOGLE_MODEL,
@@ -314,6 +319,44 @@ def call_llm(
     t0 = time.monotonic()
     result = None
     sys_msg, user_msg = _split_prompt(prompt)
+    current_context = ""
+
+    # Fresh real-world context is Normal-mode generation knowledge,
+    # never an RP feature. Keep it out of internal analysis/memory
+    # calls so it cannot contaminate summaries, traits, or classifiers.
+    #
+    # Do not exclude ordinary conversation merely because its label
+    # says it also has relationship memory (for example,
+    # group_idle_memory or group_bot_question_memory). The actual
+    # internal memory-writing call has the exact label
+    # 'memory_generation'.
+    internal_label_tokens = (
+        'analy',
+        'trait',
+        'identity',
+        'summar',
+        'classif',
+        'pre-cache',
+        'precache',
+    )
+    normalized_label = str(label or '').lower()
+    is_internal_generation = (
+        normalized_label == 'memory_generation'
+        or any(
+            token in normalized_label
+            for token in internal_label_tokens
+        )
+    )
+
+    if not is_internal_generation:
+        current_context = get_current_topic_context(config)
+
+        if current_context:
+            user_msg = (
+                f"{user_msg.rstrip()}\n"
+                f"{current_context}"
+            )
+
     sent_user_msg = user_msg  # tracks actual payload
     try:
         if provider == 'ollama':
@@ -382,6 +425,19 @@ def call_llm(
         )
         result = None
     finally:
+        if (
+            current_context
+            and result
+            and has_vague_current_topic_reference(result)
+        ):
+            logger.warning(
+                "[CURRENT-TOPIC] rejected vague RSS-backed "
+                "generation label=%s result=%r",
+                label,
+                str(result)[:240],
+            )
+            result = None
+
         duration_ms = int(
             (time.monotonic() - t0) * 1000
         )

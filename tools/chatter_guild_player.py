@@ -30,6 +30,8 @@ from chatter_shared import (
     build_conversation_json_repair_prompt,
     calculate_dynamic_delay,
     find_addressed_bot,
+    find_player_message_state_matches,
+    player_premise_rule,
     parse_conversation_response,
     parse_extra_data,
     select_conversation_message_count,
@@ -401,12 +403,21 @@ def _shared_prompt_lines(
         ]
     else:
         lines = [
-            "Write natural World of Warcraft Guild Chat "
-            "between real players typing while they play.",
+            "Write natural Guild Chat between human players "
+            "who happen to be playing World of Warcraft.",
             f"The guild is \"{guild_name}\".",
             "The speakers are players controlling their "
             "characters, not fantasy characters roleplaying "
             "in Azeroth.",
+            "Guild Chat is a persistent social room, not a "
+            "gameplay-status feed. These people may know one "
+            "another from earlier conversations and shared "
+            "experiences.",
+            "WoW is one normal subject, but other games, "
+            "current entertainment, sports, technology, "
+            "internet culture, food, work, school, hobbies, "
+            "plans, and ordinary life are equally valid when "
+            "the conversation naturally goes there.",
         ]
 
     for participant in participants:
@@ -447,22 +458,19 @@ def _shared_prompt_lines(
         lines.extend([
             "",
             "LIVE STATE RULES:",
-            "- The authoritative live bot states above "
-            "override session memory, chat history, and "
-            "previous bot messages for specific factual "
-            "claims.",
-            "- Each guildmate may use ONLY the live state "
-            "listed under their own name for facts about "
-            "themselves.",
-            "- Use live state for facts about level, quests, "
-            "objectives, counts, inventory, equipment, "
-            "professions, money, location, and current "
-            "activity.",
-            "- Never borrow another guildmate's state.",
-            "- Never invent a quest name, objective, mob, "
-            "item, NPC, number, destination, profession, "
-            "equipment item, or other specific game-state "
-            "fact.",
+            "- Authoritative live bot state overrides session memory or "
+            "chat history only when they conflict about CURRENT "
+            "observable/mechanical state.",
+            "- Each guildmate must use only their OWN live state for current "
+            "level, exact quest progress/counts, inventory, equipment, money, "
+            "current location/activity, and mechanical capability.",
+            "- Never borrow another guildmate's current state.",
+            "- General Wrath-era WoW knowledge is allowed even when absent "
+            "from live state: quests, mobs, NPCs, zones, dungeons, items, "
+            "professions, class knowledge, leveling, and mechanics.",
+            "- Plausible level/class-appropriate personal history, profession "
+            "history/plans, and future goals may be improvised and kept "
+            "consistent. Do not present them as unsupported CURRENT state.",
             "- The live-state restriction applies only to factual "
             "WoW game-state claims. Harmless social details, opinions, "
             "jokes, preferences, real-world topics, and conversational "
@@ -485,13 +493,37 @@ def _shared_prompt_lines(
         "",
         "The latest player message is authoritative. "
         "Respond to it rather than an obsolete earlier turn.",
+        "Conversation continuity is preferred when the player's "
+        "current message does not clearly establish a different "
+        "recipient. Authoritative current state outranks old "
+        "conversation assumptions for factual claims. "
+        "Do not introduce an unrelated subject merely because "
+        "a guildmate's current zone, quest, activity, gear, "
+        "inventory, or other live state was supplied.",
+        "If the player is discussing another game, current "
+        "entertainment, real life, or another non-WoW subject, "
+        "continue that subject naturally instead of steering "
+        "the conversation back toward WoW.",
         "Stay consistent with session memory and each bot's "
         "earlier opinions when relevant, but never let old "
         "memory override authoritative current game state.",
         "Preserve unresolved questions and promises "
         "naturally; do not recite the memory.",
+        "Keep grounded current facts and established harmless history, "
+        "plans, preferences, and opinions consistent across follow-up "
+        "questions unless authoritative current state actually conflicts. "
+        "Do not promote an unsupported local-world observation into truth "
+        "merely because somebody said it earlier.",
+        "When the player asks a clarifying question, become more "
+        "specific when the available conversation or live state supports "
+        "it instead of retreating to a generic or evasive answer.",
         "Do not invent specific WoW game-state facts that are absent "
         "from both authoritative live state and conversation.",
+        "If the player makes a factual claim about a guildmate that "
+        "conflicts with that guildmate's authoritative current state, "
+        "do not make the claim true merely to preserve conversational "
+        "continuity. The intended guildmate may naturally correct the "
+        "player, disagree, or sound confused.",
         "For harmless social conversation, opinions, jokes, preferences, "
         "and ordinary real-world topics, improvise naturally while staying "
         "consistent with things each guildmate has already said.",
@@ -514,28 +546,41 @@ def _shared_prompt_lines(
         ])
     else:
         lines.extend([
-            "Write like actual WoW players casually typing "
-            "while playing.",
-            "Gameplay terminology is normal and encouraged "
-            "when relevant: quests, mobs, loot, gear, DPS, "
-            "specs, talents, levels, XP, professions, AH, "
-            "dungeons, raids, PvP, addons, alts, wipes, RNG, "
-            "bags, repairs, and similar terms.",
+            "Write like actual guildmates casually typing "
+            "while they happen to be playing WoW.",
+            "The conversation itself is more important than "
+            "showing awareness of game context. Do not mention "
+            "live state unless it actually helps answer or "
+            "continue what someone is talking about.",
+            "Gameplay terminology is completely normal when "
+            "relevant: quests, mobs, loot, gear, DPS, specs, "
+            "talents, levels, XP, professions, AH, dungeons, "
+            "raids, PvP, addons, alts, wipes, RNG, bags, "
+            "repairs, and similar terms.",
+            "Non-WoW conversation is equally normal in Guild "
+            "Chat. Do not manufacture a WoW connection when "
+            "guildmates are naturally discussing something "
+            "outside the game.",
             "Use ordinary WoW shorthand naturally when it "
             "fits: gz, grats, ty, np, mb, brb, afk, oom, "
             "lfg, inv, sec, omw, etc.",
             "Casual internet language like lol, lmao, tbh, "
-            "ngl, bruh, or rip is fine occasionally. Do not "
-            "force memes or slang into every reply, and avoid "
-            "repeating the same filler across nearby messages.",
-            "Lowercase, fragments, missing punctuation, "
-            "occasional typos, one-word replies, and "
-            "incomplete thoughts are fine.",
-            "Replies can be mundane, distracted, confused, "
-            "annoyed, amused, unhelpful, or brief.",
+            "ngl, bruh, or rip is available vocabulary. Do "
+            "not force memes or slang into every reply, and "
+            "avoid repeating the same filler nearby.",
+            "Different guildmates have different typing habits. "
+            "Some use normal capitalization, complete sentences, "
+            "and punctuation. Others may use lowercase, fragments, "
+            "missing punctuation, shorthand, occasional typos, "
+            "one-word replies, or incomplete thoughts. Do not make "
+            "every guildmate share the same abbreviated writing style.",
+            "Replies can be mundane, distracted, uncertain, "
+            "confused, annoyed, amused, unhelpful, or brief.",
+            "Guildmates may disagree, have different tastes, "
+            "misunderstand something, or simply not care.",
             "Do not make every response clever, funny, "
-            "enthusiastic, polished, or meaningful.",
-            "Do not narrate gameplay or scenery.",
+            "enthusiastic, polished, helpful, or meaningful.",
+            "Do not narrate routine gameplay or scenery.",
             "Do not write fantasy dialogue.",
             "Never exceed 150 characters in one message.",
         ])
@@ -1412,13 +1457,53 @@ def process_guild_player_message_event(
             session_context if memory_enabled else ""
         ),
     )
+    explicit_recipient = bool(
+        addressed.get('bot')
+    )
+
+    routing_candidates = candidates
+    routing_reason = 'continuity'
+
+    if (
+        not explicit_recipient
+        and len(candidates) == 1
+    ):
+        explicit_recipient = True
+        routing_reason = 'only_eligible'
+
+    if (
+        not explicit_recipient
+        and len(candidates) > 1
+    ):
+        state_matches = (
+            find_player_message_state_matches(
+                player_message,
+                candidates,
+            )
+        )
+
+        if state_matches:
+            routing_candidates = [
+                match['candidate']
+                for match in state_matches
+            ]
+
+            routing_reason = (
+                'state:'
+                + ','.join(
+                    state_matches[0].get(
+                        'reasons'
+                    ) or []
+                )
+            )
+
     topology, responder_count = _choose_topology(
         config,
-        len(candidates),
+        len(routing_candidates),
         bool(addressed.get('multi_addressed')),
     )
     responders = _select_responders(
-        candidates,
+        routing_candidates,
         str(addressed.get('bot') or ''),
         responder_count,
         _recent_bot_names(recent),

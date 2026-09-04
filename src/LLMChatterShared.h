@@ -52,6 +52,7 @@ std::string BuildBotProgressionStateJson(Player* player);
 std::string BuildBotEquipmentStateJson(Player* player);
 std::string BuildBotInventoryStateJson(Player* player);
 std::string BuildBotProfessionStateJson(Player* player);
+std::string BuildBotCapabilityStateJson(Player* player);
 std::string BuildBotQuestStateJson(Player* player);
 std::string BuildBotActivityStateJson(Player* player);
 std::string BuildBotTravelStateJson(Player* player);

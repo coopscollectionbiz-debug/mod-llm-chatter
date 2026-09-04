@@ -51,6 +51,8 @@ from chatter_shared import (
     parse_conversation_response,
     calculate_dynamic_delay,
     find_addressed_bot,
+    find_player_message_state_matches,
+    player_premise_rule,
     insert_chat_message,
     pick_emote_for_statement,
     detect_item_links,
@@ -100,6 +102,7 @@ from chatter_group_state import (
     format_chat_history,
     get_group_members,
     get_group_player_name,
+    has_online_real_group_player,
 )
 from chatter_group_handlers import (
     _maybe_talent_context,
@@ -152,13 +155,49 @@ from chatter_group_prompts import (
 from chatter_constants import (
     RACE_SPEECH_PROFILES,
     CLASS_ROLE_MAP,
-    AMBIENT_CHAT_TOPICS,
     AMBIENT_CHAT_TOPICS_RP,
     BG_MAP_NAMES,
     RAID_MAP_IDS,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Normal-mode idle Party chat uses its own social-reason pool.
+#
+# Party is a small shared-task room, not public General chat and not
+# a status feed. During genuine downtime, players can talk about the
+# game, one another, or ordinary outside interests. These are reasons
+# someone might actually bother typing, not activities to narrate.
+PARTY_IDLE_TOPICS_NORMAL = [
+    # Shared task / practical reasons
+    "asking a quick question about what the group should do next",
+    "checking whether everyone is ready or needs a moment",
+    "asking about a route, pull, role, mechanic, or group decision",
+    "offering a useful suggestion without narrating personal progress",
+    "asking whether somebody needs help with something",
+    "clarifying something another party member said or did",
+
+    # Reactions / opinions
+    "reacting casually to how the group has been going",
+    "giving a brief opinion about the dungeon, class, spec, role, or game",
+    "mildly disagreeing with another player's preference or suggestion",
+    "complaining about something genuinely annoying",
+    "admitting confusion, a mistake, or that they were not paying attention",
+    "making a small joke or dry comment that fits the group",
+
+    # Social downtime
+    "continuing whatever the party was already talking about",
+    "asking another party member a casual question",
+    "making ordinary small talk during downtime",
+    "saying something mundane because there is a quiet moment",
+    "bringing up another game or something they have been playing",
+    "bringing up a movie, show, sport, technology, or current interest",
+    "mentioning food, work, school, weekend plans, or everyday life",
+    "making an offhand non-WoW comment without trying to start a big discussion",
+    "sharing a harmless preference or opinion",
+    "barely responding or making a short throwaway comment",
+]
 
 # N3 compatibility note:
 # keep this module as the stable import surface while
@@ -287,6 +326,32 @@ PLAYERBOT_COMMANDS = {
     # Chat / loot
     'chat', 'loot',
 }
+
+
+def _is_explicit_native_playerbot_command(
+    message: str,
+) -> bool:
+    """Return True only for explicit native PlayerBots syntax.
+
+    The live PlayerBots configuration uses "@" as its command
+    prefix. Messages without that prefix are ordinary speech
+    and must remain eligible for the natural-language layer.
+
+    Examples:
+      @follow         -> native
+      @do rebuff      -> native
+      @d follow       -> native
+      follow me Grim  -> natural-language layer
+      do you have water? -> natural-language layer
+    """
+    msg = str(
+        message or ''
+    ).strip()
+
+    if not msg:
+        return False
+
+    return msg.startswith('@')
 
 
 def _is_playerbot_command(message: str) -> bool:
@@ -618,7 +683,7 @@ def process_group_event(db, client, config, event):
             # Only normalize zone + map (from the
             # player's characters row). Area has no
             # reliable player-side source at join
-            # time — C++ OnPlayerUpdateZone sets the
+            # time â€” C++ OnPlayerUpdateZone sets the
             # authoritative area on the next update.
             norm_c = db.cursor()
             norm_c.execute(
@@ -910,7 +975,7 @@ def process_group_join_batch_event(
             # Dedup: skip if this bot was already
             # greeted recently in this group (checks
             # both single and batch join events).
-            # Rejoin bypasses this — traits must be
+            # Rejoin bypasses this â€” traits must be
             # restored even if a recent greeting exists.
             if not is_rejoin and _has_recent_join_greeting(
                 db, group_id, bot_guid, 60,
@@ -1220,7 +1285,7 @@ def process_group_join_batch_event(
         if pz or pm:
             # Only normalize zone + map. Area has
             # no reliable player-side source at
-            # join time — C++ OnPlayerUpdateZone
+            # join time â€” C++ OnPlayerUpdateZone
             # sets authoritative area on next update.
             norm_c = db.cursor()
             norm_c.execute(
@@ -1592,6 +1657,137 @@ def _batch_welcome(
 
 
 
+from chatter_playerbot_intent import (
+    WOW_CLASS_NAMES,
+    build_playerbot_action_speech_context,
+    classify_playerbot_intent,
+    enqueue_live_playerbot_buff_actions,
+    resolve_playerbot_action_candidates,
+    should_analyze_playerbot_intent,
+)
+from chatter_db import get_group_playerbot_candidates
+
+
+def _dry_run_playerbot_intent(
+    db,
+    client,
+    config,
+    *,
+    event_id,
+    group_id,
+    player_name,
+    player_message,
+    source_channel,
+):
+    """Classify and resolve a party action without executing it.
+
+    This intentionally performs no action enqueue and no
+    gameplay mutation. It exists only to validate real player
+    phrasing and bot routing before action execution is enabled.
+    """
+    if not should_analyze_playerbot_intent(
+        player_message
+    ):
+        return None
+
+    candidates = get_group_playerbot_candidates(
+        db,
+        group_id,
+    )
+
+    if not candidates:
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "message=%r result=no_candidates",
+            event_id,
+            player_name,
+            player_message,
+        )
+        return None
+
+    classifier_bots = []
+
+    for bot in candidates:
+        class_id = int(
+            bot.get('class_id') or 0
+        )
+
+        class_name = WOW_CLASS_NAMES.get(
+            class_id,
+            '',
+        )
+
+        classifier_bots.append({
+            'name': bot.get('name', ''),
+            'class': class_name,
+        })
+
+    intent = classify_playerbot_intent(
+        client,
+        config,
+        player_message=player_message,
+        player_name=player_name,
+        source_channel=source_channel,
+        bots=classifier_bots,
+    )
+
+    if not intent.get('is_action_request'):
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "message=%r result=no_action",
+            event_id,
+            player_name,
+            player_message,
+        )
+        return {
+            'intent': intent,
+            'resolved': [],
+        }
+
+    resolved = resolve_playerbot_action_candidates(
+        intent,
+        candidates,
+        source_channel=source_channel,
+    )
+
+    resolved_summary = [
+        {
+            'guid': int(bot['guid']),
+            'name': bot['name'],
+            'class': bot.get(
+                'class_name',
+                WOW_CLASS_NAMES.get(
+                    int(bot.get('class_id') or 0),
+                    '',
+                ),
+            ),
+        }
+        for bot in resolved
+    ]
+
+    logger.info(
+        "[PLAYERBOT-DRYRUN] event=%s player=%s "
+        "message=%r action=%s arg=%r hint=%r "
+        "target_type=%r target_name=%r "
+        "confidence=%.2f resolved=%s",
+        event_id,
+        player_name,
+        player_message,
+        intent.get('action_key'),
+        intent.get('action_arg'),
+        intent.get('bot_hint'),
+        intent.get('target_type'),
+        intent.get('target_name'),
+        float(intent.get('confidence') or 0.0),
+        resolved_summary,
+    )
+
+    return {
+        'intent': intent,
+        'resolved': resolved,
+    }
+
+
 def process_group_player_msg_event(
     db, client, config, event
 ):
@@ -1615,12 +1811,39 @@ def process_group_player_msg_event(
     player_name = extra_data.get(
         'player_name', 'someone'
     )
+    player_guid = int(
+        extra_data.get('player_guid', 0) or 0
+    )
     player_message = extra_data.get(
         'player_message', ''
     )
     group_id = int(extra_data.get('group_id', 0))
 
-    if not group_id or not player_message:
+    source_channel = str(
+        extra_data.get('channel') or ''
+    ).strip().lower()
+
+    if source_channel not in {
+        'party',
+        'raid',
+    }:
+        logger.warning(
+            "[GROUP-PLAYER] event=%s invalid channel=%r",
+            event_id,
+            source_channel,
+        )
+        _mark_event(
+            db,
+            event_id,
+            'skipped',
+        )
+        return False
+
+    if (
+        not group_id
+        or not player_guid
+        or not player_message
+    ):
         _mark_event(db, event_id, 'skipped')
         return False
 
@@ -1634,12 +1857,83 @@ def process_group_player_msg_event(
         )
     )
 
-    # Skip playerbot commands (follow, stay, etc.)
-    if _is_playerbot_command(player_message):
+    # Skip only deliberately explicit native PlayerBots
+    # syntax. Natural phrases such as "follow me Grim" must
+    # continue into the LLM intent layer even though "follow"
+    # is also the name of a native PlayerBots command.
+    if _is_explicit_native_playerbot_command(
+        player_message
+    ):
         _mark_event(db, event_id, 'skipped')
         return False
 
-    # Get all bots in group for name matching
+    # Natural-language PlayerBots action detection.
+    #
+    # Only allowlisted cast_spell buffs and native rebuff
+    # may enter the gameplay queue. Every other action key
+    # remains classification-only/dry-run.
+    playerbot_action_result = None
+
+    try:
+        playerbot_action_result = _dry_run_playerbot_intent(
+            db,
+            client,
+            config,
+            event_id=event_id,
+            group_id=group_id,
+            player_name=player_name,
+            player_message=player_message,
+            source_channel=source_channel,
+        )
+
+        playerbot_action_result = (
+            enqueue_live_playerbot_buff_actions(
+                db,
+                playerbot_action_result,
+                player_guid=player_guid,
+                player_name=player_name,
+                source_channel=source_channel,
+                group_id=group_id,
+                event_id=event_id,
+            )
+        )
+    except Exception:
+        # Action interpretation must never break normal
+        # party chatter.
+        logger.error(
+            "[PLAYERBOT-DRYRUN] failed event=%s",
+            event_id,
+            exc_info=True,
+        )
+
+    playerbot_actionable = bool(
+        isinstance(playerbot_action_result, dict)
+        and (
+            playerbot_action_result.get('intent') or {}
+        ).get('is_action_request') is True
+    )
+
+    playerbot_action_context = (
+        build_playerbot_action_speech_context(
+            playerbot_action_result,
+            dry_run=not bool(
+                isinstance(
+                    playerbot_action_result,
+                    dict,
+                )
+                and playerbot_action_result.get(
+                    'queue_accepted'
+                ) is True
+            ),
+            scope_label=(
+                "current raid"
+                if source_channel == 'raid'
+                else "current party"
+            ),
+        )
+    )
+
+    # Get all bots in group for normal chatter/name matching
     cursor = db.cursor(dictionary=True)
     cursor.execute("""
         SELECT bot_guid, bot_name,
@@ -1663,25 +1957,138 @@ def process_group_player_msg_event(
     history = _get_recent_chat(db, group_id)
     chat_hist = format_chat_history(history)
 
-    # Prefer addressed bot, else random
+    # Shared non-whisper speaker ownership:
+    #
+    # 1. Authoritatively resolved gameplay action
+    # 2. Explicitly addressed bot
+    # 3. Only eligible bot
+    # 4. Strong CURRENT-message live-state retarget
+    # 5. Existing fallback
     bot_row = None
-    all_names = [b['bot_name'] for b in all_bots]
-    addr_result = find_addressed_bot(
-        player_message, all_names,
-        client=client, config=config,
-        chat_history=chat_hist
-    )
-    addressed = addr_result.get('bot')
-    multi_addressed = addr_result.get(
-        'multi_addressed', False
-    )
-    if addressed:
-        for b in all_bots:
-            if b['bot_name'] == addressed:
-                bot_row = b
+    multi_addressed = False
+    explicit_recipient = False
+    routing_reason = 'fallback'
+
+    resolved_action_bots = []
+
+    if playerbot_actionable:
+        resolved_action_bots = (
+            playerbot_action_result.get('resolved') or []
+        )
+
+        resolved_guids = {
+            int(bot.get('guid') or 0)
+            for bot in resolved_action_bots
+            if int(bot.get('guid') or 0)
+        }
+
+        for candidate_row in all_bots:
+            if (
+                int(candidate_row['bot_guid'])
+                in resolved_guids
+            ):
+                bot_row = candidate_row
+                explicit_recipient = True
+                routing_reason = 'action'
                 break
+
+    all_names = [
+        b['bot_name']
+        for b in all_bots
+    ]
+
+    if not bot_row:
+        addr_result = find_addressed_bot(
+            player_message,
+            all_names,
+            client=client,
+            config=config,
+            chat_history=chat_hist,
+        )
+
+        addressed = addr_result.get('bot')
+        multi_addressed = addr_result.get(
+            'multi_addressed',
+            False,
+        )
+
+        if addressed:
+            for candidate_row in all_bots:
+                if (
+                    candidate_row['bot_name']
+                    == addressed
+                ):
+                    bot_row = candidate_row
+                    explicit_recipient = True
+                    routing_reason = 'addressed'
+                    break
+
+    if not bot_row and len(all_bots) == 1:
+        bot_row = all_bots[0]
+        explicit_recipient = True
+        routing_reason = 'only_eligible'
+
+    if not bot_row:
+        routing_candidates = []
+
+        for candidate_row in all_bots:
+            state = {}
+            raw_state = candidate_row.get(
+                'bot_state_json'
+            )
+
+            if isinstance(raw_state, dict):
+                state = raw_state
+            elif raw_state:
+                try:
+                    state = json.loads(raw_state)
+                except Exception:
+                    state = {}
+
+            routing_candidates.append({
+                'name': candidate_row['bot_name'],
+                'bot_state': state,
+                '_row': candidate_row,
+            })
+
+        state_matches = (
+            find_player_message_state_matches(
+                player_message,
+                routing_candidates,
+            )
+        )
+
+        if state_matches:
+            chosen_match = random.choice(
+                state_matches
+            )
+
+            bot_row = (
+                chosen_match['candidate']['_row']
+            )
+
+            routing_reason = (
+                'state:'
+                + ','.join(
+                    chosen_match.get('reasons')
+                    or []
+                )
+            )
+
     if not bot_row:
         bot_row = random.choice(all_bots)
+
+    logger.info(
+        "[PLAYER-ROUTE] event=%s channel=%s "
+        "player=%s selected=%s reason=%s "
+        "explicit=%s",
+        event_id,
+        source_channel,
+        player_name,
+        bot_row['bot_name'],
+        routing_reason,
+        explicit_recipient,
+    )
 
     bot_guid = bot_row['bot_guid']
     bot_name = bot_row['bot_name']
@@ -1757,7 +2164,7 @@ def process_group_player_msg_event(
     try:
         mode = get_chatter_mode(config)
         # history/chat_hist fetched above for
-        # bot selection — reuse here
+        # bot selection â€” reuse here
         members = get_group_members(db, group_id)
 
         # Check for item links in player message
@@ -1813,10 +2220,13 @@ def process_group_player_msg_event(
         )
 
         force_conv = (
-            multi_addressed and num_bots >= 2
+            not playerbot_actionable
+            and multi_addressed
+            and num_bots >= 2
         )
         rng_conv = (
-            not force_conv
+            not playerbot_actionable
+            and not force_conv
             and num_bots >= 2
             and eff_conv_chance > 0
             and random.randint(1, 100)
@@ -1899,7 +2309,7 @@ def process_group_player_msg_event(
             )
 
         # Fetch memories for player message
-        # response — RNG-gated like idle recall
+        # response â€” RNG-gated like idle recall
         relationship_context = ""
         player_guid = 0
         memory_enabled = int(config.get(
@@ -1940,6 +2350,9 @@ def process_group_player_msg_event(
             map_id=map_id,
             stored_tone=stored_tone,
             travel_context=travel_context,
+            playerbot_action_context=(
+                playerbot_action_context
+            ),
         )
 
         if relationship_context:
@@ -2026,7 +2439,7 @@ def process_group_player_msg_event(
         )
         insert_chat_message(
             db, bot_guid, bot_name, message,
-            channel='party',
+            channel=source_channel,
             delay_seconds=reply_delay,
             event_id=event_id, emote=emote,
             config=config,
@@ -2040,7 +2453,7 @@ def process_group_player_msg_event(
             bot_name, True, message
         )
 
-        # Second bot chance — MUTUAL EXCLUSION:
+        # Second bot chance â€” MUTUAL EXCLUSION:
         # skip if conversation path was used
         if player_guid and message:
             from chatter_memory import (
@@ -2060,7 +2473,10 @@ def process_group_player_msg_event(
                 player_name=str(player_name),
             )
 
-        if not used_conversation:
+        if (
+            not used_conversation
+            and not playerbot_actionable
+        ):
             second_chance = int(config.get(
                 'LLMChatter.GroupChatter'
                 '.PlayerMsgSecondBotChance',
@@ -2147,7 +2563,7 @@ def _maybe_queue_player_msg_memory(
         bots_in_session = list(session["bots"])
         # Guard before incrementing: rehydrated
         # sessions have player_guid=0 and cannot
-        # generate memories — don't burn quota
+        # generate memories â€” don't burn quota
         if not bots_in_session or not player_guid:
             return
         # Increment atomically inside the lock so
@@ -2431,7 +2847,7 @@ def _try_second_bot_response(
     ) + 2  # offset after first bot
     insert_chat_message(
         db, bot2_guid, bot2_name, msg2,
-        channel='party',
+        channel=source_channel,
         delay_seconds=bot2_delay,
         event_id=event_id, sequence=1,
         emote=emote,
@@ -2801,7 +3217,7 @@ def _build_composition_comment_prompt(
     prompt += (
         f"\n{style}\n"
         f"One short sentence only (under 120 "
-        f"characters). No greetings — you already "
+        f"characters). No greetings â€” you already "
         f"said hello."
     )
     if is_rp:
@@ -3027,7 +3443,7 @@ def build_idle_chatter_prompt(
     """Build prompt for idle party chat.
 
     Bot says something casual during a quiet moment
-    — no specific event triggered this, just
+    â€” no specific event triggered this, just
     natural party banter.
 
     Args:
@@ -3046,11 +3462,11 @@ def build_idle_chatter_prompt(
     )
 
     # --------------------------------------------------
-    # LEAN MEMORY PATH — when memories are present,
+    # LEAN MEMORY PATH â€” when memories are present,
     # strip away distracting content and make the
     # memory the central purpose of the message.
     # --------------------------------------------------
-    if memories:
+    if is_rp and memories:
         sanitized = [
             sanitize_memory_for_prompt(m)
             for m in memories
@@ -3096,18 +3512,17 @@ def build_idle_chatter_prompt(
                 if not is_rp:
                     prompt += (
                         "LIVE STATE RULES:\n"
-                        "- Current live state overrides "
-                        "memories and personality for "
-                        "specific facts about this bot.\n"
-                        "- Memories describe past events; "
-                        "do not treat an old memory as the "
-                        "bot's current state.\n"
-                        "- Never invent a specific quest, "
-                        "item, profession, amount, objective, "
-                        "equipment item, location, or other "
-                        "game-state fact.\n"
-                        "- If a specific fact is absent from "
-                        "the live state, do not guess it.\n"
+                        "- Current live state overrides memories only "
+                        "when they conflict about CURRENT character state.\n"
+                        "- Memories describe past events; do not treat an old "
+                        "memory as the bot's current state.\n"
+                        "- Keep precise CURRENT facts grounded: quest progress, "
+                        "inventory/equipment/money, exact current location/activity, "
+                        "and mechanical capability must come from authoritative state.\n"
+                        "- General WoW knowledge and plausible level/class-appropriate "
+                        "past history or future plans may be discussed even when not "
+                        "present in live state. Profession history/plans are allowed; "
+                        "do not turn them into false current possessions/progress.\n"
                     )
 
             # Detect solo bot: no other bots in
@@ -3136,7 +3551,7 @@ def build_idle_chatter_prompt(
             if solo_bot and player_name:
                 prompt += (
                     f"IMPORTANT: You are the ONLY "
-                    f"bot in this party — there are "
+                    f"bot in this party â€” there are "
                     f"no other companions to address "
                     f"or refer to. Speak directly to "
                     f"{player_name}, never refer to "
@@ -3178,11 +3593,11 @@ def build_idle_chatter_prompt(
             return append_json_instruction(
                 prompt, allow_action
             )
-    # memories were empty or all sanitized away —
+    # memories were empty or all sanitized away â€”
     # fall through to the normal full prompt below.
 
     # --------------------------------------------------
-    # NORMAL PATH — no memories, full context prompt
+    # NORMAL PATH â€” no memories, full context prompt
     # --------------------------------------------------
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -3201,7 +3616,7 @@ def build_idle_chatter_prompt(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else PARTY_IDLE_TOPICS_NORMAL
         )
         topic = random.choice(topic_pool)
 
@@ -3287,7 +3702,7 @@ def build_idle_chatter_prompt(
     if bot.get('is_dead'):
         if is_rp:
             rp_context += (
-                "\nYou are DEAD — lying on the ground "
+                "\nYou are DEAD â€” lying on the ground "
                 "as a ghost. Speak accordingly: dark "
                 "humor, complain about the cold floor, "
                 "ask for a resurrection, or comment on "
@@ -3317,6 +3732,17 @@ def build_idle_chatter_prompt(
             )
     if chat_history:
         rp_context += f"{chat_history}"
+        if not is_rp:
+            rp_context += (
+                "\nRecent party chat is the active "
+                "conversation context. If there is a "
+                "plausible unfinished question, opinion, "
+                "joke, disagreement, plan, or subject, "
+                "continue or react to it instead of "
+                "switching subjects because of a random "
+                "idle seed. Ignore stale conversation "
+                "when a real player would have moved on."
+            )
 
     if is_rp:
         style = (
@@ -3382,19 +3808,18 @@ def build_idle_chatter_prompt(
         if not is_rp:
             prompt += (
                 "LIVE STATE RULES:\n"
-                "- This live state is authoritative for "
-                "specific facts about your character.\n"
-                "- It overrides personality, chat history, "
-                "memories, and other context when they "
-                "conflict about current game state.\n"
-                "- You may casually mention facts supported "
-                "by this state when relevant.\n"
-                "- Never invent a specific quest, objective, "
-                "mob, item, NPC, amount, profession, "
-                "equipment item, destination, location, "
-                "or current activity.\n"
-                "- If a specific fact is absent from the "
-                "state, do not guess it.\n"
+                "- This live state is authoritative for CURRENT "
+                "observable/mechanical facts about your character.\n"
+                "- It overrides personality, chat history, memories, and "
+                "other context only when they conflict about current state.\n"
+                "- Keep exact current quest progress/counts, inventory, gear, "
+                "money, current location/activity, and mechanical capability grounded.\n"
+                "- General Wrath-era WoW knowledge is allowed even when absent "
+                "from live state: quests, mobs, NPCs, zones, dungeons, items, "
+                "professions, class knowledge, leveling, and mechanics.\n"
+                "- Plausible level/class-appropriate personal history and plans "
+                "may be improvised and should remain consistent. Do not turn "
+                "those into unsupported CURRENT progress or possessions.\n"
                 "- Supplied [[quest:...]] and [[item:...]] "
                 "tokens are exact opaque strings. Copy them "
                 "exactly when relevant or omit them. Never "
@@ -3411,14 +3836,47 @@ def build_idle_chatter_prompt(
             f"</backstory>\n"
         )
 
+    if not is_rp and memories:
+        sanitized_memories = [
+            sanitize_memory_for_prompt(m)
+            for m in memories
+        ]
+        sanitized_memories = [
+            m for m in sanitized_memories if m
+        ]
+        if sanitized_memories:
+            mem_lines = '\n'.join(
+                f"  - {m}"
+                for m in sanitized_memories
+            )
+            prompt += (
+                "\nOPTIONAL PAST CONTEXT:\n"
+                f"{mem_lines}\n"
+                "These are previous gameplay moments, "
+                "not the required topic. Use one only if "
+                "it naturally fits the current conversation "
+                "or quiet moment. It is completely fine not "
+                "to mention any memory. Do not turn a memory "
+                "into storytelling or a sentimental callback.\n"
+            )
+
     if twist:
         prompt += f"Creative twist: {twist}\n"
 
-    party_ctx = (
-        f"You're in a party, currently {topic}."
-        if topic else
-        "You're in a party."
-    )
+    if is_rp:
+        party_ctx = (
+            f"You're in a party, currently {topic}."
+            if topic else
+            "You're in a party."
+        )
+    else:
+        party_ctx = "You're in a party."
+        if topic:
+            party_ctx += (
+                "\nPossible idle conversation seed "
+                "(optional; ignore it when the existing "
+                f"conversation gives a better reason to speak): {topic}"
+            )
     prompt += (
         f"{rp_context}\n\n"
         f"{party_ctx}\n"
@@ -3522,11 +3980,11 @@ def build_idle_conversation_prompt(
         )
 
     # --------------------------------------------------
-    # LEAN MEMORY PATH — when any bot has memories,
+    # LEAN MEMORY PATH â€” when any bot has memories,
     # strip away distracting content and make the
     # memories the central purpose of the exchange.
     # --------------------------------------------------
-    if memories_map:
+    if is_rp and memories_map:
         p_label = player_name or 'the player'
         # Sanitize all bot memories up front
         has_any_memories = False
@@ -3574,7 +4032,7 @@ def build_idle_conversation_prompt(
                     f"the memories into storytelling."
                 )
 
-            # Compact bot identities — no worldview
+            # Compact bot identities â€” no worldview
             parts.append(
                 f"Speakers: "
                 f"{', '.join(bot_names)}"
@@ -3653,7 +4111,7 @@ def build_idle_conversation_prompt(
                         f"{mem_lines}\n"
                         f"Have {b['name']} "
                         f"reference one of these "
-                        f"memories clearly — "
+                        f"memories clearly â€” "
                         f"mention the place, "
                         f"creature, or moment by "
                         f"name so {p_label} "
@@ -3663,7 +4121,7 @@ def build_idle_conversation_prompt(
                 else:
                     parts.append(
                         f"{b['name']} has no "
-                        f"memories — react to what "
+                        f"memories â€” react to what "
                         f"others share."
                     )
 
@@ -3706,10 +4164,10 @@ def build_idle_conversation_prompt(
                 require_all_speakers=is_rp,
             )
     # memories_map was empty or all sanitized away
-    # — fall through to the normal full prompt.
+    # â€” fall through to the normal full prompt.
 
     # --------------------------------------------------
-    # NORMAL PATH — no memories, full context prompt
+    # NORMAL PATH â€” no memories, full context prompt
     # --------------------------------------------------
     parts = []
 
@@ -3884,15 +4342,15 @@ def build_idle_conversation_prompt(
                 seen_classes.add(cls_role_key)
     if not is_rp:
         parts.append(
-            "LIVE STATE RULES: Each speaker has their "
-            "own authoritative current state above. "
-            "A speaker may use ONLY their own state for "
-            "specific personal gameplay facts. Never "
-            "borrow quests, items, professions, equipment, "
-            "money, objectives, location, activity, or "
-            "other facts from another bot. If a specific "
-            "fact is absent from that speaker's state, "
-            "do not invent or guess it."
+            "LIVE STATE RULES: Each speaker has their own "
+            "authoritative CURRENT state above and must never borrow another "
+            "bot's current quest progress, inventory, equipment, money, "
+            "location, activity, or mechanical capability. Current state wins "
+            "when it conflicts with prior context. General WoW knowledge is "
+            "shared knowledge and may be discussed normally. Plausible "
+            "level/class-appropriate personal history, profession history/plans, "
+            "and future goals may be improvised per speaker and kept consistent; "
+            "do not present them as unsupported CURRENT progress or possessions."
         )
     # Inject backstories for participating bots
     if is_rp and backstory_map:
@@ -3916,6 +4374,49 @@ def build_idle_conversation_prompt(
     if speaker_talent_context:
         parts.append(speaker_talent_context)
 
+    if not is_rp and memories_map:
+        normal_memory_blocks = []
+        p_label = player_name or 'the player'
+
+        for memory_bot in bots:
+            raw_memories = memories_map.get(
+                memory_bot['guid']
+            )
+            if not raw_memories:
+                continue
+
+            sanitized_memories = [
+                sanitize_memory_for_prompt(m)
+                for m in raw_memories
+            ]
+            sanitized_memories = [
+                m for m in sanitized_memories if m
+            ]
+
+            if not sanitized_memories:
+                continue
+
+            mem_lines = '\n'.join(
+                f"  - {m}"
+                for m in sanitized_memories
+            )
+            normal_memory_blocks.append(
+                f"{memory_bot['name']}'s past gameplay "
+                f"with {p_label}:\n{mem_lines}"
+            )
+
+        if normal_memory_blocks:
+            parts.append(
+                "OPTIONAL PAST CONTEXT:\n"
+                + "\n".join(normal_memory_blocks)
+                + "\nThese memories are background continuity, "
+                "not the required subject. A speaker may reference "
+                "one only when it naturally fits the active party "
+                "conversation or quiet moment. It is completely fine "
+                "for nobody to mention any memory. Do not turn them "
+                "into storytelling or sentimental callbacks."
+            )
+
     parts.append(
         "Names: Sometimes address each other by "
         "name (1-2 times), but not every message."
@@ -3927,10 +4428,17 @@ def build_idle_conversation_prompt(
             f"or address them occasionally."
         )
 
-    # Topic (skipped in dungeons — dungeon context
+    # Topic (skipped in dungeons â€” dungeon context
     # already grounds the conversation)
     if topic:
-        parts.append(f"Topic: {topic}")
+        if is_rp:
+            parts.append(f"Topic: {topic}")
+        else:
+            parts.append(
+                "Possible idle conversation seed "
+                "(optional; ignore it when the existing "
+                f"conversation gives a better reason to speak): {topic}"
+            )
 
     # Authored tone is RP-only.
     if is_rp:
@@ -3977,9 +4485,9 @@ def build_idle_conversation_prompt(
     if is_rp and num_bots > 2:
         parts.append(
             "IMPORTANT: EVERY speaker MUST have "
-            "at least one message — do NOT skip "
+            "at least one message â€” do NOT skip "
             "any participant. Don't use rigid "
-            "round-robin order — let the "
+            "round-robin order â€” let the "
             "conversation flow organically. "
             "Some speakers may reply back-to-back "
             "if it feels natural."
@@ -3999,6 +4507,16 @@ def build_idle_conversation_prompt(
 
     if chat_history:
         parts.append(chat_history)
+        if not is_rp:
+            parts.append(
+                "Recent party chat is the active conversation context. "
+                "When there is a plausible unfinished question, opinion, "
+                "joke, disagreement, plan, or subject already being "
+                "discussed, continue or react to it rather than changing "
+                "subjects because of the optional idle seed. Do not force "
+                "a callback when the recent chat is stale or has naturally "
+                "ended."
+            )
 
     # Style and rules
     length_hint = _pick_length_hint(mode)
@@ -4031,12 +4549,12 @@ def build_idle_conversation_prompt(
         )
     else:
         parts.append(
-            "Specific gameplay claims are allowed "
-            "when supported by that speaker's own "
-            "authoritative live state. Never invent "
-            "unsupported quests, objectives, mobs, "
-            "items, NPCs, amounts, professions, "
-            "equipment, locations, or activities. "
+            "Precise CURRENT gameplay claims must be supported by "
+            "that speaker's own authoritative state: current quest progress, "
+            "inventory/equipment/money, exact current location/activity, "
+            "nearby-world observations, and mechanical capability. General WoW "
+            "knowledge may be discussed normally, and plausible personal "
+            "history/plans may be improvised when level/class appropriate. "
             "Do not drift into scenery descriptions, "
             "atmosphere, zone vibes, lore reflection, "
             "philosophy, or sentimental observations. "
@@ -4253,6 +4771,21 @@ def check_idle_group_chatter(
             db, group_id
         )
 
+        # Generation-cost gate: idle Party chatter is only
+        # useful when a real human is currently online in
+        # this exact group. Historical player identity does
+        # not count as current presence.
+        if not has_online_real_group_player(
+            db, group_id
+        ):
+            if _dbg:
+                logger.info(
+                    "[DEBUG] idle: no online real player "
+                    "in group %s, skipping",
+                    group_id,
+                )
+            return False
+
         # Skip idle chatter if player is offline
         if player_name and not is_player_online(
             db, player_name
@@ -4322,13 +4855,13 @@ def check_idle_group_chatter(
                 exc_info=True,
             )
 
-        # Single source of truth for location —
+        # Single source of truth for location â€”
         # bot traits updated by C++ OnPlayerUpdateZone
         # in real-time.
         zone_id, area_id, map_id = get_group_location(
             db, group_id)
 
-        # BG already has bg_idle_chatter — skip
+        # BG already has bg_idle_chatter â€” skip
         # generic group idle to avoid double party
         # chat in battlegrounds.
         if map_id in BG_MAP_NAMES:
@@ -4516,14 +5049,14 @@ def _idle_single_statement(
 
     # Determine address target
     if len(all_bots) == 1:
-        # Solo bot — sometimes address player,
+        # Solo bot â€” sometimes address player,
         # sometimes just speak generally
         if random.random() < 0.4 and player_name:
             address_target = 'player'
         else:
             address_target = None
     else:
-        # Multiple bots — pick a target
+        # Multiple bots â€” pick a target
         roll = random.random()
         if roll < 0.35 and player_name:
             address_target = 'player'
@@ -4667,7 +5200,7 @@ def _idle_single_statement(
                 idle_memories
             )
         max_tokens = pick_random_max_tokens(config)
-        # Memory allusions need room — lift floor
+        # Memory allusions need room â€” lift floor
         if idle_memories:
             max_tokens = max(max_tokens, 250)
         _idle_label = (
@@ -4753,7 +5286,7 @@ def _idle_conversation(
     # Build bot dicts and traits map
     # zone_id and map_id are passed from the caller
     # (sourced from the real player's characters
-    # table — the authoritative source of truth).
+    # table â€” the authoritative source of truth).
     bots = []
     traits_map = {}
     for br in selected_rows:
@@ -4833,7 +5366,7 @@ def _idle_conversation(
         ]
 
     bot_names = [b['name'] for b in bots]
-    # Skip AMBIENT topics inside dungeons and BGs —
+    # Skip AMBIENT topics inside dungeons and BGs â€”
     # the instance/BG context injected by the prompt
     # builder already grounds the conversation.
     if (
@@ -4845,7 +5378,7 @@ def _idle_conversation(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else PARTY_IDLE_TOPICS_NORMAL
         )
         topic = random.choice(topic_pool)
 
@@ -5096,7 +5629,7 @@ def _idle_conversation(
             return False
 
         # Strip actions per-message based on
-        # ActionChance — LLM can't apply true RNG
+        # ActionChance â€” LLM can't apply true RNG
         # so Python enforces it post-parse.
         strip_conversation_actions(
             messages, label='group_idle_conv'
@@ -5355,11 +5888,19 @@ def check_bot_questions(db, client, config):
         ):
             return False
 
-        # Get player name — try chat history first,
+        # Get player name â€” try chat history first,
         # fall back to player_guid in bot_traits
         player_name = get_group_player_name(
             db, group_id
         )
+
+        # Generation-cost gate: never ask bot-initiated
+        # questions in a Party that currently contains no
+        # online real human.
+        if not has_online_real_group_player(
+            db, group_id
+        ):
+            return False
 
         # Skip bot questions if player is offline
         if player_name and not is_player_online(
@@ -5519,7 +6060,7 @@ def check_bot_questions(db, client, config):
         chat_hist = format_chat_history(history)
         members = get_group_members(db, group_id)
 
-        # Single source of truth for location —
+        # Single source of truth for location â€”
         # bot traits updated by C++ OnPlayerUpdateZone
         # in real-time.
         zone_id, area_id, map_id = get_group_location(
@@ -5732,7 +6273,7 @@ def check_bot_questions(db, client, config):
 def process_group_farewell_event(
     db, client, config, event
 ):
-    """Handle bot_group_farewell — triggers memory
+    """Handle bot_group_farewell â€” triggers memory
     flush when a bot leaves the group.
 
     Called by the bridge dispatch table. The event

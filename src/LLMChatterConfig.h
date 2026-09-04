@@ -284,6 +284,7 @@ public:
     uint32 _proxChatterScanInterval;
     uint32 _proxChatterScanRadius;
     uint32 _proxChatterPlayerSayScanRadius;
+    uint32 _proxChatterPlayerObservationRadius;
     uint32 _proxChatterChance;
     uint32 _proxChatterEntityCooldown;
     uint32 _proxChatterZoneFatigueThreshold;
@@ -292,6 +293,7 @@ public:
     uint32 _proxChatterPlayerAddressChance;
     uint32 _proxChatterMaxConversationLines;
     uint32 _proxChatterConversationLineDelay;
+    bool   _proxChatterStopAndChatEnable;
     uint32 _proxChatterReplyWindowSeconds;
     uint32 _proxChatterReplyMaxTurns;
     uint32 _proxChatterMaxTokensPerLine;

@@ -2567,12 +2567,7 @@ def process_statement(
 
             topic = random.choice(city_topics)
         else:
-            topic_pool = (
-                AMBIENT_CHAT_TOPICS_RP
-                if mode == 'roleplay'
-                else AMBIENT_CHAT_TOPICS
-            )
-            topic = random.choice(topic_pool)
+            topic = _pick_outdoor_plain_topic(mode)
         chosen_topic = topic
         prompt = build_plain_statement_prompt(
             bot, zone_id, zone_mobs,
@@ -2720,12 +2715,7 @@ def process_statement(
 
             topic = random.choice(city_topics)
         else:
-            topic_pool = (
-                AMBIENT_CHAT_TOPICS_RP
-                if mode == 'roleplay'
-                else AMBIENT_CHAT_TOPICS
-            )
-            topic = random.choice(topic_pool)
+            topic = _pick_outdoor_plain_topic(mode)
         prompt = build_plain_statement_prompt(
             bot, zone_id,
             config=config,
@@ -2766,6 +2756,22 @@ def process_statement(
         message = cleanup_message(
             message, action=parsed.get('action')
         )
+
+        if (
+            not is_capital
+            and mode != 'roleplay'
+            and msg_type == 'plain'
+            and _plain_outdoor_has_ungrounded_claim(
+                message, [bot]
+            )
+        ):
+            logger.info(
+                "[GEN-FLOW] dropped ungrounded "
+                "plain outdoor claim | bot=%s msg=%r",
+                bot['name'],
+                message,
+            )
+            return True
 
         if is_too_similar(message, recent_msgs):
             return True
@@ -2809,6 +2815,40 @@ def process_statement(
 _outdoor_pair_last = {}
 
 
+_OUTDOOR_EVERYDAY_TOPICS = (
+    "ordinary non-WoW small talk about food, work, school, "
+    "pets, family, weekend plans, sleep, coffee, or everyday life",
+    "casual conversation about another game, movie, TV show, "
+    "music, sport, technology, or internet culture",
+    "a mundane real-life observation, preference, complaint, "
+    "question, or bit of small talk that does not need to involve WoW",
+)
+
+
+def _pick_outdoor_plain_topic(mode):
+    """Pick a plain NON-CAPITAL ambient topic.
+
+    Normal outdoor General should sometimes sound like people
+    chatting while playing rather than every line being about WoW.
+    Roleplay mode keeps its existing Azeroth-only topic pool.
+    """
+    topic_pool = (
+        AMBIENT_CHAT_TOPICS_RP
+        if mode == 'roleplay'
+        else AMBIENT_CHAT_TOPICS
+    )
+
+    if (
+        mode != 'roleplay'
+        and random.random() < 0.25
+    ):
+        return random.choice(
+            _OUTDOOR_EVERYDAY_TOPICS
+        )
+
+    return random.choice(topic_pool)
+
+
 def _outdoor_general_guard(bots, zone_id, msg_type):
     """Build hard factual constraints for outdoor General chat."""
     zone_name = get_zone_name(zone_id) or f"zone {zone_id}"
@@ -2839,6 +2879,18 @@ def _outdoor_general_guard(bots, zone_id, msg_type):
         "- Do not claim gear, upgrades, professions, spells, "
         "talents, quest progress, or class abilities unless the "
         "provided live state supports that exact claim.",
+        "- The plain ambient path must NOT personally advertise or "
+        "offer a portal, summon, crafted service, class service, or "
+        "other specific gameplay capability. Capability-specific "
+        "chatter belongs to a grounded specialized path.",
+        "- The plain ambient path may discuss items generically, but "
+        "must NOT claim to have just looted, found, bought, sold, or "
+        "obtained a specific named item. Specific-item chatter belongs "
+        "to the grounded loot/trade paths, where item links are available.",
+        "- Ordinary harmless non-WoW conversation is allowed and "
+        "normal: other games, movies, TV, music, sports, technology, "
+        "food, work, school, pets, plans, and everyday life. Do not "
+        "force a WoW connection into those topics.",
         "- Most General chat is mundane. Do not turn every line "
         "into a joke, punchline, or enthusiastic reaction.",
         "- Prefer short player-like messages, usually 3-12 words.",
@@ -2917,13 +2969,14 @@ def _outdoor_general_guard(bots, zone_id, msg_type):
     return "\n".join(lines)
 
 
-def _plain_outdoor_has_fake_quest_claim(message):
-    """Reject obvious quest claims from the ungrounded plain path."""
+def _plain_outdoor_has_ungrounded_claim(message, bots):
+    """Reject specific claims that do not belong in plain outdoor chat."""
     value = str(message or '').strip().lower()
 
     if not value:
         return False
 
+    # Quest-specific chatter has its own authoritative path.
     quest_markers = (
         " quest",
         "quest ",
@@ -2933,7 +2986,78 @@ def _plain_outdoor_has_fake_quest_claim(message):
         "questline",
     )
 
-    return any(marker in value for marker in quest_markers)
+    if any(marker in value for marker in quest_markers):
+        return True
+
+    # Outdoor plain chatter has no authoritative portal/service
+    # capability context. Portal chatter belongs to a specialized,
+    # grounded path rather than class-name inference such as
+    # "Mage therefore I can port".
+    portal_markers = (
+        " portal",
+        "portal ",
+        " portals",
+        "portals ",
+        " port ",
+        " port?",
+        " port.",
+        " ports ",
+        "ports ",
+        "wts port",
+        "lf port",
+        "need port",
+    )
+
+    if any(marker in f" {value} " for marker in portal_markers):
+        return True
+
+    # Equipment state proves what is equipped NOW. It does not prove
+    # that the bot just looted/found/bought that item. If plain chatter
+    # names an equipped item together with an acquisition/sale claim,
+    # reject it and leave specific-item stories to loot/trade paths.
+    item_claim_markers = (
+        "got ",
+        "just got",
+        "looted ",
+        "just looted",
+        "found ",
+        "just found",
+        "picked up",
+        "bought ",
+        "just bought",
+        "sold ",
+        "selling ",
+        "wts ",
+        "dropped ",
+        "got from a drop",
+        "got as a drop",
+    )
+
+    has_item_claim = any(
+        marker in value
+        for marker in item_claim_markers
+    )
+
+    if not has_item_claim:
+        return False
+
+    for bot in bots or []:
+        state = bot.get('bot_state')
+        if not isinstance(state, dict):
+            continue
+
+        for item in state.get('equipment') or []:
+            if not isinstance(item, dict):
+                continue
+
+            item_name = str(
+                item.get('name') or ''
+            ).strip().lower()
+
+            if item_name and item_name in value:
+                return True
+
+    return False
 
 
 def process_conversation(
@@ -3208,12 +3332,7 @@ def process_conversation(
 
             topic = random.choice(city_topics)
         else:
-            topic_pool = (
-                AMBIENT_CHAT_TOPICS_RP
-                if mode == 'roleplay'
-                else AMBIENT_CHAT_TOPICS
-            )
-            topic = random.choice(topic_pool)
+            topic = _pick_outdoor_plain_topic(mode)
         chosen_topic = topic
         prompt = build_plain_conversation_prompt(
             bots, zone_id, zone_mobs,
@@ -3395,13 +3514,13 @@ def process_conversation(
                     not is_capital
                     and mode != 'roleplay'
                     and msg_type == 'plain'
-                    and _plain_outdoor_has_fake_quest_claim(
-                        final_message
+                    and _plain_outdoor_has_ungrounded_claim(
+                        final_message, bots
                     )
                 ):
                     logger.info(
                         "[GEN-FLOW] dropped ungrounded "
-                        "plain quest claim | bot=%s msg=%r",
+                        "plain outdoor claim | bot=%s msg=%r",
                         msg['name'],
                         final_message,
                     )

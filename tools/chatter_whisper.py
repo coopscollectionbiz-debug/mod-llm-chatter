@@ -24,6 +24,15 @@ from chatter_shared import (
     calculate_dynamic_delay,
 )
 
+from chatter_playerbot_intent import (
+    WOW_CLASS_NAMES,
+    build_playerbot_action_speech_context,
+    classify_playerbot_intent,
+    enqueue_live_playerbot_buff_actions,
+    resolve_playerbot_action_candidates,
+    should_analyze_playerbot_intent,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,6 +41,152 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _dry_run_whisper_playerbot_intent(
+    db,
+    client,
+    config,
+    *,
+    event_id,
+    player_name,
+    player_message,
+    bot_guid,
+    bot_name,
+):
+    """Interpret a natural-language request sent to one Playerbot.
+
+    Whisper ownership is deterministic: the actual receiver is
+    the only candidate. No action is enqueued or executed here.
+    """
+    if not should_analyze_playerbot_intent(
+        player_message
+    ):
+        return None
+
+    cursor = db.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT class
+            FROM characters
+            WHERE guid = %s
+            LIMIT 1
+            """,
+            (bot_guid,),
+        )
+
+        row = cursor.fetchone()
+
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+
+    if not row:
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "channel=whisper bot=%s message=%r "
+            "result=no_candidate_state",
+            event_id,
+            player_name,
+            bot_name,
+            player_message,
+        )
+        return None
+
+    class_id = int(
+        row.get('class') or 0
+    )
+
+    class_name = WOW_CLASS_NAMES.get(
+        class_id,
+        '',
+    )
+
+    candidate = {
+        'guid': int(bot_guid),
+        'name': bot_name,
+        'class_id': class_id,
+        'class_name': class_name,
+    }
+
+    intent = classify_playerbot_intent(
+        client,
+        config,
+        player_message=player_message,
+        player_name=player_name,
+        source_channel='whisper',
+        bots=[
+            {
+                'name': bot_name,
+                'class': class_name,
+            },
+        ],
+    )
+
+    if not intent.get('is_action_request'):
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "channel=whisper bot=%s message=%r "
+            "result=no_action",
+            event_id,
+            player_name,
+            bot_name,
+            player_message,
+        )
+
+        return {
+            'intent': intent,
+            'resolved': [],
+        }
+
+    resolved = resolve_playerbot_action_candidates(
+        intent,
+        [candidate],
+        source_channel='whisper',
+        whisper_bot_guid=bot_guid,
+    )
+
+    resolved_summary = [
+        {
+            'guid': int(bot['guid']),
+            'name': bot['name'],
+            'class': bot.get(
+                'class_name',
+                '',
+            ),
+        }
+        for bot in resolved
+    ]
+
+    logger.info(
+        "[PLAYERBOT-DRYRUN] event=%s player=%s "
+        "channel=whisper bot=%s message=%r "
+        "action=%s arg=%r hint=%r "
+        "target_type=%r target_name=%r "
+        "confidence=%.2f resolved=%s",
+        event_id,
+        player_name,
+        bot_name,
+        player_message,
+        intent.get('action_key'),
+        intent.get('action_arg'),
+        intent.get('bot_hint'),
+        intent.get('target_type'),
+        intent.get('target_name'),
+        float(
+            intent.get('confidence') or 0.0
+        ),
+        resolved_summary,
+    )
+
+    return {
+        'intent': intent,
+        'resolved': resolved,
+    }
 
 
 def _load_bot_identity(db, bot_guid):
@@ -218,6 +373,7 @@ def _build_whisper_prompt(
     identity,
     bot_state,
     history,
+    playerbot_action_context="",
 ):
     traits = _format_traits(identity)
     history_text = _format_history(
@@ -244,22 +400,29 @@ PERSONALITY TRAITS:
 AUTHORITATIVE LIVE CHARACTER STATE:
 {state_text}
 
-The live state above is factual. If the player asks about
-your guild, level, location, activity, quests, equipment,
-money, professions, inventory, travel, or similar current
-WoW game-state facts, use that state and do not invent
-conflicting facts.
+{playerbot_action_context}
 
-These grounding restrictions apply to factual WoW game-state
-claims, not ordinary social conversation. Harmless opinions,
-jokes, preferences, real-world topics, and conversational
-personality may be improvised naturally when they do not
-contradict the conversation.
+The live state above is factual and authoritative for CURRENT
+observable/mechanical character state. If it conflicts with prior
+conversation about current level, exact quest progress, current
+inventory/equipment/money, current location/activity, travel state,
+or actual spell/service capability, use the live state.
 
-If a WoW game-state fact is unavailable, respond naturally
-without inventing precise numbers or specific possessions.
-Do not fall back to "idk" merely because a harmless social
-answer is not present in live state.
+General Wrath-era WoW knowledge is allowed even when it is not
+listed in live state. You may accurately discuss quests, zones,
+dungeons, mobs, NPCs, items, professions, class knowledge, leveling,
+and common mechanics.
+
+Plausible level/class-appropriate personal history, profession
+history/plans, quests previously done, preferences, and future plans
+may be improvised naturally and should remain consistent. Do not
+turn them into unsupported CURRENT progress, possessions, or
+observable local-world facts.
+
+Harmless opinions, jokes, real-world topics, and conversational
+personality may also be improvised naturally. Do not fall back to
+"idk" merely because general knowledge or harmless conversation is
+absent from live state.
 
 RECENT PRIVATE CONVERSATION:
 {history_text}
@@ -269,16 +432,27 @@ NEW WHISPER FROM {player_name}:
 
 Rules:
 - Respond as {bot_name}.
-- Usually write 1 short sentence; occasionally 2.
+- Match the amount of detail to the message. A greeting or simple
+  acknowledgement may be very short. Ordinary questions can use a full
+  sentence, and sustained or genuinely complex conversation may use one
+  or two natural sentences when useful.
 - Keep it natural for WoW whisper chat.
+- Different players type differently. Normal capitalization, complete
+  sentences, and punctuation are common; lowercase, shorthand,
+  fragments, abbreviations, missing punctuation, and occasional typos
+  are also possible. Do not force any one texting style into every reply.
 - Continue the existing conversation when there is one.
 - Treat recent conversation as authoritative for what you and
   the player have already said; do not casually contradict it.
+- Keep factual answers you already established consistent unless
+  authoritative live state actually changes.
+- When the player asks for clarification, become more specific when
+  supported instead of retreating to a vaguer answer.
 - Recognize and build on jokes, puns, references, corrections,
   and explanations introduced by the player.
 - You can joke, disagree, ask a question, or be casual.
-- Very short replies are fine when natural, but do not
-  repeatedly default to lol, idk, or similar filler.
+- Very short replies are fine when natural, but do not repeatedly
+  default to lol, idk, or similar filler.
 - Do not mention being an AI, bot, prompt, simulation,
   database, JSON, or language model.
 - Do not claim to perform game actions that were not
@@ -348,6 +522,56 @@ def process_player_bot_whisper_event(
     try:
         mark_event(db, event_id, 'processing')
 
+        playerbot_action_result = None
+
+        try:
+            playerbot_action_result = (
+                _dry_run_whisper_playerbot_intent(
+                    db,
+                    client,
+                    config,
+                    event_id=event_id,
+                    player_name=player_name,
+                    player_message=player_message,
+                    bot_guid=bot_guid,
+                    bot_name=bot_name,
+                )
+            )
+
+            playerbot_action_result = (
+                enqueue_live_playerbot_buff_actions(
+                    db,
+                    playerbot_action_result,
+                    player_guid=player_guid,
+                    player_name=player_name,
+                    source_channel='whisper',
+                    event_id=event_id,
+                )
+            )
+        except Exception:
+            logger.error(
+                "[PLAYERBOT-DRYRUN] failed "
+                "event=%s channel=whisper",
+                event_id,
+                exc_info=True,
+            )
+
+        playerbot_action_context = (
+            build_playerbot_action_speech_context(
+                playerbot_action_result,
+                dry_run=not bool(
+                    isinstance(
+                        playerbot_action_result,
+                        dict,
+                    )
+                    and playerbot_action_result.get(
+                        'queue_accepted'
+                    ) is True
+                ),
+                scope_label="private whisper",
+            )
+        )
+
         identity = _load_bot_identity(
             db,
             bot_guid,
@@ -368,6 +592,9 @@ def process_player_bot_whisper_event(
             identity,
             bot_state,
             history,
+            playerbot_action_context=(
+                playerbot_action_context
+            ),
         )
 
         from chatter_memory import (

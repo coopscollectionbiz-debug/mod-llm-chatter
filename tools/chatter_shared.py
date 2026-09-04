@@ -636,6 +636,7 @@ def build_bot_state_context(extra_data):
                 'equipment',
                 'inventory',
                 'professions',
+                'capabilities',
                 'quests',
                 'activity',
                 'travel_state',
@@ -774,6 +775,29 @@ def build_bot_state_context(extra_data):
         if combat_parts:
             lines.append(
                 "Combat: " + ", ".join(combat_parts)
+            )
+
+    capabilities = state.get('capabilities') or {}
+    if isinstance(capabilities, dict) and capabilities:
+        capability_parts = []
+
+        capability_labels = (
+            ('can_portal', 'can_portal'),
+            ('can_teleport', 'can_teleport'),
+            ('can_conjure_food', 'can_conjure_food'),
+            ('can_conjure_water', 'can_conjure_water'),
+        )
+
+        for key, label in capability_labels:
+            if key in capabilities:
+                capability_parts.append(
+                    f"{label}={bool(capabilities.get(key))}"
+                )
+
+        if capability_parts:
+            lines.append(
+                "Capabilities: "
+                + ", ".join(capability_parts)
             )
 
     quests = state.get('quests') or []
@@ -2414,6 +2438,297 @@ def run_single_reaction(
         'emote': emote,
         'error_reason': None,
     }
+
+
+def _routing_has_word(text: str, word: str) -> bool:
+    text = str(text or '').casefold()
+    word = str(word or '').casefold().strip()
+
+    if not text or not word:
+        return False
+
+    return re.search(
+        r'(?<![a-z])'
+        + re.escape(word)
+        + r'(?![a-z])',
+        text,
+    ) is not None
+
+
+_WEAPON_ROUTING_SUBCLASSES = {
+    'axe': {0, 1},
+    'axes': {0, 1},
+    'bow': {2},
+    'bows': {2},
+    'gun': {3},
+    'guns': {3},
+    'mace': {4, 5},
+    'maces': {4, 5},
+    'polearm': {6},
+    'polearms': {6},
+    'sword': {7, 8},
+    'swords': {7, 8},
+    'staff': {10},
+    'staves': {10},
+    'fist weapon': {13},
+    'fist weapons': {13},
+    'dagger': {15},
+    'daggers': {15},
+    'thrown weapon': {16},
+    'thrown weapons': {16},
+    'crossbow': {18},
+    'crossbows': {18},
+    'wand': {19},
+    'wands': {19},
+    'fishing pole': {20},
+    'fishing poles': {20},
+}
+
+
+def _routing_state(candidate: dict) -> dict:
+    if not isinstance(candidate, dict):
+        return {}
+
+    state = candidate.get('bot_state') or {}
+
+    if isinstance(state, str):
+        try:
+            state = json.loads(state)
+        except Exception:
+            return {}
+
+    if not isinstance(state, dict):
+        return {}
+
+    nested = state.get('bot_state')
+
+    if isinstance(nested, dict):
+        return nested
+
+    return state
+
+
+def _looks_like_player_retarget(message: str) -> bool:
+    """Return True for strong current-recipient language.
+
+    A topic alone does not steal an existing conversation.
+    """
+    text = str(message or '').strip().casefold()
+
+    if not text:
+        return False
+
+    direct_starts = (
+        'hey ',
+        'yo ',
+        'nice ',
+        'cool ',
+        'sick ',
+        'sweet ',
+        'love that ',
+        'like that ',
+        'look at that ',
+    )
+
+    if text.startswith(direct_starts):
+        return True
+
+    padded = f' {text} '
+
+    direct_fragments = (
+        ' your ',
+        " you're ",
+        ' youre ',
+        ' you are ',
+        ' that shield',
+        ' that staff',
+        ' that mace',
+        ' that sword',
+        ' that axe',
+        ' that bow',
+        ' that wand',
+        ' that dagger',
+        ' that mount',
+        ' that pet',
+    )
+
+    return any(
+        fragment in padded
+        for fragment in direct_fragments
+    )
+
+
+def score_player_message_state_match(
+    message: str,
+    candidate: dict,
+) -> tuple:
+    """Score authoritative CURRENT state for routing.
+
+    Explicit recipients must be resolved before calling this.
+    """
+    state = _routing_state(candidate)
+
+    if not state:
+        return 0, []
+
+    message = str(message or '')
+    score = 0
+    reasons = []
+
+    identity = state.get('identity') or {}
+
+    class_name = str(
+        identity.get('class') or ''
+    ).strip().casefold()
+
+    race_name = str(
+        identity.get('race') or ''
+    ).strip().casefold()
+
+    if (
+        class_name
+        and _routing_has_word(message, class_name)
+    ):
+        score += 30
+        reasons.append('class')
+
+    if (
+        race_name
+        and _routing_has_word(message, race_name)
+    ):
+        score += 20
+        reasons.append('race')
+
+    requested_subclasses = set()
+
+    for label, subclasses in (
+        _WEAPON_ROUTING_SUBCLASSES.items()
+    ):
+        if _routing_has_word(message, label):
+            requested_subclasses.update(subclasses)
+
+    if requested_subclasses:
+        for item in state.get('equipment') or []:
+            if not isinstance(item, dict):
+                continue
+
+            try:
+                item_class = int(
+                    item.get('item_class', -1)
+                )
+                item_subclass = int(
+                    item.get('item_subclass', -1)
+                )
+            except (TypeError, ValueError):
+                continue
+
+            if (
+                item_class == 2
+                and item_subclass
+                in requested_subclasses
+            ):
+                score += 50
+                reasons.append('equipment')
+                break
+
+    travel = state.get('travel_state') or {}
+
+    if isinstance(travel, dict):
+        if (
+            (
+                _routing_has_word(message, 'mount')
+                or _routing_has_word(
+                    message,
+                    'mounted',
+                )
+            )
+            and bool(travel.get('mounted'))
+        ):
+            score += 35
+            reasons.append('mounted')
+
+        if (
+            _routing_has_word(message, 'flying')
+            and (
+                bool(travel.get('flying'))
+                or bool(travel.get('taxi_flight'))
+            )
+        ):
+            score += 35
+            reasons.append('flying')
+
+        if (
+            _routing_has_word(message, 'swimming')
+            and str(
+                travel.get('mode') or ''
+            ).casefold() == 'swimming'
+        ):
+            score += 35
+            reasons.append('swimming')
+
+    return score, reasons
+
+
+def find_player_message_state_matches(
+    message: str,
+    candidates,
+):
+    """Find strongest recipients established by CURRENT state."""
+    if not _looks_like_player_retarget(message):
+        return []
+
+    scored = []
+
+    for candidate in candidates or []:
+        score, reasons = (
+            score_player_message_state_match(
+                message,
+                candidate,
+            )
+        )
+
+        if score > 0:
+            scored.append(
+                (score, candidate, reasons)
+            )
+
+    if not scored:
+        return []
+
+    best = max(
+        row[0]
+        for row in scored
+    )
+
+    return [
+        {
+            'candidate': candidate,
+            'score': score,
+            'reasons': reasons,
+        }
+        for score, candidate, reasons in scored
+        if score == best
+    ]
+
+
+def player_premise_rule(
+    explicit_recipient: bool = False,
+) -> str:
+    if explicit_recipient:
+        return (
+            "The player is talking to this recipient. "
+            "If the player's premise conflicts with this "
+            "recipient's authoritative live state, do not "
+            "reinterpret it as referring to another bot and "
+            "do not make the premise true. Natural confusion, "
+            "disagreement, or a brief correction is allowed."
+        )
+
+    return (
+        "Never make a player's factual premise true merely "
+        "to preserve conversational continuity. Authoritative "
+        "current state wins over the player's assumption."
+    )
 
 
 def find_addressed_bot(

@@ -315,32 +315,71 @@ def build_dynamic_guidelines(
         ]
     else:
         guidelines = [
-            "Sound like a real WoW player typing while "
-            "actually playing the game — not an NPC, not "
-            "a fantasy character, not a tour guide, and "
-            "not flowery or poetic.",
-            "You are the PLAYER controlling the character. "
-            "Race, class, level, location, quests, and gear "
-            "are game context, not a reason to roleplay.",
-            "Keep chat casual and low-effort. Lowercase, "
-            "missing punctuation, sentence fragments, "
-            "abbreviations, occasional typos, and one-word "
-            "replies are all normal.",
-            "Use normal WoW shorthand naturally when it fits: "
-            "gz, grats, ty, np, mb, brb, afk, oom, lfg, inv, "
-            "sec, omw, dps, tank, heals, pull, adds, trash, "
-            "aggro, wipe, need, greed, roll.",
-            "Internet slang like lol, lmao, tbh, ngl, bruh, "
-            "rip, and similar casual internet slang are fine, "
-            "but do not force slang or memes into every message.",
-            "Players can joke, complain, misunderstand something, "
-            "be distracted, answer with one word, change subjects, "
-            "or say something completely mundane.",
-            "Do not narrate gameplay, describe scenery like a "
-            "story, or turn ordinary gameplay into a meaningful "
-            "or dramatic moment.",
-            "Do not try to make every message clever, funny, "
-            "helpful, emotional, sarcastic, or interesting.",
+            "Simulate a human player who happens to be playing WoW, "
+            "not a bot generating WoW-themed dialogue. Do not perform "
+            "or demonstrate being a WoW player.",
+            "You are the PLAYER controlling the character. Race, "
+            "class, level, location, quests, gear, mobs, and current "
+            "activity are background context, not required subjects "
+            "for conversation.",
+            "Before writing, use the human-interest test: would a real "
+            "player actually bother pressing Enter to type this? There "
+            "should be a plausible social reason such as asking, "
+            "answering, warning, coordinating, inviting, reacting, "
+            "complaining, joking, disagreeing, continuing a thread, "
+            "or casually sharing a thought.",
+            "Do not narrate routine gameplay. Avoid announcing normal "
+            "kills, pulls, travel, gathering, quest progress, loot, "
+            "movement, ability use, or other routine actions merely "
+            "because that information appears in context.",
+            "Game state is evidence, not a topic assignment. Never "
+            "mention a zone, quest, mob, item, class, profession, "
+            "dungeon, or activity merely to prove you noticed it.",
+            "Conversation continuity outranks ambient game context. "
+            "When a conversation is already happening, stay with that "
+            "thread unless there is a natural reason to change it.",
+            "Topic drift is normal. Real players talk about WoW but "
+            "also other games, movies, TV, music, sports, technology, "
+            "internet culture, food, work, school, addons, server "
+            "gossip, plans, and random everyday things.",
+            "Normal-mode players live in the present day. Contemporary "
+            "real-world subjects and current entertainment are valid "
+            "conversation topics when reliable fresh context about "
+            "them has been supplied.",
+            "For CURRENT real-world facts, use only fresh current-topic "
+            "context supplied in the prompt. If no fresh context "
+            "supports a recent release, announcement, score, event, "
+            "trailer, news story, or date-sensitive claim, do not "
+            "invent specifics. You may still express timeless or "
+            "clearly subjective opinions.",
+            "Mundane is realistic. A short answer, partial thought, "
+            "one-word reply, correction, practical question, or "
+            "unremarkable comment is often better than a clever line.",
+            "Players do not need to agree. Casual disagreement, "
+            "preferences, imperfect opinions, misunderstandings, and "
+            "minor friction are normal. Do not make everyone friendly, "
+            "helpful, impressed, or enthusiastic by default.",
+            "Hard live WoW state must remain grounded, but ordinary "
+            "player opinions and remembered game knowledge may be "
+            "uncertain or imperfect. 'i think' or 'pretty sure' can "
+            "sound more human than pretending to know everything.",
+            "Keep chat casual and low-effort. Lowercase, missing "
+            "punctuation, fragments, abbreviations, occasional typos, "
+            "and one-word replies are all normal. Do not deliberately "
+            "insert a typo into every message.",
+            "Use WoW shorthand naturally when it fits: gz, grats, ty, "
+            "np, mb, brb, afk, oom, lfg, inv, sec, omw, dps, tank, "
+            "heals, pull, adds, trash, aggro, wipe, need, greed, roll. "
+            "Do not force jargon when ordinary wording is more natural.",
+            "Internet slang such as lol, lmao, tbh, ngl, bruh, and rip "
+            "is available vocabulary, not a style requirement. Use it "
+            "only when the meaning or conversational moment naturally "
+            "calls for it. In particular, do not automatically append "
+            "lol, lmao, or haha to an ordinary statement or question "
+            "just to make it sound casual. Avoid repeating the same "
+            "filler tic across nearby messages.",
+            "Do not try to make every message witty, funny, dramatic, "
+            "helpful, emotional, sarcastic, polished, or memorable.",
             "NEVER use brackets [] around names "
             "(quests, items, zones, creatures, NPCs, factions) - "
             "write everything as plain text. Only use {quest:Name}, "
@@ -387,7 +426,7 @@ def build_dynamic_guidelines(
 
     if include_humor is None:
         include_humor = random.random() < (
-            0.35 if is_rp else 0.40
+            0.35 if is_rp else 0.15
         )
     if include_humor:
         if is_rp:
@@ -414,11 +453,13 @@ def build_dynamic_guidelines(
         ]
     else:
         extras = [
-            "Common terms ok (lfg, lf, ty, np)",
-            "Can include a typo for realism",
-            "Casual and natural chat style",
-            "Brief and direct",
-            "A bit of playful trash talk is fine here",
+            "A very short or boring message is completely fine",
+            "A practical question is more realistic than an observation",
+            "Players sometimes type half a thought and leave it there",
+            "Casual disagreement or a different opinion is fine",
+            "The current game activity does not have to be the subject",
+            "A natural subject change is fine when conversation leads there",
+            "Brief and direct is usually better than polished",
         ]
     if random.random() < 0.5:
         guidelines.append(random.choice(extras))
@@ -480,10 +521,13 @@ def build_plain_statement_prompt(
             parts.append(rp_ctx)
     else:
         parts.append(
-            f"Generate a brief WoW General chat message "
-            f"from a player in {bot['zone']}. Speak as "
-            f"a player talking about the game — not "
-            f"roleplaying your character."
+            f"Generate one brief General chat message from "
+            f"a human player currently playing WoW in "
+            f"{bot['zone']}. They are a person using server "
+            f"chat, not a character roleplaying and not a "
+            f"narrator. The message may be about WoW, another "
+            f"current interest, or ordinary life; their present "
+            f"in-game activity does not need to be the subject."
         )
 
     if topic:
@@ -614,10 +658,10 @@ def build_plain_statement_prompt(
         )
     else:
         guidelines.append(
-            "Speak as a player discussing the game — "
-            "you can mention your race, class, zone, "
-            "or abilities, but as a player, not as "
-            "your character roleplaying"
+            "Speak like someone using a real server chat channel. "
+            "WoW is what they are doing, not necessarily what they "
+            "are talking about. Mention in-game context only when "
+            "a real player would have a reason to bring it up."
         )
     if is_rp:
         guidelines.append(
@@ -1242,16 +1286,24 @@ def build_plain_conversation_prompt(
     elif bot_count == 2:
         parts.append(
             f"Generate a casual General chat exchange between "
-            f"two WoW players in {bots[0]['zone']}. "
-            f"They speak as players discussing the game, "
-            f"not roleplaying their characters."
+            f"two human players currently playing WoW in "
+            f"{bots[0]['zone']}. They are people using a public "
+            f"server chat channel, not characters roleplaying. "
+            f"The conversation may be about WoW, another game, "
+            f"entertainment, current interests, everyday life, "
+            f"or whatever naturally gives one player a reason "
+            f"to say something to the other."
         )
     else:
         parts.append(
             f"Generate a casual General chat exchange between "
-            f"{bot_count} WoW players in {bots[0]['zone']}. "
-            f"They speak as players discussing the game, "
-            f"not roleplaying their characters."
+            f"{bot_count} human players currently playing WoW in "
+            f"{bots[0]['zone']}. They are people using a public "
+            f"server chat channel, not characters roleplaying. "
+            f"The conversation may be about WoW, another game, "
+            f"entertainment, current interests, everyday life, "
+            f"or whatever naturally gives these players a reason "
+            f"to talk to one another."
         )
 
     if topic:
@@ -1452,13 +1504,15 @@ def build_plain_conversation_prompt(
         ]
     else:
         topics = [
-            "asking for directions or help",
-            "chatting about what players are doing in the zone",
-            "looking for group",
-            "sharing tips",
-            "random banter",
-            "complaining about something",
-            "celebrating something",
+            "a practical question one player actually wants answered",
+            "a useful warning, tip, recommendation, or correction",
+            "looking for a group or asking whether anyone wants to join something",
+            "a casual opinion or mild disagreement about WoW",
+            "server, guild, addon, class, dungeon, or player-culture talk",
+            "another game, movie, show, sport, technology, or current interest",
+            "food, work, school, weekend plans, or ordinary everyday life",
+            "a dumb joke, small complaint, misunderstanding, or random argument",
+            "mundane small talk with no need to be interesting or memorable",
         ]
     if random.random() < 0.5:
         parts.append(
@@ -2439,9 +2493,12 @@ def build_event_conversation_prompt(
     else:
         parts.append(
             f"Generate a casual General chat exchange between "
-            f"{bot_count} WoW players in {bots[0]['zone']}. "
-            f"They speak as players discussing the game, not "
-            f"roleplaying their characters."
+            f"{bot_count} human players currently playing WoW in "
+            f"{bots[0]['zone']}. They are people using a public "
+            f"server chat channel, not characters roleplaying. "
+            f"The event below is context for why chat may happen, "
+            f"not automatically the only subject unless the later "
+            f"event-specific instructions say otherwise."
         )
     parts.append(f"Speakers: {', '.join(bot_names)}")
     parts.append(

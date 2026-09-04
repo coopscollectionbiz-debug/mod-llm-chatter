@@ -794,9 +794,19 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
 {
     HandleProximityPlayerSay(player, type, lang, msg);
 
-    if (type != CHAT_MSG_PARTY
-        && type != CHAT_MSG_PARTY_LEADER)
+    bool isPartyChat =
+        type == CHAT_MSG_PARTY
+        || type == CHAT_MSG_PARTY_LEADER;
+
+    bool isRaidChat =
+        type == CHAT_MSG_RAID
+        || type == CHAT_MSG_RAID_LEADER;
+
+    if (!isPartyChat && !isRaidChat)
         return;
+
+    std::string sourceChannel =
+        isRaidChat ? "raid" : "party";
 
     if (!sLLMChatterConfig->IsEnabled()
         || !sLLMChatterConfig->_useGroupChatter)
@@ -812,7 +822,7 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
         if (!IsMultiBotAddonPayload(msg))
         {
             LogIgnoredAddonChat(
-                player, type, msg, "party");
+                player, type, msg, sourceChannel.c_str());
         }
         return;
     }
@@ -963,10 +973,15 @@ for (auto const& ref : group->GetMemberSlots())
 std::string extraData = "{"
         "\"player_name\":\"" +
             JsonEscape(playerName) + "\","
+        "\"player_guid\":" +
+            std::to_string(
+                player->GetGUID().GetCounter()) + ","
         "\"player_gender\":" +
             std::to_string(player->getGender()) + ","
         "\"player_message\":\"" +
             JsonEscape(safeMsg) + "\","
+        "\"channel\":\"" +
+            sourceChannel + "\","
         "\"group_id\":" +
             std::to_string(groupId) +
         "}";

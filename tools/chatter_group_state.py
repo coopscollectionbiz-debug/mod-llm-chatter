@@ -1564,6 +1564,43 @@ def get_group_members(db, group_id):
     ]
 
 
+def has_online_real_group_player(db, group_id):
+    """Return True only when the current group contains
+    at least one online real player.
+
+    Historical chat/events are intentionally ignored here.
+    This is a generation-cost gate, so only authoritative
+    current membership counts.
+    """
+    try:
+        group_id = int(group_id or 0)
+    except (TypeError, ValueError):
+        return False
+
+    if not group_id:
+        return False
+
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT 1
+        FROM group_member gm
+        JOIN characters c
+          ON c.guid = gm.memberGuid
+        JOIN acore_auth.account a
+          ON a.id = c.account
+        LEFT JOIN llm_group_bot_traits t
+          ON t.group_id = gm.guid
+         AND t.bot_guid = gm.memberGuid
+        WHERE gm.guid = %s
+          AND c.online = 1
+          AND a.username NOT LIKE 'RNDBOT%%'
+          AND t.bot_guid IS NULL
+        LIMIT 1
+    """, (group_id,))
+
+    return cursor.fetchone() is not None
+
+
 def get_group_player_name(db, group_id):
     """Get the real player's name from chat history
     or player_msg events. Returns name or None.

@@ -357,6 +357,7 @@ public:
         {
             _lastDeliveryTime = now;
             DeliverPendingMessages();
+            UpdateProximityChatHolds();
         }
 
         // Normal outdoor-zone ambient chatter keeps the

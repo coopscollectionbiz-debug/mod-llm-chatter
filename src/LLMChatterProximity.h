@@ -8,6 +8,7 @@
 class Player;
 
 void CheckProximityChatter();
+void UpdateProximityChatHolds();
 void HandleProximityPlayerSay(
     Player* player, uint32 type, uint32 language,
     std::string const& msg);

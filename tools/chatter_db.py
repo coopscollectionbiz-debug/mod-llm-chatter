@@ -1490,6 +1490,110 @@ def get_real_player_guid_for_group(db, group_id):
     return 0
 
 
+def get_group_playerbot_candidates(db, group_id):
+    """Return authoritative PlayerBot candidates for a group.
+
+    Group membership comes from llm_group_bot_traits, which
+    is maintained by the C++ PlayerBots integration. Character
+    class/race/level/online state comes from characters.
+
+    This helper only reads candidate identity/state. It does
+    not classify intent, enqueue actions, or execute gameplay.
+    """
+    try:
+        group_id = int(group_id or 0)
+    except (TypeError, ValueError):
+        return []
+
+    if db is None or group_id <= 0:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        cursor.execute(
+            """
+            SELECT
+                t.bot_guid AS guid,
+                t.bot_name AS name,
+                c.class AS class_id,
+                c.race AS race_id,
+                c.level AS level,
+                c.online AS online,
+                t.role AS role,
+                t.zone AS zone,
+                t.area AS area,
+                t.map AS map,
+                t.bot_state_json AS bot_state_json,
+                t.bot_state_updated_at
+                    AS bot_state_updated_at
+            FROM llm_group_bot_traits t
+            JOIN characters c
+              ON c.guid = t.bot_guid
+            WHERE t.group_id = %s
+              AND c.online = 1
+            ORDER BY t.bot_guid
+            """,
+            (group_id,),
+        )
+
+        rows = cursor.fetchall() or []
+
+        candidates = []
+
+        for row in rows:
+            try:
+                guid = int(
+                    row.get('guid') or 0
+                )
+                class_id = int(
+                    row.get('class_id') or 0
+                )
+            except (TypeError, ValueError):
+                continue
+
+            name = str(
+                row.get('name') or ''
+            ).strip()
+
+            if (
+                guid <= 0
+                or not name
+                or class_id <= 0
+            ):
+                continue
+
+            candidate = dict(row)
+            candidate['guid'] = guid
+            candidate['name'] = name
+            candidate['class_id'] = class_id
+            candidate['online'] = bool(
+                int(row.get('online') or 0)
+            )
+
+            candidates.append(candidate)
+
+        return candidates
+
+    except Exception:
+        logger.error(
+            "get_group_playerbot_candidates failed "
+            "for group %s",
+            group_id,
+            exc_info=True,
+        )
+        return []
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+
 def get_group_location(db, group_id):
     """Get the group's current zone, area, and map
     from llm_group_bot_traits.
@@ -2150,3 +2254,496 @@ def fail_event(db, event_id, event_type, reason,
         exc_info=exc_info,
     )
     mark_event(db, event_id, 'skipped')
+
+
+# PlayerBot gameplay requests intentionally use a separate
+# queue from generated chat. The LLM may eventually classify
+# an intent, but only these canonical action families can
+# enter the C++ execution/validation path.
+PLAYERBOT_ACTION_KEYS = frozenset({
+    'cast_spell',
+    'give_item',
+    'trade',
+    'heal',
+    'resurrect',
+    'dispel',
+    'crowd_control',
+    'follow',
+    'stay',
+    'attack',
+    'rebuff',
+    'give_leader',
+    'lockpick_trade_item',
+})
+
+PLAYERBOT_ACTION_CHANNELS = frozenset({
+    'party',
+    'raid',
+    'whisper',
+    'say',
+    'guild',
+    'general',
+    'channel',
+})
+
+# Channels permitted to enqueue immediate gameplay mutations.
+# Public discovery and Guild chatter may reserve services, but
+# must never write directly into the live action pipeline.
+PLAYERBOT_LIVE_ACTION_CHANNELS = frozenset({
+    'party',
+    'raid',
+    'whisper',
+    'say',
+})
+
+PLAYERBOT_ACTION_TARGET_TYPES = frozenset({
+    '',
+    'self',
+    'player',
+    'bot',
+    'unit',
+    'none',
+})
+
+
+PLAYERBOT_SERVICE_ACTION_KEYS = frozenset({
+    'lockpick_trade_item',
+})
+
+PLAYERBOT_SERVICE_ACTIVE_STATUSES = frozenset({
+    'waiting_party',
+    'routing',
+    'ready',
+    'pending',
+    'claimed',
+    'validated',
+    'processing',
+})
+
+
+def reserve_playerbot_service_action(
+    db,
+    *,
+    player_guid,
+    bot_guid,
+    source_channel,
+    action_key,
+    action_arg=None,
+    target_type='player',
+    target_guid=None,
+    target_name=None,
+    group_id=None,
+    event_id=None,
+    waiting_seconds=120,
+):
+    """Reserve one bot for a party-gated service workflow.
+
+    This does not execute a PlayerBots action and does not
+    create any movement/routing instruction.
+
+    The initial state is waiting_party. C++ may later advance
+    the same row to routing after confirming the requesting
+    player and bot are actually in the same party.
+    """
+    player_guid = int(
+        player_guid or 0
+    )
+    bot_guid = int(
+        bot_guid or 0
+    )
+    group_id = int(
+        group_id or 0
+    )
+    event_id = int(
+        event_id or 0
+    )
+
+    if not player_guid:
+        raise ValueError(
+            "player_guid is required for service reservation"
+        )
+
+    if not bot_guid:
+        raise ValueError(
+            "bot_guid is required for service reservation"
+        )
+
+    action_key = str(
+        action_key or ''
+    ).strip().lower()
+
+    if action_key not in PLAYERBOT_SERVICE_ACTION_KEYS:
+        raise ValueError(
+            "Unsupported PlayerBot service action_key: "
+            f"{action_key!r}"
+        )
+
+    source_channel = str(
+        source_channel or ''
+    ).strip().lower()
+
+    if source_channel not in PLAYERBOT_ACTION_CHANNELS:
+        raise ValueError(
+            "Unsupported PlayerBot service source_channel: "
+            f"{source_channel!r}"
+        )
+
+    target_type = str(
+        target_type or ''
+    ).strip().lower()
+
+    if target_type not in PLAYERBOT_ACTION_TARGET_TYPES:
+        raise ValueError(
+            "Unsupported PlayerBot service target_type: "
+            f"{target_type!r}"
+        )
+
+    target_guid = int(
+        target_guid or 0
+    )
+
+    action_arg = (
+        str(action_arg).strip()
+        if action_arg is not None
+        else None
+    )
+
+    if action_arg is not None:
+        if not action_arg:
+            action_arg = None
+        elif len(action_arg) > 255:
+            raise ValueError(
+                "PlayerBot service action_arg exceeds "
+                "255 characters"
+            )
+
+    target_name = (
+        str(target_name).strip()
+        if target_name is not None
+        else None
+    )
+
+    if target_name is not None:
+        if not target_name:
+            target_name = None
+        elif len(target_name) > 64:
+            raise ValueError(
+                "PlayerBot service target_name exceeds "
+                "64 characters"
+            )
+
+    try:
+        waiting_seconds = int(
+            waiting_seconds
+        )
+    except (TypeError, ValueError):
+        waiting_seconds = 120
+
+    waiting_seconds = max(
+        30,
+        min(
+            300,
+            waiting_seconds,
+        ),
+    )
+
+    cursor = db.cursor()
+
+    try:
+        placeholders = ', '.join(
+            ['%s']
+            * len(
+                PLAYERBOT_SERVICE_ACTIVE_STATUSES
+            )
+        )
+
+        active_statuses = tuple(
+            sorted(
+                PLAYERBOT_SERVICE_ACTIVE_STATUSES
+            )
+        )
+
+        cursor.execute(
+            f"""
+            SELECT id
+            FROM llm_playerbot_actions
+            WHERE bot_guid = %s
+              AND action_key IN (
+                  'lockpick_trade_item'
+              )
+              AND status IN ({placeholders})
+              AND (
+                  expires_at IS NULL
+                  OR expires_at > NOW()
+              )
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (
+                bot_guid,
+                *active_statuses,
+            ),
+        )
+
+        existing = cursor.fetchone()
+
+        if existing:
+            return 0
+
+        cursor.execute(
+            """
+            INSERT INTO llm_playerbot_actions (
+                event_id,
+                player_guid,
+                bot_guid,
+                group_id,
+                source_channel,
+                action_key,
+                action_arg,
+                target_type,
+                target_guid,
+                target_name,
+                status,
+                result_code,
+                result_detail,
+                expires_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                'waiting_party',
+                NULL,
+                'waiting for party',
+                DATE_ADD(
+                    NOW(),
+                    INTERVAL %s SECOND
+                )
+            )
+            """,
+            (
+                event_id or None,
+                player_guid,
+                bot_guid,
+                group_id or None,
+                source_channel,
+                action_key,
+                action_arg,
+                target_type or None,
+                target_guid or None,
+                target_name,
+                waiting_seconds,
+            ),
+        )
+
+        reservation_id = int(
+            cursor.lastrowid or 0
+        )
+
+        db.commit()
+
+        if not reservation_id:
+            raise RuntimeError(
+                "PlayerBot service reservation "
+                "insert returned no id"
+            )
+
+        return reservation_id
+
+    finally:
+        cursor.close()
+
+
+def enqueue_playerbot_action(
+    db,
+    *,
+    player_guid,
+    bot_guid,
+    source_channel,
+    action_key,
+    action_arg=None,
+    target_type=None,
+    target_guid=None,
+    target_name=None,
+    group_id=None,
+    event_id=None,
+    expires_seconds=15,
+):
+    """Queue one canonical PlayerBot gameplay request.
+
+    This function does not execute PlayerBots commands and
+    does not accept arbitrary PlayerBots action names.
+
+    The requesting player and acting bot must already have
+    been resolved to GUIDs by the caller. C++ performs the
+    authoritative live-world validation immediately before
+    any eventual action execution.
+    """
+    player_guid = int(player_guid or 0)
+    bot_guid = int(bot_guid or 0)
+    group_id = int(group_id or 0)
+    event_id = int(event_id or 0)
+
+    if not player_guid:
+        raise ValueError(
+            "player_guid is required for PlayerBot action"
+        )
+
+    if not bot_guid:
+        raise ValueError(
+            "bot_guid is required for PlayerBot action"
+        )
+
+    action_key = str(action_key or '').strip().lower()
+
+    if action_key not in PLAYERBOT_ACTION_KEYS:
+        raise ValueError(
+            "Unsupported PlayerBot action_key: "
+            f"{action_key!r}"
+        )
+
+    source_channel = str(
+        source_channel or ''
+    ).strip().lower()
+
+    if source_channel not in PLAYERBOT_LIVE_ACTION_CHANNELS:
+        raise ValueError(
+            "Unsupported live PlayerBot source_channel: "
+            f"{source_channel!r}"
+        )
+
+    target_type = str(
+        target_type or ''
+    ).strip().lower()
+
+    if target_type not in PLAYERBOT_ACTION_TARGET_TYPES:
+        raise ValueError(
+            "Unsupported PlayerBot target_type: "
+            f"{target_type!r}"
+        )
+
+    action_arg = (
+        str(action_arg).strip()
+        if action_arg is not None
+        else None
+    )
+
+    target_name = (
+        str(target_name).strip()
+        if target_name is not None
+        else None
+    )
+
+    target_guid = int(target_guid or 0)
+
+    if action_arg is not None:
+        if not action_arg:
+            action_arg = None
+        elif len(action_arg) > 255:
+            raise ValueError(
+                "PlayerBot action_arg exceeds 255 characters"
+            )
+
+    if target_name is not None:
+        if not target_name:
+            target_name = None
+        elif len(target_name) > 64:
+            raise ValueError(
+                "PlayerBot target_name exceeds 64 characters"
+            )
+
+    try:
+        expires_seconds = int(expires_seconds)
+    except (TypeError, ValueError):
+        expires_seconds = 15
+
+    # Physical-world requests should never sit around long
+    # enough to execute against stale player/bot positions.
+    expires_seconds = max(
+        5,
+        min(60, expires_seconds),
+    )
+
+    cursor = db.cursor()
+
+    try:
+        # Bridge retries of one chatter event must not create a
+        # second gameplay request for the same acting bot.
+        if event_id:
+            cursor.execute(
+                """
+                SELECT id
+                FROM llm_playerbot_actions
+                WHERE event_id = %s
+                  AND player_guid = %s
+                  AND bot_guid = %s
+                  AND action_key = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    event_id,
+                    player_guid,
+                    bot_guid,
+                    action_key,
+                ),
+            )
+
+            existing = cursor.fetchone()
+
+            if existing:
+                return int(existing[0])
+
+        cursor.execute(
+            """
+            INSERT INTO llm_playerbot_actions (
+                event_id,
+                player_guid,
+                bot_guid,
+                group_id,
+                source_channel,
+                action_key,
+                action_arg,
+                target_type,
+                target_guid,
+                target_name,
+                expires_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                DATE_ADD(
+                    NOW(),
+                    INTERVAL %s SECOND
+                )
+            )
+            """,
+            (
+                event_id or None,
+                player_guid,
+                bot_guid,
+                group_id or None,
+                source_channel,
+                action_key,
+                action_arg,
+                target_type or None,
+                target_guid or None,
+                target_name,
+                expires_seconds,
+            ),
+        )
+
+        action_id = int(
+            cursor.lastrowid or 0
+        )
+
+        db.commit()
+
+        if not action_id:
+            raise RuntimeError(
+                "PlayerBot action insert returned no id"
+            )
+
+        return action_id
+
+    finally:
+        cursor.close()

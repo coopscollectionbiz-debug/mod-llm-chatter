@@ -21,6 +21,8 @@
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "RandomPlayerbotMgr.h"
 #include "Transport.h"
 #include "Util.h"
@@ -1883,6 +1885,14 @@ std::string BuildBotEquipmentStateJson(Player* player)
         json += "\"name\":\"" +
             JsonEscape(proto->Name1) + "\",";
 
+        // Authoritative equipment type for conversational
+        // speaker routing in non-whisper channels.
+        json += "\"item_class\":" +
+            std::to_string(proto->Class) + ",";
+
+        json += "\"item_subclass\":" +
+            std::to_string(proto->SubClass) + ",";
+
         json += "\"count\":" +
             std::to_string(item->GetCount()) + ",";
 
@@ -2110,6 +2120,83 @@ std::string BuildBotProfessionStateJson(Player* player)
 
     return json;
 }
+std::string BuildBotCapabilityStateJson(Player* player)
+{
+    if (!player)
+    {
+        return
+            "\"capabilities\":{"
+            "\"can_portal\":false,"
+            "\"can_teleport\":false,"
+            "\"can_conjure_food\":false,"
+            "\"can_conjure_water\":false"
+            "}";
+    }
+
+    bool canPortal = false;
+    bool canTeleport = false;
+    bool canConjureFood = false;
+    bool canConjureWater = false;
+
+    PlayerSpellMap const& spellMap =
+        player->GetSpellMap();
+
+    for (auto const& pair : spellMap)
+    {
+        uint32 spellId = pair.first;
+
+        // HasActiveSpell is authoritative for spells that are
+        // currently active/usable in the player's spellbook.
+        if (!player->HasActiveSpell(spellId))
+            continue;
+
+        SpellInfo const* spellInfo =
+            sSpellMgr->GetSpellInfo(spellId);
+
+        if (!spellInfo)
+            continue;
+
+        char const* rawName =
+            spellInfo->SpellName[0];
+
+        if (!rawName || rawName[0] == '\0')
+            continue;
+
+        std::string name(rawName);
+
+        if (name.rfind("Portal:", 0) == 0)
+            canPortal = true;
+        else if (name.rfind("Teleport:", 0) == 0)
+            canTeleport = true;
+        else if (name.rfind("Conjure Food", 0) == 0)
+            canConjureFood = true;
+        else if (name.rfind("Conjure Water", 0) == 0)
+            canConjureWater = true;
+    }
+
+    std::string json = "\"capabilities\":{";
+
+    json += "\"can_portal\":";
+    json += canPortal ? "true" : "false";
+    json += ",";
+
+    json += "\"can_teleport\":";
+    json += canTeleport ? "true" : "false";
+    json += ",";
+
+    json += "\"can_conjure_food\":";
+    json += canConjureFood ? "true" : "false";
+    json += ",";
+
+    json += "\"can_conjure_water\":";
+    json += canConjureWater ? "true" : "false";
+
+    json += "}";
+
+    return json;
+}
+
+
 std::string BuildBotQuestStateJson(Player* player)
 {
     if (!player)
@@ -2751,6 +2838,10 @@ std::string BuildBotStateJson(Player* player)
 
     json +=
         BuildBotProfessionStateJson(player) +
+        ",";
+
+    json +=
+        BuildBotCapabilityStateJson(player) +
         ",";
 
     json +=

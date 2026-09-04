@@ -724,6 +724,12 @@ void LLMChatterConfig::LoadConfig()
         GetChatterOption<uint32>(
             "LLMChatter.ProximityChatter."
             "PlayerSayScanRadius", 40);
+
+    _proxChatterPlayerObservationRadius =
+        GetChatterOption<uint32>(
+            "LLMChatter.ProximityChatter."
+            "PlayerObservationRadius", 20);
+
     _proxChatterChance =
         GetChatterOption<uint32>(
             "LLMChatter.ProximityChatter."
@@ -756,6 +762,10 @@ void LLMChatterConfig::LoadConfig()
         GetChatterOption<uint32>(
             "LLMChatter.ProximityChatter."
             "ConversationLineDelay", 4);
+    _proxChatterStopAndChatEnable =
+        GetChatterOption<bool>(
+            "LLMChatter.ProximityChatter."
+            "StopAndChatEnable", true);
     _proxChatterReplyWindowSeconds =
         GetChatterOption<uint32>(
             "LLMChatter.ProximityChatter."

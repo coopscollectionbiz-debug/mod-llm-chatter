@@ -26,6 +26,15 @@ from chatter_text import (
     strip_speaker_prefix,
 )
 
+from chatter_playerbot_intent import (
+    WOW_CLASS_NAMES,
+    build_playerbot_action_speech_context,
+    classify_playerbot_intent,
+    enqueue_live_playerbot_buff_actions,
+    resolve_playerbot_action_candidates,
+    should_analyze_playerbot_intent,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -931,6 +940,219 @@ def _fetch_proximity_history(
         return []
 
 
+def _proximity_playerbot_candidates(
+    raw_candidates: List[Dict],
+):
+    """Normalize authoritative nearby C++ candidates.
+
+    Proximity C++ sends the live class name rather than the
+    numeric character class ID expected by the shared resolver.
+    """
+    class_ids = {
+        str(class_name).casefold(): class_id
+        for class_id, class_name in WOW_CLASS_NAMES.items()
+    }
+
+    classifier_bots = []
+    resolver_candidates = []
+
+    for raw in raw_candidates or []:
+        if not isinstance(raw, dict):
+            continue
+
+        try:
+            guid = int(
+                raw.get('bot_guid')
+                or raw.get('guid')
+                or 0
+            )
+        except (TypeError, ValueError):
+            guid = 0
+
+        name = str(
+            raw.get('name') or ''
+        ).strip()
+
+        class_name = str(
+            raw.get('class')
+            or raw.get('class_name')
+            or ''
+        ).strip().casefold()
+
+        class_id = class_ids.get(
+            class_name,
+            0,
+        )
+
+        try:
+            distance = float(
+                raw.get('distance')
+                if raw.get('distance') is not None
+                else float('inf')
+            )
+        except (TypeError, ValueError):
+            distance = float('inf')
+
+        if (
+            guid <= 0
+            or not name
+            or not class_id
+        ):
+            continue
+
+        classifier_bots.append({
+            'name': name,
+            'class': class_name,
+        })
+
+        resolver_candidates.append({
+            'guid': guid,
+            'name': name,
+            'class_id': class_id,
+            'distance': distance,
+        })
+
+    return (
+        classifier_bots,
+        resolver_candidates,
+    )
+
+
+def _dry_run_proximity_playerbot_intent(
+    client,
+    config,
+    *,
+    event_id: int,
+    player_name: str,
+    player_message: str,
+    action_candidates: List[Dict],
+    addressed_name: str = '',
+):
+    """Interpret one nearby /say gameplay request.
+
+    Candidate locality/eligibility is authoritative from C++.
+    This function has no gameplay side effects.
+    """
+    if not should_analyze_playerbot_intent(
+        player_message
+    ):
+        return None
+
+    (
+        classifier_bots,
+        resolver_candidates,
+    ) = _proximity_playerbot_candidates(
+        action_candidates
+    )
+
+    if not resolver_candidates:
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "channel=say message=%r "
+            "result=no_nearby_candidates",
+            event_id,
+            player_name,
+            player_message,
+        )
+        return None
+
+    intent = classify_playerbot_intent(
+        client,
+        config,
+        player_message=player_message,
+        player_name=player_name,
+        source_channel='say',
+        bots=classifier_bots,
+    )
+
+    resolved = []
+
+    if intent.get('is_action_request') is True:
+        resolved = resolve_playerbot_action_candidates(
+            intent,
+            resolver_candidates,
+            source_channel='say',
+            addressed_name=addressed_name,
+        )
+
+        # /say is a local conversational request, not a broadcast
+        # command bus. At most one nearby bot should own it.
+        resolved = resolved[:1]
+
+    resolved_summary = [
+        {
+            'guid': int(
+                bot.get('guid') or 0
+            ),
+            'name': bot.get('name'),
+            'class': bot.get('class_name', ''),
+        }
+        for bot in resolved
+    ]
+
+    logger.info(
+        "[PLAYERBOT-DRYRUN] event=%s player=%s "
+        "channel=say message=%r "
+        "action=%s arg=%r hint=%r "
+        "target_type=%r target_name=%r "
+        "confidence=%.2f resolved=%s",
+        event_id,
+        player_name,
+        player_message,
+        intent.get('action_key'),
+        intent.get('action_arg'),
+        intent.get('bot_hint'),
+        intent.get('target_type'),
+        intent.get('target_name'),
+        float(
+            intent.get('confidence') or 0.0
+        ),
+        resolved_summary,
+    )
+
+    return {
+        'intent': intent,
+        'resolved': resolved,
+    }
+
+
+def _playerbot_proximity_speaker(
+    resolved: List[Dict],
+):
+    """Convert one resolved action candidate into a /say speaker."""
+    if not resolved:
+        return None
+
+    bot = resolved[0]
+
+    try:
+        guid = int(
+            bot.get('guid') or 0
+        )
+    except (TypeError, ValueError):
+        guid = 0
+
+    name = str(
+        bot.get('name') or ''
+    ).strip()
+
+    class_name = str(
+        bot.get('class_name') or ''
+    ).strip()
+
+    if guid <= 0 or not name:
+        return None
+
+    return {
+        'id': guid,
+        'bot_guid': guid,
+        'name': name,
+        'class': class_name,
+        'is_npc': False,
+        'role': 'bot',
+    }
+
+
 def _format_history_block(
     history: List[Dict],
 ) -> str:
@@ -953,6 +1175,7 @@ def _player_say_single_prompt(
     player_message: str,
     history: List[Dict],
     config: Optional[Dict] = None,
+    playerbot_action_context: str = "",
 ) -> PromptParts:
     mode = get_chatter_mode(config or {})
     is_rp = mode == 'roleplay'
@@ -1000,16 +1223,24 @@ def _player_say_single_prompt(
             "player casually typing in /say while playing.",
             "You are the PLAYER controlling this character, "
             "not an NPC roleplaying the character.",
-            "Keep the reply casual and usually short. "
-            "Fragments, lowercase, shorthand, missing "
-            "punctuation, and occasional typos are normal.",
-            "WoW shorthand and occasional internet slang are "
-            "fine when natural. Do not force memes, jokes, "
-            "sarcasm, or cleverness.",
-            "Answer what the player actually said and follow "
-            "the conversational context naturally.",
-            "Very short replies are fine when they genuinely fit, "
-            "but do not default to lol, idk, or other filler.",
+            "Write naturally for the amount of conversation happening. "
+            "A greeting, acknowledgement, or throwaway comment may be "
+            "very short, but a real question should get enough detail "
+            "to answer it clearly.",
+            "Different players type differently. Some use normal "
+            "sentences and punctuation; others use lowercase, shorthand, "
+            "fragments, abbreviations, or occasional typos. These are "
+            "optional styles, not requirements. Do not make every speaker "
+            "sound like the same terse texter.",
+            "WoW shorthand and occasional internet slang are fine when "
+            "they naturally fit that speaker. Do not force memes, jokes, "
+            "sarcasm, slang, or abbreviations.",
+            "Answer what the player actually said and follow the "
+            "conversational context naturally.",
+            "When the player sustains the conversation or asks for "
+            "clarification, give a more specific and complete answer "
+            "rather than retreating to generic filler such as lol, idk, "
+            "just chilling, or just grinding.",
             "Do not narrate the scenery or make the response "
             "sound like fantasy dialogue.",
             "No AI talk or markdown.",
@@ -1033,14 +1264,47 @@ def _player_say_single_prompt(
             "for specific factual claims.",
             "- Use only that state for facts about your "
             "level, quests, objectives, counts, inventory, "
-            "gear, professions, money, location, or activity.",
-            "- Never invent a quest name, quest objective, "
-            "mob, item, NPC, number, destination, or other "
-            "specific game-state fact.",
-            "- The live-state restriction applies only to factual "
-            "WoW game-state claims such as quests, items, levels, "
-            "objective counts, NPCs, locations, inventory, gear, "
-            "professions, money, and current activity.",
+            "gear, professions, capabilities, money, location, "
+            "or activity.",
+            "- Personal spell and class-service claims require "
+            "affirmative support from your authoritative capabilities. "
+            "Do not infer that you can portal, teleport, conjure food, "
+            "conjure water, or provide another class service merely "
+            "because characters of your class can eventually learn it.",
+            "- Treat fields in the authoritative live state as "
+            "complementary, not mutually exclusive. Combine supported "
+            "quest, objective, target, location, and activity facts when "
+            "that gives the player a more accurate natural answer.",
+            "- If a listed active quest or objective explains the bot's "
+            "current grinding or combat activity, you may naturally "
+            "describe that activity as working on the quest when relevant. "
+            "Do not reduce a supported specific quest activity to generic "
+            "grinding when the player is asking what you are working on "
+            "or why you are fighting those mobs.",
+            "- CURRENT AND OBSERVABLE WORLD STATE must stay grounded. "
+            "Do not invent a nearby rare, creature, NPC, object, local event, "
+            "exact current location/direction, current target, exact quest "
+            "progress/count, current inventory/equipment/money, or current "
+            "mechanical activity that is not supported by authoritative state.",
+            "- General Wrath-era WoW knowledge is allowed even when it is not "
+            "listed in live state. You may accurately discuss quests, zones, "
+            "dungeons, mobs, items, professions, class abilities, leveling, "
+            "and common game mechanics.",
+            "- You may improvise plausible character history, preferences, "
+            "profession history/plans, quests previously done, or future plans "
+            "when level/class/game-rule appropriate. Do not turn invented "
+            "backstory into precise CURRENT progress or possessions.",
+            "- If the player makes a factual claim about YOU that "
+            "conflicts with your authoritative current state, do not "
+            "make that claim true merely to preserve the conversation. "
+            "You may naturally correct the player, disagree, or sound "
+            "confused.",
+            "- Authoritative live state wins when it actually conflicts "
+            "with conversation about CURRENT state. Its absence does not mean "
+            "the character lacks general WoW knowledge or cannot have plausible "
+            "history/plans.",
+            "- Personal spell execution and class-service capability remain "
+            "strictly grounded in authoritative capability/action state.",
             "- Harmless social details, opinions, jokes, preferences, "
             "real-world topics, and conversational personality may "
             "be improvised naturally when they do not contradict "
@@ -1051,6 +1315,12 @@ def _player_say_single_prompt(
             "tokens are exact opaque strings. Copy one "
             "exactly when relevant or omit it. Never create "
             "or modify a token.",
+        ])
+
+    if playerbot_action_context:
+        lines.extend([
+            "",
+            playerbot_action_context,
         ])
 
     addressed = extra.get('addressed_name', '')
@@ -1116,7 +1386,14 @@ def _player_say_single_prompt(
             "refers to the same topic, joke, person, question, or idea.",
             "- Maintain continuity with things you already said. "
             "Do not contradict your own recent replies without a "
-            "natural correction or change of mind.",
+            "natural correction, a real state change, or change of mind.",
+            "- When you have already established a factual answer, keep "
+            "that answer stable across follow-up questions unless the "
+            "authoritative live state has changed.",
+            "- Clarification should normally become MORE specific. If the "
+            "player asks what quest, what mob, why, which item, or similar, "
+            "use supported live-state details instead of falling back to "
+            "a vaguer label like chilling, grinding, or idk.",
             "- Especially do not continue topics about "
             "scenery, sunsets, sunrises, weather, the sky, "
             "lighting, atmosphere, views, or how the area "
@@ -1151,6 +1428,7 @@ def _player_say_conversation_prompt(
     player_message: str,
     history: List[Dict],
     config: Optional[Dict] = None,
+    playerbot_action_context: str = "",
 ) -> PromptParts:
     mode = get_chatter_mode(config or {})
     is_rp = mode == 'roleplay'
@@ -1161,17 +1439,20 @@ def _player_say_conversation_prompt(
         'player_name', 'the player'
     )
 
-    max_lines = max(
-        2, min(
-            int(extra.get('max_lines', 3) or 3),
-            len(participants) + 1,
-        ),
-    )
+    if playerbot_action_context:
+        max_lines = 1
+    else:
+        max_lines = max(
+            2, min(
+                int(extra.get('max_lines', 3) or 3),
+                len(participants) + 1,
+            ),
+        )
 
-    if not is_rp:
-        # A real player's /say does not need to trigger
-        # a whole group conversation. One reply is normal.
-        max_lines = random.randint(1, max_lines)
+        if not is_rp:
+            # A real player's /say does not need to trigger
+            # a whole group conversation. One reply is normal.
+            max_lines = random.randint(1, max_lines)
 
     roster = "\n".join(
         f"- {_describe_speaker(db, speaker)}"
@@ -1295,18 +1576,48 @@ def _player_say_conversation_prompt(
         lines.extend([
             "",
             "FACTUAL RULES:",
-            "- The authoritative live bot states above "
-            "override chat history and previous bot "
-            "messages for specific factual claims.",
-            "- Each PlayerBot may use ONLY the live state "
+            "- Authoritative live bot state overrides chat history only "
+            "when they conflict about CURRENT observable/mechanical state. "
+            "Do not discard valid conversational history merely because a "
+            "detail is absent from live state.",
+            "- Each PlayerBot may use ONLY their own live state "
             "listed under their own name for facts about "
             "themselves.",
             "- Never borrow another bot's level, quests, "
-            "objective counts, inventory, gear, "
-            "professions, money, location, or activity.",
-            "- Never invent a quest name, quest objective, "
-            "mob, item, NPC, number, destination, or other "
-            "specific game-state fact.",
+            "objective counts, inventory, gear, professions, "
+            "capabilities, money, location, or activity.",
+            "- Personal spell and class-service claims require "
+            "affirmative support from THAT speaker's authoritative "
+            "capabilities. Do not infer portal, teleport, conjuring, "
+            "or another class service merely from the speaker's class.",
+            "- Treat fields within EACH bot's own authoritative live "
+            "state as complementary, not mutually exclusive. A speaker "
+            "may combine their own supported quest, objective, target, "
+            "location, and activity facts when that produces a more "
+            "accurate natural answer.",
+            "- If that speaker's listed active quest or objective explains "
+            "their current grinding or combat activity, they may naturally "
+            "describe it as working on the quest when relevant. Do not "
+            "reduce a supported specific quest activity to generic grinding "
+            "when the player is asking what they are working on or why "
+            "they are fighting those mobs.",
+            "- CURRENT AND OBSERVABLE WORLD STATE must stay grounded. "
+            "A speaker must not invent a nearby rare, creature, NPC, object, "
+            "local event, exact current location/direction, current target, "
+            "exact quest progress/count, current inventory/equipment/money, "
+            "or unsupported current mechanical activity.",
+            "- General Wrath-era WoW knowledge is allowed. Speakers may "
+            "accurately discuss quests, zones, dungeons, mobs, items, "
+            "professions, class knowledge, leveling, and game mechanics even "
+            "when those topics are absent from live state.",
+            "- Plausible personal history/plans may be improvised when "
+            "level/class/game-rule appropriate and should remain consistent. "
+            "Do not convert them into false CURRENT progress or possessions.",
+            "- If the player makes a factual claim about a speaker "
+            "that conflicts with THAT speaker's authoritative current "
+            "state, do not make that claim true and do not borrow "
+            "another bot's state to justify it. That speaker may "
+            "naturally correct the player, disagree, or sound confused.",
             "- The live-state restriction applies only to factual "
             "WoW game-state claims. Harmless social details, opinions, "
             "jokes, preferences, real-world topics, and conversational "
@@ -1318,6 +1629,12 @@ def _player_say_conversation_prompt(
             "tokens are exact opaque strings. Copy one "
             "exactly when relevant or omit it. Never "
             "create or modify a token.",
+        ])
+
+    if playerbot_action_context:
+        lines.extend([
+            "",
+            playerbot_action_context,
         ])
 
     addressed = extra.get('addressed_name', '')
@@ -1383,9 +1700,11 @@ def _player_say_conversation_prompt(
         if not is_rp:
             lines.append(
                 "Use recent conversation whenever it is relevant to "
-                "the player's current message. Preserve established "
-                "facts, jokes, opinions, references, and conversational "
-                "context. Do not summarize it or force an unrelated topic."
+                "the player's current message. Preserve grounded current "
+                "facts plus established opinions, jokes, preferences, history, "
+                "plans, and references. Do not promote an unsupported invented "
+                "nearby-world observation into truth merely because an earlier "
+                "bot said it. Do not summarize history or force an unrelated topic."
             )
 
     addressable = list(nearby_names)
@@ -1452,7 +1771,75 @@ def handle_proximity_player_say(
         db, player_guid, zone_id
     )
 
+    playerbot_action_result = None
+
+    try:
+        playerbot_action_result = (
+            _dry_run_proximity_playerbot_intent(
+                client,
+                config,
+                event_id=event_id,
+                player_name=str(
+                    extra.get('player_name') or 'Player'
+                ),
+                player_message=player_message,
+                action_candidates=(
+                    extra.get('action_candidates')
+                    or []
+                ),
+                addressed_name=str(
+                    extra.get('addressed_name') or ''
+                ),
+            )
+        )
+
+        playerbot_action_result = (
+            enqueue_live_playerbot_buff_actions(
+                db,
+                playerbot_action_result,
+                player_guid=player_guid,
+                player_name=str(
+                    extra.get('player_name') or 'Player'
+                ),
+                source_channel='say',
+                event_id=event_id,
+            )
+        )
+    except Exception:
+        logger.error(
+            "[PLAYERBOT-DRYRUN] failed "
+            "event=%s channel=say",
+            event_id,
+            exc_info=True,
+        )
+
+    playerbot_action_context = (
+        build_playerbot_action_speech_context(
+            playerbot_action_result,
+            dry_run=not bool(
+                isinstance(
+                    playerbot_action_result,
+                    dict,
+                )
+                and playerbot_action_result.get(
+                    'queue_accepted'
+                ) is True
+            ),
+            scope_label="nearby /say range",
+        )
+    )
+
     speaker = participants[0]
+
+    resolved_speaker = _playerbot_proximity_speaker(
+        (
+            playerbot_action_result or {}
+        ).get('resolved') or []
+    )
+
+    if resolved_speaker is not None:
+        speaker = resolved_speaker
+
     prompt = _player_say_single_prompt(
         db,
         extra,
@@ -1460,6 +1847,9 @@ def handle_proximity_player_say(
         player_message,
         history,
         config=config,
+        playerbot_action_context=(
+            playerbot_action_context
+        ),
     )
 
     # Persistent bot <-> player memory is available during
@@ -1593,6 +1983,82 @@ def handle_proximity_player_conversation(
         db, player_guid, zone_id
     )
 
+    playerbot_action_result = None
+
+    try:
+        playerbot_action_result = (
+            _dry_run_proximity_playerbot_intent(
+                client,
+                config,
+                event_id=event_id,
+                player_name=str(
+                    extra.get('player_name') or 'Player'
+                ),
+                player_message=player_message,
+                action_candidates=(
+                    extra.get('action_candidates')
+                    or []
+                ),
+                addressed_name=str(
+                    extra.get('addressed_name') or ''
+                ),
+            )
+        )
+
+        playerbot_action_result = (
+            enqueue_live_playerbot_buff_actions(
+                db,
+                playerbot_action_result,
+                player_guid=player_guid,
+                player_name=str(
+                    extra.get('player_name') or 'Player'
+                ),
+                source_channel='say',
+                event_id=event_id,
+            )
+        )
+    except Exception:
+        logger.error(
+            "[PLAYERBOT-DRYRUN] failed "
+            "event=%s channel=say",
+            event_id,
+            exc_info=True,
+        )
+
+    playerbot_action_context = (
+        build_playerbot_action_speech_context(
+            playerbot_action_result,
+            dry_run=not bool(
+                isinstance(
+                    playerbot_action_result,
+                    dict,
+                )
+                and playerbot_action_result.get(
+                    'queue_accepted'
+                ) is True
+            ),
+            scope_label="nearby /say range",
+        )
+    )
+
+    if playerbot_action_context:
+        resolved_speaker = _playerbot_proximity_speaker(
+            (
+                playerbot_action_result or {}
+            ).get('resolved') or []
+        )
+
+        if resolved_speaker is not None:
+            participants = [
+                resolved_speaker
+            ]
+        else:
+            # An actionable but unresolved request must not
+            # become a random multi-bot conversation.
+            participants = [
+                participants[0]
+            ]
+
     prompt = _player_say_conversation_prompt(
         db,
         extra,
@@ -1600,6 +2066,9 @@ def handle_proximity_player_conversation(
         player_message,
         history,
         config=config,
+        playerbot_action_context=(
+            playerbot_action_context
+        ),
     )
 
     if player_guid:

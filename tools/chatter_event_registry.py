@@ -463,11 +463,12 @@ EVENT_REGISTRY: Dict[str, EventSpec] = {
         producer='LLMChatterGroup.cpp',
         priority='high',
         description=(
-            'Bot responds to player party message'
+            'Bot responds to player Party/Raid message'
         ),
         payload_fields={
             'player_name': (str, True),
             'player_message': (str, True),
+            'channel': (str, True),
         },
     ),
 
@@ -509,6 +510,29 @@ EVENT_REGISTRY: Dict[str, EventSpec] = {
             'zone_name': (str, True),
             'bot_guids': (list, True),
             'bot_names': (list, True),
+        },
+    ),
+
+    'player_general_service_request': EventSpec(
+        handler_module='chatter_general',
+        handler_func=(
+            'process_general_service_request_event'
+        ),
+        producer='LLMChatterPlayer.cpp',
+        priority='high',
+        description=(
+            'Mage privately answers supported General '
+            'service discovery request'
+        ),
+        payload_fields={
+            'player_name': (str, True),
+            'player_message': (str, True),
+            'zone_id': (int, True),
+            'zone_name': (str, True),
+            'player_area_id': (int, True),
+            'bot_guids': (list, True),
+            'bot_names': (list, True),
+            'bot_states': (dict, True),
         },
     ),
 

@@ -22,7 +22,10 @@
 #include "Log.h"
 #include "MapMgr.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
+#include "ItemTemplate.h"
+#include "SkillDiscovery.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
 #include "ScriptMgr.h"
@@ -31,8 +34,10 @@
 #include "WorldSessionMgr.h"
 
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <random>
@@ -177,8 +182,400 @@ void EnsureBotInGeneralChannel(
         ChatChannelId::GENERAL);
 }
 
+static bool CanLLMServiceBotCastSpell(
+    Player* bot,
+    uint32 spellId)
+{
+    if (!bot || !spellId)
+        return false;
+
+    if (
+        !bot->IsInWorld()
+        || !bot->IsAlive())
+    {
+        return false;
+    }
+
+    return bot->HasSpell(spellId);
+}
+
+static bool GetLLMLockboxRequiredSkill(
+    uint32 itemEntry,
+    uint32& requiredSkill)
+{
+    requiredSkill = 0;
+
+    if (!itemEntry)
+        return false;
+
+    ItemTemplate const* itemTemplate =
+        sObjectMgr->GetItemTemplate(
+            itemEntry);
+
+    if (
+        !itemTemplate
+        || !itemTemplate->LockID)
+    {
+        return false;
+    }
+
+    LockEntry const* lockInfo =
+        sLockStore.LookupEntry(
+            itemTemplate->LockID);
+
+    if (!lockInfo)
+        return false;
+
+    for (uint8 i = 0; i < 8; ++i)
+    {
+        if (
+            lockInfo->Type[i]
+            != LOCK_KEY_SKILL)
+        {
+            continue;
+        }
+
+        uint32 skillId =
+            SkillByLockType(
+                LockType(
+                    lockInfo->Index[i]));
+
+        if (
+            skillId
+            != SKILL_LOCKPICKING)
+        {
+            continue;
+        }
+
+        requiredSkill =
+            lockInfo->Skill[i];
+
+        return true;
+    }
+
+    return false;
+}
+
+static bool CanLLMServiceBotOpenLockbox(
+    Player* bot,
+    uint32 itemEntry,
+    uint32* requiredSkillOut = nullptr)
+{
+    if (
+        !bot
+        || bot->getClass()
+            != CLASS_ROGUE
+        || !bot->IsInWorld()
+        || !bot->IsAlive())
+    {
+        return false;
+    }
+
+    constexpr uint32 PICK_LOCK_SPELL_ID =
+        1804;
+
+    if (
+        !bot->HasSpell(
+            PICK_LOCK_SPELL_ID)
+        || !bot->HasSkill(
+            SKILL_LOCKPICKING))
+    {
+        return false;
+    }
+
+    uint32 requiredSkill = 0;
+
+    if (
+        !GetLLMLockboxRequiredSkill(
+            itemEntry,
+            requiredSkill))
+    {
+        return false;
+    }
+
+    if (requiredSkillOut)
+    {
+        *requiredSkillOut =
+            requiredSkill;
+    }
+
+    uint32 botSkill =
+        bot->GetSkillValue(
+            SKILL_LOCKPICKING);
+
+    return botSkill >=
+        requiredSkill;
+}
+
 static std::map<uint32, time_t> _generalChatCooldowns;
 static std::mutex _generalChatCooldownsMutex;
+
+// Mage-service discovery in General is intentionally separate
+// from ambient General chatter. A legitimate service request
+// must not consume or depend on the ambient zone cooldown.
+static std::map<uint32, time_t> _generalServiceCooldowns;
+static std::mutex _generalServiceCooldownsMutex;
+
+static constexpr time_t GENERAL_SERVICE_COOLDOWN_SECONDS = 10;
+
+static uint32 ExtractFirstLinkedItemEntry(
+    std::string const& message)
+{
+    static std::string const marker =
+        "|Hitem:";
+
+    size_t pos =
+        message.find(marker);
+
+    if (pos == std::string::npos)
+        return 0;
+
+    pos += marker.size();
+
+    size_t end = pos;
+
+    while (
+        end < message.size()
+        && std::isdigit(
+            static_cast<unsigned char>(
+                message[end])))
+    {
+        ++end;
+    }
+
+    if (end == pos)
+        return 0;
+
+    try
+    {
+        unsigned long value =
+            std::stoul(
+                message.substr(
+                    pos,
+                    end - pos));
+
+        if (
+            value == 0
+            || value
+                > std::numeric_limits<uint32>::max())
+        {
+            return 0;
+        }
+
+        return static_cast<uint32>(
+            value);
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+static bool LooksLikeGeneralLockpickServiceRequest(
+    std::string const& message,
+    uint32& itemEntry)
+{
+    itemEntry = 0;
+
+    if (message.empty())
+        return false;
+
+    std::string lower = message;
+
+    std::transform(
+        lower.begin(),
+        lower.end(),
+        lower.begin(),
+        [](unsigned char c)
+        {
+            return static_cast<char>(
+                std::tolower(c));
+        });
+
+    bool hasDirectLockAction =
+        lower.find("open")
+            != std::string::npos
+        || lower.find("pick")
+            != std::string::npos
+        || lower.find("unlock")
+            != std::string::npos;
+
+    bool hasHelpCue =
+        lower.find("help")
+            != std::string::npos
+        || lower.find("assist")
+            != std::string::npos;
+
+    bool mentionsLockService =
+        lower.find("lockbox")
+            != std::string::npos
+        || lower.find("lock box")
+            != std::string::npos
+        || lower.find("lockpick")
+            != std::string::npos
+        || lower.find("pick lock")
+            != std::string::npos
+        || lower.find("unlock")
+            != std::string::npos
+        || lower.find("rogue")
+            != std::string::npos
+        || lower.find("open")
+            != std::string::npos;
+
+    bool hasRequestCue =
+        lower.find('?')
+            != std::string::npos
+        || lower.find("need")
+            != std::string::npos
+        || lower.find("lf")
+            != std::string::npos
+        || lower.find("looking")
+            != std::string::npos
+        || lower.find("can")
+            != std::string::npos
+        || lower.find("could")
+            != std::string::npos
+        || lower.find("please")
+            != std::string::npos
+        || lower.find("pls")
+            != std::string::npos
+        || lower.find("plz")
+            != std::string::npos;
+
+    itemEntry =
+        ExtractFirstLinkedItemEntry(
+            message);
+
+    if (!itemEntry)
+        return false;
+
+    uint32 requiredSkill = 0;
+
+    if (
+        !GetLLMLockboxRequiredSkill(
+            itemEntry,
+            requiredSkill))
+    {
+        return false;
+    }
+
+    // The linked item's actual lock data establishes that
+    // this is a lockpicking service. Player wording only
+    // determines whether they are asking for that service.
+    bool asksForLockService =
+        hasDirectLockAction
+        || hasHelpCue
+        || (
+            mentionsLockService
+            && hasRequestCue
+        );
+
+    return asksForLockService;
+}
+
+static bool LooksLikeGeneralMageServiceRequest(
+    std::string const& message)
+{
+    if (message.empty())
+        return false;
+
+    std::string lower = message;
+
+    std::transform(
+        lower.begin(),
+        lower.end(),
+        lower.begin(),
+        [](unsigned char c)
+        {
+            return static_cast<char>(
+                std::tolower(c));
+        });
+
+    auto hasWord =
+        [&lower](std::string const& word)
+        {
+            size_t pos = 0;
+
+            while (
+                (pos = lower.find(word, pos))
+                != std::string::npos)
+            {
+                bool leftOk =
+                    pos == 0
+                    || !std::isalnum(
+                        static_cast<unsigned char>(
+                            lower[pos - 1]));
+
+                size_t end =
+                    pos + word.size();
+
+                bool rightOk =
+                    end >= lower.size()
+                    || !std::isalnum(
+                        static_cast<unsigned char>(
+                            lower[end]));
+
+                if (leftOk && rightOk)
+                    return true;
+
+                pos = end;
+            }
+
+            return false;
+        };
+
+    // This is deliberately only a cheap pre-gate.
+    // Python QuickAnalyze remains authoritative about whether
+    // the message is really asking for a supported Mage service.
+    //
+    // Players use extremely terse service shorthand in General,
+    // so do not require a separate "can/need/please" request cue.
+    bool hasMageService =
+        hasWord("water")
+        || hasWord("food")
+        || hasWord("bread")
+        || hasWord("drink")
+        || hasWord("conjure")
+        || hasWord("port")
+        || hasWord("portal")
+        || hasWord("tele")
+        || hasWord("teleport");
+
+    bool hasPortalDestinationCue =
+        hasWord("sw")
+        || hasWord("stormwind")
+        || hasWord("if")
+        || hasWord("ironforge")
+        || hasWord("darn")
+        || hasWord("darnassus")
+        || hasWord("exo")
+        || hasWord("exodar")
+        || hasWord("org")
+        || hasWord("orgri")
+        || hasWord("orgrimmar")
+        || hasWord("uc")
+        || hasWord("undercity")
+        || hasWord("tb")
+        || hasWord("silvermoon")
+        || hasWord("smc")
+        || hasWord("shatt")
+        || hasWord("shat")
+        || hasWord("shattrath")
+        || hasWord("dal")
+        || hasWord("dala")
+        || hasWord("dalaran")
+        || hasWord("thera")
+        || hasWord("theramore")
+        || hasWord("ston")
+        || hasWord("stonard");
+
+    return
+        hasMageService
+        || (
+            hasWord("mage")
+            && hasPortalDestinationCue
+        );
+}
 
 // Per-group subzone cooldown keyed by group counter.
 // Uses the same configured cooldown as
@@ -1274,41 +1671,84 @@ public:
             zoneId, zoneId);
 
         time_t now = time(nullptr);
+
+        // Mage General services are intentionally disabled for now.
+        // Keep the recognition helper available for future work, but
+        // do not classify, advertise, reserve, or execute Mage services.
+        bool possibleMageService = false;
+
+        uint32 linkedLockboxEntry = 0;
+
+        bool possibleLockpickService =
+            LooksLikeGeneralLockpickServiceRequest(
+                safeMsg,
+                linkedLockboxEntry);
+
+        bool serviceAllowed =
+            possibleMageService
+            || possibleLockpickService;
+
+        if (serviceAllowed)
+        {
+            std::lock_guard<std::mutex> guard(
+                _generalServiceCooldownsMutex);
+
+            uint32 playerGuid =
+                player->GetGUID().GetCounter();
+
+            auto it =
+                _generalServiceCooldowns.find(
+                    playerGuid);
+
+            if (
+                it != _generalServiceCooldowns.end()
+                && (now - it->second)
+                    < GENERAL_SERVICE_COOLDOWN_SECONDS)
+            {
+                serviceAllowed = false;
+            }
+        }
+
+        bool ambientAllowed = true;
+
         {
             std::lock_guard<std::mutex> guard(
                 _generalChatCooldownsMutex);
+
             auto it =
                 _generalChatCooldowns.find(zoneId);
-            if (it != _generalChatCooldowns.end()
+
+            if (
+                it != _generalChatCooldowns.end()
                 && (now - it->second)
                    < (time_t)sLLMChatterConfig
                        ->_generalChatCooldown)
-                return true;
+            {
+                ambientAllowed = false;
+            }
         }
 
         bool isQuestion =
             !safeMsg.empty()
             && safeMsg.back() == '?';
+
         uint32 chance = isQuestion
             ? sLLMChatterConfig
                 ->_generalChatQuestionChance
             : sLLMChatterConfig
                 ->_generalChatChance;
-        if (urand(1, 100) > chance)
-            return true;
 
+        if (
+            ambientAllowed
+            && urand(1, 100) > chance)
         {
-            std::lock_guard<std::mutex> guard(
-                _generalChatCooldownsMutex);
-            auto it =
-                _generalChatCooldowns.find(zoneId);
-            if (it != _generalChatCooldowns.end()
-                && (now - it->second)
-                   < (time_t)sLLMChatterConfig
-                       ->_generalChatCooldown)
-                return true;
-            _generalChatCooldowns[zoneId] = now;
+            ambientAllowed = false;
         }
+
+        // A service-like request may bypass ambient RNG/cooldown.
+        // Everything else preserves the old early-return behavior.
+        if (!serviceAllowed && !ambientAllowed)
+            return true;
 
         std::string zoneName = GetZoneName(zoneId);
         if (zoneName.empty())
@@ -1333,15 +1773,22 @@ public:
                 if (p->GetZoneId() != zoneId)
                     continue;
                 zoneBots.push_back(p);
-                if (zoneBots.size()
-                    >= sLLMChatterConfig
-                        ->_maxBotsPerZone)
+
+                if (
+                    !serviceAllowed
+                    && zoneBots.size()
+                        >= sLLMChatterConfig
+                            ->_maxBotsPerZone)
+                {
                     break;
+                }
             }
         }
 
-        if (zoneBots.size()
-            < sLLMChatterConfig->_maxBotsPerZone)
+        if (
+            serviceAllowed
+            || zoneBots.size()
+                < sLLMChatterConfig->_maxBotsPerZone)
         {
             auto allBots =
                 sRandomPlayerbotMgr.GetAllBots();
@@ -1365,10 +1812,15 @@ public:
                 if (!found)
                 {
                     zoneBots.push_back(bot);
-                    if (zoneBots.size()
-                        >= sLLMChatterConfig
-                            ->_maxBotsPerZone)
+
+                    if (
+                        !serviceAllowed
+                        && zoneBots.size()
+                            >= sLLMChatterConfig
+                                ->_maxBotsPerZone)
+                    {
                         break;
+                    }
                 }
             }
         }
@@ -1383,6 +1835,408 @@ public:
 
         if (zoneBots.empty())
             return true;
+
+        if (
+            serviceAllowed
+            && possibleLockpickService)
+        {
+            std::vector<Player*> rogueBots;
+            std::vector<Player*> sameAreaRogues;
+
+            rogueBots.reserve(
+                zoneBots.size());
+
+            sameAreaRogues.reserve(
+                zoneBots.size());
+
+            uint32 playerAreaId =
+                player->GetAreaId();
+
+            uint32 requiredSkill = 0;
+
+            if (
+                GetLLMLockboxRequiredSkill(
+                    linkedLockboxEntry,
+                    requiredSkill))
+            {
+                for (Player* bot : zoneBots)
+                {
+                    if (
+                        !bot
+                        || !bot->IsInWorld()
+                        || !bot->IsAlive()
+                        || bot->getClass()
+                            != CLASS_ROGUE
+                        || bot->GetTeamId()
+                            != player->GetTeamId()
+                        || !CanLLMServiceBotOpenLockbox(
+                            bot,
+                            linkedLockboxEntry))
+                    {
+                        continue;
+                    }
+
+                    rogueBots.push_back(
+                        bot);
+
+                    if (
+                        bot->GetAreaId()
+                        == playerAreaId)
+                    {
+                        sameAreaRogues.push_back(
+                            bot);
+                    }
+                }
+
+                if (!sameAreaRogues.empty())
+                {
+                    rogueBots =
+                        sameAreaRogues;
+                }
+
+                std::sort(
+                    rogueBots.begin(),
+                    rogueBots.end(),
+                    [](Player* a, Player* b)
+                    {
+                        return
+                            a->GetGUID().GetCounter()
+                            < b->GetGUID().GetCounter();
+                    });
+
+                if (!rogueBots.empty())
+                {
+                    std::string botGuids = "[";
+                    std::string botNames = "[";
+                    std::string botStates = "{";
+
+                    for (
+                        size_t i = 0;
+                        i < rogueBots.size();
+                        ++i)
+                    {
+                        Player* rogue =
+                            rogueBots[i];
+
+                        if (i > 0)
+                        {
+                            botGuids += ",";
+                            botNames += ",";
+                            botStates += ",";
+                        }
+
+                        uint32 rogueGuid =
+                            rogue->GetGUID()
+                                .GetCounter();
+
+                        botGuids +=
+                            std::to_string(
+                                rogueGuid);
+
+                        botNames += "\"" +
+                            JsonEscape(
+                                rogue->GetName())
+                            + "\"";
+
+                        botStates += "\"" +
+                            std::to_string(
+                                rogueGuid)
+                            + "\":{";
+
+                        botStates +=
+                            BuildBotStateJson(
+                                rogue);
+
+                        botStates += "}";
+                    }
+
+                    botGuids += "]";
+                    botNames += "]";
+                    botStates += "}";
+
+                    std::string serviceExtraData =
+                        "{"
+                        "\"service_hint\":\"lockpick\","
+                        "\"item_entry\":" +
+                        std::to_string(
+                            linkedLockboxEntry) + ","
+                        "\"required_skill\":" +
+                        std::to_string(
+                            requiredSkill) + ","
+                        "\"player_name\":\"" +
+                        JsonEscape(
+                            playerName) + "\","
+                        "\"player_gender\":" +
+                        std::to_string(
+                            player->getGender()) + ","
+                        "\"player_message\":\"" +
+                        JsonEscape(
+                            safeMsg) + "\","
+                        "\"zone_id\":" +
+                        std::to_string(
+                            zoneId) + ","
+                        "\"zone_name\":\"" +
+                        JsonEscape(
+                            zoneName) + "\","
+                        "\"player_area_id\":" +
+                        std::to_string(
+                            playerAreaId) + ","
+                        "\"bot_guids\":" +
+                        botGuids + ","
+                        "\"bot_names\":" +
+                        botNames + ","
+                        "\"bot_states\":" +
+                        botStates +
+                        "}";
+
+                    serviceExtraData =
+                        EscapeString(
+                            serviceExtraData);
+
+                    QueueChatterEvent(
+                        "player_general_service_request",
+                        "zone",
+                        zoneId,
+                        player->GetMapId(),
+                        GetChatterEventPriority(
+                            "player_general_msg"),
+                        "general_service:" +
+                            std::to_string(
+                                player->GetGUID()
+                                    .GetCounter()),
+                        player->GetGUID()
+                            .GetCounter(),
+                        playerName,
+                        0,
+                        "",
+                        0,
+                        serviceExtraData,
+                        GetReactionDelaySeconds(
+                            "player_general_msg"),
+                        60,
+                        false
+                    );
+
+                    {
+                        std::lock_guard<std::mutex>
+                            guard(
+                                _generalServiceCooldownsMutex);
+
+                        _generalServiceCooldowns[
+                            player->GetGUID()
+                                .GetCounter()
+                        ] = now;
+                    }
+
+                    return true;
+                }
+            }
+        }
+
+        if (
+            serviceAllowed
+            && possibleMageService)
+        {
+            std::vector<Player*> mageBots;
+            std::vector<Player*> sameAreaMages;
+
+            mageBots.reserve(zoneBots.size());
+            sameAreaMages.reserve(zoneBots.size());
+
+            uint32 playerAreaId =
+                player->GetAreaId();
+
+            for (Player* bot : zoneBots)
+            {
+                if (
+                    !bot
+                    || !bot->IsInWorld()
+                    || !bot->IsAlive()
+                    || bot->getClass() != CLASS_MAGE
+                    || bot->GetTeamId()
+                        != player->GetTeamId())
+                {
+                    continue;
+                }
+
+                mageBots.push_back(bot);
+
+                if (
+                    bot->GetAreaId()
+                    == playerAreaId)
+                {
+                    sameAreaMages.push_back(bot);
+                }
+            }
+
+            // Prefer a Mage physically in the same area/subzone,
+            // but allow another Mage elsewhere in the same zone.
+            if (!sameAreaMages.empty())
+                mageBots = sameAreaMages;
+
+            if (!mageBots.empty())
+            {
+                std::sort(
+                    mageBots.begin(),
+                    mageBots.end(),
+                    [](Player* a, Player* b)
+                    {
+                        return
+                            a->GetGUID().GetCounter()
+                            < b->GetGUID().GetCounter();
+                    });
+
+                std::string mageGuids = "[";
+                std::string mageNames = "[";
+                std::string mageStates = "{";
+
+                for (
+                    size_t i = 0;
+                    i < mageBots.size();
+                    ++i)
+                {
+                    Player* mage = mageBots[i];
+
+                    if (i > 0)
+                    {
+                        mageGuids += ",";
+                        mageNames += ",";
+                        mageStates += ",";
+                    }
+
+                    uint32 mageGuid =
+                        mage->GetGUID().GetCounter();
+
+                    mageGuids +=
+                        std::to_string(mageGuid);
+
+                    mageNames += "\"" +
+                        JsonEscape(
+                            mage->GetName())
+                        + "\"";
+
+                    mageStates += "\"" +
+                        std::to_string(mageGuid)
+                        + "\":{";
+
+                    mageStates +=
+                        BuildBotStateJson(mage);
+
+                    mageStates += "}";
+                }
+
+                mageGuids += "]";
+                mageNames += "]";
+                mageStates += "}";
+
+                std::string serviceExtraData = "{"
+                    "\"player_name\":\"" +
+                        JsonEscape(playerName) + "\","
+                    "\"player_gender\":" +
+                        std::to_string(
+                            player->getGender()) + ","
+                    "\"player_message\":\"" +
+                        JsonEscape(safeMsg) + "\","
+                    "\"zone_id\":" +
+                        std::to_string(zoneId) + ","
+                    "\"zone_name\":\"" +
+                        JsonEscape(zoneName) + "\","
+                    "\"player_area_id\":" +
+                        std::to_string(playerAreaId) + ","
+                    "\"bot_guids\":" +
+                        mageGuids + ","
+                    "\"bot_names\":" +
+                        mageNames + ","
+                    "\"bot_states\":" +
+                        mageStates +
+                    "}";
+
+                serviceExtraData =
+                    EscapeString(
+                        serviceExtraData);
+
+                QueueChatterEvent(
+                    "player_general_service_request",
+                    "zone",
+                    zoneId,
+                    player->GetMapId(),
+                    GetChatterEventPriority(
+                        "player_general_msg"),
+                    "general_service:" +
+                        std::to_string(
+                            player->GetGUID()
+                                .GetCounter()),
+                    player->GetGUID().GetCounter(),
+                    playerName,
+                    0,
+                    "",
+                    0,
+                    serviceExtraData,
+                    GetReactionDelaySeconds(
+                        "player_general_msg"),
+                    60,
+                    false
+                );
+
+                {
+                    std::lock_guard<std::mutex> guard(
+                        _generalServiceCooldownsMutex);
+
+                    _generalServiceCooldowns[
+                        player->GetGUID()
+                            .GetCounter()
+                    ] = now;
+                }
+
+                return true;
+            }
+        }
+
+        // A service-looking message with no eligible Mage must
+        // not bypass the ordinary General response probability.
+        if (!ambientAllowed)
+            return true;
+
+        // Preserve the original second cooldown check/commit.
+        // Service discovery never writes this cooldown.
+        {
+            std::lock_guard<std::mutex> guard(
+                _generalChatCooldownsMutex);
+
+            auto it =
+                _generalChatCooldowns.find(zoneId);
+
+            if (
+                it != _generalChatCooldowns.end()
+                && (now - it->second)
+                   < (time_t)sLLMChatterConfig
+                       ->_generalChatCooldown)
+            {
+                return true;
+            }
+
+            _generalChatCooldowns[zoneId] = now;
+        }
+
+        // A service pre-gate may have collected more bots than
+        // ordinary General allows. If no Mage was found and we
+        // are falling back to ambient chatter, restore the old
+        // candidate cap before normal selection.
+        if (
+            zoneBots.size()
+            > sLLMChatterConfig->_maxBotsPerZone)
+        {
+            std::shuffle(
+                zoneBots.begin(),
+                zoneBots.end(),
+                std::mt19937{
+                    std::random_device{}()
+                });
+
+            zoneBots.resize(
+                sLLMChatterConfig
+                    ->_maxBotsPerZone);
+        }
 
         std::shuffle(
             zoneBots.begin(), zoneBots.end(),

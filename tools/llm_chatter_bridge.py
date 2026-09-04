@@ -78,12 +78,16 @@ from chatter_group_state import (
 from chatter_general import (
     init_general_config,
     process_general_player_msg_event,
+    process_general_service_request_event,
 )
 from chatter_cache import refill_precache_pool
+from chatter_current_topics import refresh_current_topics
 from chatter_event_registry import (
     build_handler_map,
     validate_registry,
 )
+
+from chatter_group_state import has_online_real_group_player
 
 # Configure logging
 logging.basicConfig(
@@ -583,6 +587,9 @@ EVENT_LOG_OVERRIDES = {
     'bot_group_screenshot_observation': 'Screenshot vision',
     'bot_group_general_reaction': 'General-to-party relay',
     'player_general_msg': 'General chat event',
+    'player_general_service_request': (
+        'General Mage service discovery'
+    ),
     'guild_player_message': 'Guild player turn',
     'guild_login_greeting': 'Guild login greeting',
     'player_enters_zone': 'Zone intrusion',
@@ -887,6 +894,41 @@ def process_single_event(event, client, config):
                 )
                 db.commit()
                 return False
+            # Generation-cost gate: a queued Party
+            # event is not worth generating once there is
+            # no online real human left in that exact group.
+            #
+            # This applies centrally to every bot_group_*
+            # handler, including lifecycle/reaction events.
+            # Player identity stored in old chat/events is
+            # deliberately not considered current presence.
+            if event_type.startswith('bot_group_'):
+                gid = event.get('_group_id')
+
+                if gid and not has_online_real_group_player(
+                    db, gid
+                ):
+                    cursor.execute(
+                        "UPDATE llm_chatter_events "
+                        "SET status = 'skipped' "
+                        "WHERE id = %s",
+                        (event_id,),
+                    )
+                    db.commit()
+
+                    if config.get(
+                        'LLMChatter.DebugLog', '0'
+                    ) == '1':
+                        logger.info(
+                            "Skipping %s id=%s: no online "
+                            "real player in group %s",
+                            event_type,
+                            event_id,
+                            gid,
+                        )
+
+                    return False
+
             # Skip orphaned group events: if the
             # group has no traits rows (already
             # cleaned up after player logout /
@@ -2028,6 +2070,15 @@ def main():
         30
     ))
 
+    last_current_topics_refresh = 0
+    current_topics_refresh_interval = max(
+        300,
+        int(config.get(
+            'LLMChatter.CurrentTopics.RefreshMinutes',
+            180,
+        )) * 60,
+    )
+
     executor = ThreadPoolExecutor(
         max_workers=max_concurrent + 4
     )
@@ -2041,6 +2092,7 @@ def main():
     bot_question_future = None
     legacy_future = None
     tone_regen_future = None
+    current_topics_future = None
     # Track onlineâ†’offline transition for full wipe
     was_players_online = True
 
@@ -2124,6 +2176,15 @@ def main():
                     "tone-regeneration"
                 )
                 tone_regen_future = None
+            if (
+                current_topics_future
+                and current_topics_future.done()
+            ):
+                _harvest_future(
+                    current_topics_future,
+                    "current-topics"
+                )
+                current_topics_future = None
 
             # DB connection with proper lifecycle
             db = None
@@ -2193,6 +2254,22 @@ def main():
                         db, snapshot_dir
                     )
                     last_db_snapshot = current_time
+
+                # Refresh optional contemporary real-world
+                # knowledge in the background. The refresh helper
+                # immediately no-ops in RP mode or when disabled.
+                if (
+                    players_online
+                    and not current_topics_future
+                    and current_time
+                    - last_current_topics_refresh
+                    >= current_topics_refresh_interval
+                ):
+                    last_current_topics_refresh = current_time
+                    current_topics_future = executor.submit(
+                        refresh_current_topics,
+                        config,
+                    )
 
                 # Legacy requests (General ambient chatter)
                 # Runs freely every cycle â€” no deferral

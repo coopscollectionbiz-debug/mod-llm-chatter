@@ -4,6 +4,7 @@ import logging
 import random
 
 from chatter_shared import (
+    get_zone_name,
     get_zone_flavor,
     get_subzone_lore,
     get_dungeon_flavor,
@@ -100,9 +101,9 @@ def _pick_length_hint(mode):
 
 def _maybe_humor_hint(mode):
     """RNG-gated humor encouragement for group
-    prompts. 40% normal, 35% roleplay."""
+    prompts. 15% normal, 35% roleplay."""
     is_rp = (mode == 'roleplay')
-    chance = 0.35 if is_rp else 0.40
+    chance = 0.35 if is_rp else 0.15
     if random.random() < chance:
         if is_rp:
             return (
@@ -205,9 +206,11 @@ def build_bot_greeting_prompt(
     Uses tone/twist system from ambient chatter
     for variety. RP mode includes race speech flavor.
 
-    When memories are provided, switches to reunion
-    mode: familiar tone, player name, optional
-    specific memory reference.
+    When memories are provided, prior familiarity may
+    influence the greeting. RP mode may use stronger
+    reunion framing; Normal mode treats memories as
+    optional background context and does not require
+    a callback or the player's name.
 
     Args:
         bot: dict with name, class, race, level
@@ -263,7 +266,7 @@ def build_bot_greeting_prompt(
             "terms or OOC references."
         )
     else:
-                style_guide = (
+        style_guide = (
             "Sound like a real WoW player typing in "
             "party chat while playing. Keep it casual, "
             "brief, and imperfect. WoW shorthand and "
@@ -344,12 +347,6 @@ def build_bot_greeting_prompt(
 
         if location_context:
             prompt += f"{location_context}\n"
-        prompt = _build_speaker_header(
-            bot, traits, mode, stored_tone
-        )
-
-        if bg_context:
-            prompt += f"{location_context}\n"
 
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
@@ -374,7 +371,7 @@ def build_bot_greeting_prompt(
     is_reunion = bool(
         memories and player_name_known
     )
-    if is_reunion:
+    if is_rp and is_reunion:
         from chatter_memory import (
             sanitize_memory_for_prompt,
         )
@@ -406,21 +403,61 @@ def build_bot_greeting_prompt(
                     f"\"{safe_recall}\" — "
                     f"reference this naturally.\n"
                 )
-        # Solo-bot guard: when this bot is the only
-        # bot in the party, the LLM must not refer to
-        # third parties when recalling memories.
-        # group_size includes player + bots, so == 2
-        # means 1 player + just this bot.
-        if group_size == 2 and player_name:
-            prompt += (
-                f"\nIMPORTANT: You are the ONLY bot "
-                f"in this party — there are no other "
-                f"companions to address or refer to. "
-                f"Speak directly to {player_name}, "
-                f"never refer to a third party, and "
-                f"use second-person \"you\" to mean "
-                f"{player_name}.\n"
+    elif is_reunion:
+        from chatter_memory import (
+            sanitize_memory_for_prompt,
+        )
+        sanitized = [
+            sanitize_memory_for_prompt(m)
+            for m in memories
+        ]
+        sanitized = [s for s in sanitized if s]
+
+        if sanitized:
+            mem_lines = '\n'.join(
+                f"  - {m}" for m in sanitized
             )
+            prompt += (
+                "\nOPTIONAL PAST CONTEXT:\n"
+                f"{mem_lines}\n"
+                f"You have grouped with {player_name} "
+                "before, so basic familiarity is fine. "
+                "These memories are background continuity, "
+                "not things you need to mention in the "
+                "greeting. Do not recite them, force a "
+                "callback, exaggerate the relationship, or "
+                "act unusually sentimental just because "
+                "memories exist.\n"
+            )
+
+        if recall_memory:
+            safe_recall = sanitize_memory_for_prompt(
+                recall_memory
+            )
+            if safe_recall:
+                prompt += (
+                    "\nOPTIONAL SALIENT MEMORY:\n"
+                    f"  - {safe_recall}\n"
+                    "This memory happens to be more salient "
+                    "right now, but you still do not need to "
+                    "mention it. Use it only if a very natural "
+                    "brief callback fits the greeting.\n"
+                )
+    # Solo-bot guard: when this bot is the only
+    # bot in the party, the LLM must not refer to
+    # third parties when recalling memories.
+    # group_size includes player + bots, so == 2
+    # means 1 player + just this bot.
+    if is_reunion and group_size == 2 and player_name:
+        prompt += (
+            f"\nIMPORTANT: You are the ONLY bot "
+            f"in this party — there are no other "
+            f"companions to address or refer to. "
+            f"Speak directly to {player_name}, "
+            f"never refer to a third party, and "
+            f"use second-person \"you\" to mean "
+            f"{player_name}.\n"
+        )
 
     # If just player + this bot (group_size=2),
     # 80% chance to use the player's name
@@ -429,8 +466,9 @@ def build_bot_greeting_prompt(
         and group_size == 2
         and random.random() < 0.8
     )
-    # Reunion always uses the player's name
-    if is_reunion and player_name:
+    # RP reunion always uses the player's name.
+    # Normal familiarity should not make naming feel forced.
+    if is_rp and is_reunion and player_name:
         use_player_name = True
 
     # Greetings should be short — when inviting
@@ -444,7 +482,7 @@ def build_bot_greeting_prompt(
             "a short sentence (10-16 words)"
         )
 
-    if is_reunion:
+    if is_rp and is_reunion:
         prompt += (
             f"\nYou are rejoining a party with "
             f"{player_name}, someone you have "
@@ -470,34 +508,86 @@ def build_bot_greeting_prompt(
             f"- Don't repeat or echo greetings "
             f"already in the chat history above\n"
         )
-    else:
+    elif is_reunion:
         prompt += (
-            f"\nYou just joined a party with a "
-            f"real player. Say a greeting in "
-            f"party chat.\n"
+            f"\nYou just joined a party with "
+            f"{player_name}, a real player you have "
+            f"grouped with before. Say a brief greeting "
+            f"in party chat.\n"
             f"Length: {length_hint}\n"
             f"Length mode: short only "
             f"(keep it brief)\n\n"
-            f"Your greeting should reflect your "
-            f"personality traits. For example:\n"
-            f"- A 'friendly, eager' bot might say: "
-            f"\"Hey! Ready to go whenever "
-            f"you are\"\n"
-            f"- A 'cynical, reserved' bot might "
-            f"say: \"Sure, let's get this over "
-            f"with\"\n"
-            f"- A 'sarcastic, laid-back' bot "
-            f"might say: \"Oh good, I was getting "
-            f"bored\"\n\n"
+            f"Treat prior familiarity casually. A normal "
+            f"returning-player greeting is enough; do not "
+            f"make the relationship sound unusually close, "
+            f"emotional, nostalgic, or important. You do "
+            f"not need to prove that you remember them.\n\n"
             f"{style_guide}\n\n"
             f"Rules:\n"
             f"- One short sentence only\n"
             f"- No quotes around your message\n"
             f"- No emojis\n"
             f"- Don't mention your class or race\n"
+            f"- Don't recite memories verbatim\n"
+            f"- A memory callback is optional, never required\n"
             f"- Don't repeat or echo greetings "
             f"already in the chat history above\n"
         )
+    else:
+        if is_rp:
+            prompt += (
+                f"\nYou just joined a party with a "
+                f"real player. Say a greeting in "
+                f"party chat.\n"
+                f"Length: {length_hint}\n"
+                f"Length mode: short only "
+                f"(keep it brief)\n\n"
+                f"Your greeting should reflect your "
+                f"personality traits. For example:\n"
+                f"- A 'friendly, eager' bot might say: "
+                f"\"Hey! Ready to go whenever "
+                f"you are\"\n"
+                f"- A 'cynical, reserved' bot might "
+                f"say: \"Sure, let's get this over "
+                f"with\"\n"
+                f"- A 'sarcastic, laid-back' bot "
+                f"might say: \"Oh good, I was getting "
+                f"bored\"\n\n"
+                f"{style_guide}\n\n"
+                f"Rules:\n"
+                f"- One short sentence only\n"
+                f"- No quotes around your message\n"
+                f"- No emojis\n"
+                f"- Don't mention your class or race\n"
+                f"- Don't repeat or echo greetings "
+                f"already in the chat history above\n"
+            )
+        else:
+            prompt += (
+                f"\nYou just joined a party with a "
+                f"real player. Say a brief greeting in "
+                f"party chat.\n"
+                f"Length: {length_hint}\n"
+                f"Length mode: short only "
+                f"(keep it brief)\n\n"
+                f"{style_guide}\n\n"
+                f"Keep the greeting ordinary and low-effort, "
+                f"like something a real player would type "
+                f"while continuing to play. Personality may "
+                f"affect the wording subtly, but you do not "
+                f"need to demonstrate or perform your traits. "
+                f"Simple greetings such as a quick hello are "
+                f"completely valid.\n\n"
+                f"Rules:\n"
+                f"- One short line only\n"
+                f"- No quotes around your message\n"
+                f"- No emojis\n"
+                f"- Don't mention your class or race\n"
+                f"- Don't force a joke, attitude, invitation, "
+                f"or conversation starter\n"
+                f"- Don't repeat or echo greetings "
+                f"already in the chat history above\n"
+            )
 
     if use_player_name:
         prompt += (
@@ -618,31 +708,56 @@ def build_bot_welcome_prompt(
     else:
         wl_hint = "a short sentence (10-16 words)"
 
-    prompt += (
-        f"\nA new player named {new_bot_name} "
-        f"just joined your party. Welcome them "
-        f"briefly.\n"
-        f"Length: {wl_hint}\n"
-        f"Length mode: short only (keep it brief)\n\n"
-        f"Don't repeat jokes or themes already "
-        f"said in chat.\n\n"
-        f"Your welcome should reflect your "
-        f"personality traits. For example:\n"
-        f"- A 'friendly, eager' bot might say: "
-        f"\"Welcome aboard, glad to have you\"\n"
-        f"- A 'cynical, reserved' bot might say: "
-        f"\"Another one, huh? Fine by me\"\n"
-        f"- A 'sarcastic, laid-back' bot might "
-        f"say: \"Oh good, more company\"\n\n"
-        f"{style_guide}\n\n"
-        f"Rules:\n"
-        f"- One short sentence only\n"
-        f"- No quotes around your message\n"
-        f"- No emojis\n"
-        f"- Don't mention your class or race\n"
-        f"- You can use {new_bot_name}'s name "
-        f"or just say a general welcome"
-    )
+    if is_rp:
+        prompt += (
+            f"\nA new player named {new_bot_name} "
+            f"just joined your party. Welcome them "
+            f"briefly.\n"
+            f"Length: {wl_hint}\n"
+            f"Length mode: short only (keep it brief)\n\n"
+            f"Don't repeat jokes or themes already "
+            f"said in chat.\n\n"
+            f"Your welcome should reflect your "
+            f"personality traits. For example:\n"
+            f"- A 'friendly, eager' bot might say: "
+            f"\"Welcome aboard, glad to have you\"\n"
+            f"- A 'cynical, reserved' bot might say: "
+            f"\"Another one, huh? Fine by me\"\n"
+            f"- A 'sarcastic, laid-back' bot might "
+            f"say: \"Oh good, more company\"\n\n"
+            f"{style_guide}\n\n"
+            f"Rules:\n"
+            f"- One short sentence only\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- Don't mention your class or race\n"
+            f"- You can use {new_bot_name}'s name "
+            f"or just say a general welcome"
+        )
+    else:
+        prompt += (
+            f"\nA new player named {new_bot_name} "
+            f"just joined your party. Say a brief "
+            f"welcome in party chat.\n"
+            f"Length: {wl_hint}\n"
+            f"Length mode: short only (keep it brief)\n\n"
+            f"{style_guide}\n\n"
+            f"Keep it ordinary and low-effort, like a "
+            f"real player acknowledging someone joining "
+            f"without trying to perform a personality. "
+            f"A simple hello, welcome, or similarly short "
+            f"acknowledgement is completely valid.\n\n"
+            f"Rules:\n"
+            f"- One short line only\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- Don't mention your class or race\n"
+            f"- Don't force a joke, attitude, invitation, "
+            f"or conversation starter\n"
+            f"- Don't repeat or echo something already "
+            f"said in recent party chat\n"
+            f"- Using {new_bot_name}'s name is optional"
+        )
     if is_rp:
         spices = pick_personality_spices(
             mode=mode, spice_count_override=_spice_count
@@ -713,7 +828,7 @@ def build_batch_welcome_prompt(
             "terms or OOC references."
         )
     else:
-                style_guide = (
+        style_guide = (
             "Sound like a real WoW player typing in "
             "party chat while playing. Keep it casual, "
             "brief, and imperfect. WoW shorthand and "
@@ -769,30 +884,58 @@ def build_batch_welcome_prompt(
             f"your party: {names_str}"
         )
 
-    prompt += (
-        f"\n{join_desc}. Welcome them briefly.\n"
-        f"Length: {wl_hint}\n"
-        f"Length mode: short only "
-        f"(keep it brief)\n\n"
-        f"Don't repeat jokes or themes already "
-        f"said in chat.\n\n"
-        f"Your welcome should reflect your "
-        f"personality traits. For example:\n"
-        f"- A 'friendly, eager' bot might say: "
-        f"\"Welcome aboard everyone!\"\n"
-        f"- A 'cynical, reserved' bot might say: "
-        f"\"Well, the gang's all here\"\n"
-        f"- A 'sarcastic, laid-back' bot might "
-        f"say: \"Oh good, a full house\"\n\n"
-        f"{style_guide}\n\n"
-        f"Rules:\n"
-        f"- One short sentence only\n"
-        f"- No quotes around your message\n"
-        f"- No emojis\n"
-        f"- Don't mention your class or race\n"
-        f"- You can name them or just say a "
-        f"general welcome"
-    )
+    if is_rp:
+        prompt += (
+            f"\n{join_desc}. Welcome them briefly.\n"
+            f"Length: {wl_hint}\n"
+            f"Length mode: short only "
+            f"(keep it brief)\n\n"
+            f"Don't repeat jokes or themes already "
+            f"said in chat.\n\n"
+            f"Your welcome should reflect your "
+            f"personality traits. For example:\n"
+            f"- A 'friendly, eager' bot might say: "
+            f"\"Welcome aboard everyone!\"\n"
+            f"- A 'cynical, reserved' bot might say: "
+            f"\"Well, the gang's all here\"\n"
+            f"- A 'sarcastic, laid-back' bot might "
+            f"say: \"Oh good, a full house\"\n\n"
+            f"{style_guide}\n\n"
+            f"Rules:\n"
+            f"- One short sentence only\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- Don't mention your class or race\n"
+            f"- You can name them or just say a "
+            f"general welcome"
+        )
+    else:
+        prompt += (
+            f"\n{join_desc}. Say a brief welcome "
+            f"in party chat.\n"
+            f"Length: {wl_hint}\n"
+            f"Length mode: short only "
+            f"(keep it brief)\n\n"
+            f"{style_guide}\n\n"
+            f"Keep it ordinary and low-effort, like a "
+            f"real player briefly acknowledging multiple "
+            f"people joining while continuing to play. "
+            f"A simple general hello or welcome is "
+            f"completely valid. You do not need to address "
+            f"every newcomer individually.\n\n"
+            f"Rules:\n"
+            f"- One short line only\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- Don't mention your class or race\n"
+            f"- Don't force a joke, attitude, invitation, "
+            f"or conversation starter\n"
+            f"- Don't manufacture a group nickname or "
+            f"make the arrival sound like a big event\n"
+            f"- Don't repeat or echo something already "
+            f"said in recent party chat\n"
+            f"- Naming any newcomer is optional"
+        )
     if is_rp:
         spices = pick_personality_spices(
             mode=mode, spice_count_override=_spice_count
@@ -853,9 +996,9 @@ def build_kill_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
+    # Authored dungeon flavor is RP-only.
     dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
+    if is_rp and dungeon_flav:
         rp_context += (
             f"\nDungeon context: {dungeon_flav}"
         )
@@ -928,14 +1071,29 @@ def build_kill_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the creature by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A minimal or throwaway reaction is valid; "
+            f"do not manufacture a joke, taunt, or victory line\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_loot_reaction_prompt(
     bot, traits, item_name, item_quality, mode,
@@ -983,12 +1141,13 @@ def build_loot_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
-    dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
-        rp_context += (
-            f"\nDungeon context: {dungeon_flav}"
-        )
+    # Authored dungeon flavor is RP-only.
+    if is_rp:
+        dungeon_flav = get_dungeon_flavor(map_id)
+        if dungeon_flav:
+            rp_context += (
+                f"\nDungeon context: {dungeon_flav}"
+            )
 
     # Quality names for context
     quality_names = {
@@ -1034,6 +1193,19 @@ def build_loot_reaction_prompt(
             f"a brief casual remark about it."
         )
 
+
+    # Normal mode gets factual loot context only.
+    if not is_rp:
+        if item_quality >= 200:
+            loot_context = (
+                f"{who} just picked up some loot."
+            )
+        else:
+            loot_context = (
+                f"{who} just looted {item_name}, a "
+                f"{quality_label} item."
+            )
+
     if is_rp:
         style = (
             "React in-character about the loot. "
@@ -1064,7 +1236,23 @@ def build_loot_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the item by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A minimal reaction is valid; do not force "
+            f"excitement, praise, jealousy, or a joke\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat\n"
         f"- NEVER say the item will serve YOU "
@@ -1073,7 +1261,6 @@ def build_loot_reaction_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_combat_reaction_prompt(
     bot, traits, creature_name, is_boss, mode,
@@ -1161,20 +1348,47 @@ def build_combat_reaction_prompt(
         f"{rp_context}\n\n"
         f"{combat_context}\n\n"
         f"{style}\n\n"
-        f"Say ONE very short battle cry or combat "
-        f"remark (under 50 characters).\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"Say ONE very short battle cry or combat "
+            f"remark (under 50 characters).\n"
+        )
+    else:
+        prompt += (
+            f"Say ONE very short party-chat reaction "
+            f"(under 50 characters).\n"
+        )
+
+    prompt += (
         f"Rules:\n"
         f"- Extremely brief, 3-8 words max\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the enemy by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short callouts are valid\n"
+            f"- A minimal reaction is valid; do not force "
+            f"a battle cry, joke, taunt, or dramatic line\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_death_reaction_prompt(
     reactor, reactor_traits, dead_name,
@@ -1220,12 +1434,13 @@ def build_death_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
-    dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
-        rp_context += (
-            f"\nDungeon context: {dungeon_flav}"
-        )
+    # Authored dungeon flavor is RP-only.
+    if is_rp:
+        dungeon_flav = get_dungeon_flavor(map_id)
+        if dungeon_flav:
+            rp_context += (
+                f"\nDungeon context: {dungeon_flav}"
+            )
 
     if is_player_death:
         who = f"Your party leader {dead_name}"
@@ -1240,10 +1455,13 @@ def build_death_reaction_prompt(
             )
         else:
             style = (
-                "React to the party leader "
-                "dying. Could be alarmed, "
-                "concerned, joking about it, "
-                "or offering reassurance."
+                "React like a real WoW player to a "
+                "groupmate dying. Keep it immediate and "
+                "low-effort. A brief acknowledgment, "
+                "frustrated reaction, practical comment, "
+                "or almost no reaction is valid. Do not "
+                "force concern, reassurance, humor, or "
+                "drama."
             )
     else:
         who = f"Your party member {dead_name}"
@@ -1256,9 +1474,12 @@ def build_death_reaction_prompt(
             )
         else:
             style = (
-                "React naturally. Could be "
-                "sympathy, humor, frustration, "
-                "or just acknowledgment."
+                "React like a real WoW player to a "
+                "groupmate dying. Keep it immediate and "
+                "low-effort. A brief acknowledgment, "
+                "frustrated reaction, practical comment, "
+                "or almost no reaction is valid. Do not "
+                "force sympathy, humor, or drama."
             )
 
     prompt = _build_speaker_header(
@@ -1283,15 +1504,32 @@ def build_death_reaction_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Mention {dead_name} by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Mention {dead_name} by name\n"
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- You may mention {dead_name}, but do not "
+            f"force the name into the message\n"
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like rip, oops, lol, "
+            f"or a practical callout are valid\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_levelup_reaction_prompt(
     bot, traits, leveler_name, new_level, is_bot,
@@ -1333,11 +1571,16 @@ def build_levelup_reaction_prompt(
     if not is_bot:
         who = f"{leveler_name} (the real player)"
 
-    levelup_context = (
-        f"{who} just reached level {new_level}! "
-        f"Leveling up is always exciting. "
-        f"Congratulate or react to this milestone."
-    )
+    if is_rp:
+        levelup_context = (
+            f"{who} just reached level {new_level}! "
+            f"Leveling up is always exciting. "
+            f"Congratulate or react to this milestone."
+        )
+    else:
+        levelup_context = (
+            f"{who} just reached level {new_level}."
+        )
 
     if is_rp:
         style = (
@@ -1347,9 +1590,12 @@ def build_levelup_reaction_prompt(
         )
     else:
         style = (
-            "React naturally in party chat. "
-            "Congratulate or comment on "
-            "the level-up."
+            "React like a real WoW player noticing the "
+            "level-up. Keep it brief and low-effort. A quick "
+            "congratulations, acknowledgement, comment about "
+            "the level, or throwaway reaction is enough. "
+            "Do not force excitement or make it sound like "
+            "a major milestone."
         )
 
     prompt = _build_speaker_header(
@@ -1370,14 +1616,30 @@ def build_levelup_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention level {new_level}\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like 'gz', 'nice', "
+            f"'ding', or similarly ordinary party chat "
+            f"are valid\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_quest_complete_reaction_prompt(
     bot, traits, completer_name, quest_name,
@@ -1425,31 +1687,40 @@ def build_quest_complete_reaction_prompt(
         rp_context += f"{chat_history}\n"
 
     npc_note = ""
-    if turnin_npc:
-        npc_note = (
-            f" You turned it in to "
-            f"{turnin_npc} (the quest giver NPC). "
-            f"Do NOT address or congratulate the "
-            f"NPC — talk to your PARTY instead. "
-            f"Celebrate with your teammates."
+    if is_rp:
+        if turnin_npc:
+            npc_note = (
+                f" You turned it in to "
+                f"{turnin_npc} (the quest giver NPC). "
+                f"Do NOT address or congratulate the "
+                f"NPC — talk to your PARTY instead. "
+                f"Celebrate with your teammates."
+            )
+        quest_context = (
+            f"TRANSACTION COMPLETE: Your group "
+            f"handed in \"{quest_name}\" and got "
+            f"paid.{npc_note} "
+            f"Celebrate the XP, gold, reward item, "
+            f"or simply ticking the quest off the "
+            f"log. This is a TEAM win — use 'we' "
+            f"language."
         )
-    quest_context = (
-        f"TRANSACTION COMPLETE: Your group "
-        f"handed in \"{quest_name}\" and got "
-        f"paid.{npc_note} "
-        f"Celebrate the XP, gold, reward item, "
-        f"or simply ticking the quest off the "
-        f"log. This is a TEAM win — use 'we' "
-        f"language."
-    )
-    if quest_details:
-        quest_context += (
-            f" Quest description: {quest_details}"
+        if quest_details:
+            quest_context += (
+                f" Quest description: {quest_details}"
+            )
+        if quest_objectives:
+            quest_context += (
+                f" Objectives: {quest_objectives}"
+            )
+    else:
+        quest_context = (
+            f"The quest \"{quest_name}\" was just completed."
         )
-    if quest_objectives:
-        quest_context += (
-            f" Objectives: {quest_objectives}"
-        )
+        if turnin_npc:
+            quest_context += (
+                f" It was turned in to {turnin_npc}."
+            )
 
     if is_rp:
         style = (
@@ -1460,9 +1731,12 @@ def build_quest_complete_reaction_prompt(
         )
     else:
         style = (
-            "Casual celebration — quest done, "
-            "reward collected, moving on. "
-            "Brief and team-oriented."
+            "React like a real WoW player to the quest "
+            "being finished. Keep it casual and low-effort. "
+            "A tiny acknowledgment, relief, complaint, or "
+            "moving-on comment is enough. Do not force "
+            "celebration, excitement, gratitude, or team "
+            "spirit."
         )
 
     prompt = _build_speaker_header(
@@ -1483,14 +1757,31 @@ def build_quest_complete_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the quest by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like done, finally, nice, "
+            f"or next are valid\n"
+            f"- Do not force 'we' language or make the "
+            f"quest feel like a major achievement\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_quest_objectives_reaction_prompt(
     bot, traits, quest_name, completer_name,
@@ -1540,23 +1831,29 @@ def build_quest_objectives_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    quest_context = (
-        f"The objectives for \"{quest_name}\" "
-        f"are done, but the quest is PENDING "
-        f"TURN-IN. You are still in the field. "
-        f"Your immediate goal is to travel back "
-        f"to the quest giver and get paid. "
-        f"Focus on the relief that the hard work "
-        f"is done and that it's time to head back "
-        f"— not on the story outcome."
-    )
-    if quest_details:
-        quest_context += (
-            f" Quest description: {quest_details}"
+    if is_rp:
+        quest_context = (
+            f"The objectives for \"{quest_name}\" "
+            f"are done, but the quest is PENDING "
+            f"TURN-IN. You are still in the field. "
+            f"Your immediate goal is to travel back "
+            f"to the quest giver and get paid. "
+            f"Focus on the relief that the hard work "
+            f"is done and that it's time to head back "
+            f"— not on the story outcome."
         )
-    if quest_objectives:
-        quest_context += (
-            f" Objectives: {quest_objectives}"
+        if quest_details:
+            quest_context += (
+                f" Quest description: {quest_details}"
+            )
+        if quest_objectives:
+            quest_context += (
+                f" Objectives: {quest_objectives}"
+            )
+    else:
+        quest_context = (
+            f"The objectives for \"{quest_name}\" are complete, "
+            f"but the quest has not been turned in yet."
         )
 
     if is_rp:
@@ -1570,10 +1867,12 @@ def build_quest_objectives_reaction_prompt(
         )
     else:
         style = (
-            "Casual confirmation that the work "
-            "is done. Focus on returning to turn "
-            "it in. Keep it transactional: "
-            "'Done here, let's go back.'"
+            "React like a real WoW player to the objectives "
+            "being finished. Keep it casual and low-effort. "
+            "A tiny acknowledgment, relief, question about "
+            "turning it in, or moving-on comment is enough. "
+            "Do not force excitement, teamwork, or a plan "
+            "to immediately head back."
         )
 
     prompt = _build_speaker_header(
@@ -1594,7 +1893,25 @@ def build_quest_objectives_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the quest by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like done, finally, nice, "
+            f"turn in?, or one more thing are valid\n"
+            f"- Do not force a plan, celebration, or "
+            f"team-spirit comment\n"
+        )
+
+    prompt += (
         f"- Don't attribute the completion to "
         f"any specific player — it was a group "
         f"effort\n"
@@ -1604,7 +1921,6 @@ def build_quest_objectives_reaction_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_achievement_reaction_prompt(
     bot, traits, achiever_name, achievement_name,
@@ -1643,9 +1959,9 @@ def build_achievement_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
+    # Authored dungeon flavor is RP-only.
     dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
+    if is_rp and dungeon_flav:
         rp_context += (
             f"\nDungeon context: {dungeon_flav}"
         )
@@ -1658,20 +1974,32 @@ def build_achievement_reaction_prompt(
     )
 
     if bot_is_achiever:
-        achieve_context = (
-            f"You just earned the achievement "
-            f"\"{achievement_name}\"! Achievements "
-            f"are a big deal — celebrate your own "
-            f"accomplishment with excitement!"
-        )
+        if is_rp:
+            achieve_context = (
+                f"You just earned the achievement "
+                f"\"{achievement_name}\"! Achievements "
+                f"are a big deal — celebrate your own "
+                f"accomplishment with excitement!"
+            )
+        else:
+            achieve_context = (
+                f"You just earned the achievement "
+                f"\"{achievement_name}\"."
+            )
     else:
-        achieve_context = (
-            f"Your groupmate {achiever_name} just "
-            f"earned the achievement "
-            f"\"{achievement_name}\"! Congratulate "
-            f"them — achievements are a big deal "
-            f"and worth celebrating!"
-        )
+        if is_rp:
+            achieve_context = (
+                f"Your groupmate {achiever_name} just "
+                f"earned the achievement "
+                f"\"{achievement_name}\"! Congratulate "
+                f"them — achievements are a big deal "
+                f"and worth celebrating!"
+            )
+        else:
+            achieve_context = (
+                f"{achiever_name} just earned the "
+                f"achievement \"{achievement_name}\"."
+            )
 
     if bot_is_achiever:
         if is_rp:
@@ -1681,8 +2009,11 @@ def build_achievement_reaction_prompt(
             )
         else:
             style = (
-                "Celebrate your own achievement "
-                "in party chat. Be proud!"
+                "React like a real WoW player to getting the "
+                "achievement. Keep it brief and low-effort. "
+                "A simple acknowledgement, mild satisfaction, "
+                "quick comment, or throwaway reaction is enough. "
+                "Do not force pride, excitement, or celebration."
             )
     else:
         if is_rp:
@@ -1694,10 +2025,12 @@ def build_achievement_reaction_prompt(
             )
         else:
             style = (
-                "Congratulate your groupmate "
-                "naturally in party chat. "
-                "Achievements are special, "
-                "be excited for them!"
+                "React like a real WoW player noticing a "
+                "groupmate get an achievement. Keep it brief "
+                "and low-effort. A quick congratulations, "
+                "simple acknowledgement, mild reaction, or "
+                "throwaway comment is enough. Do not force "
+                "excitement or make it sound like a major event."
             )
 
     prompt = _build_speaker_header(
@@ -1720,20 +2053,41 @@ def build_achievement_reaction_prompt(
         f"- Can mention the achievement by name\n"
     )
     if not bot_is_achiever:
+        if is_rp:
+            prompt += (
+                f"- Address {achiever_name} by name\n"
+                f"- This is THEIR achievement, not "
+                f"yours — congratulate them\n"
+            )
+        else:
+            prompt += (
+                f"- This is {achiever_name}'s achievement, "
+                f"not yours\n"
+                f"- Using {achiever_name}'s name is optional\n"
+                f"- A brief acknowledgement is enough; "
+                f"you do not have to formally congratulate them\n"
+            )
+    if is_rp:
         prompt += (
-            f"- Address {achiever_name} by name\n"
-            f"- This is THEIR achievement, not "
-            f"yours — congratulate them\n"
+            f"- Reflect your personality traits\n"
         )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions such as 'gz', 'nice', "
+            f"'finally', or similarly ordinary chat are valid\n"
+        )
+
     prompt += (
-        f"- Reflect your personality traits\n"
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_group_achievement_reaction_prompt(
     bot, traits, achiever_names, achievement_name,
@@ -1771,23 +2125,30 @@ def build_group_achievement_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
+    # Authored dungeon flavor is RP-only.
     dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
+    if is_rp and dungeon_flav:
         rp_context += (
             f"\nDungeon context: {dungeon_flav}"
         )
 
     names_str = ', '.join(achiever_names)
     count = len(achiever_names)
-    achieve_context = (
-        f"Your whole group just earned the "
-        f"achievement \"{achievement_name}\"! "
-        f"{count} groupmates got it at once: "
-        f"{names_str}. Congratulate them all — "
-        f"this is a shared accomplishment worth "
-        f"celebrating together!"
-    )
+    if is_rp:
+        achieve_context = (
+            f"Your whole group just earned the "
+            f"achievement \"{achievement_name}\"! "
+            f"{count} groupmates got it at once: "
+            f"{names_str}. Congratulate them all — "
+            f"this is a shared accomplishment worth "
+            f"celebrating together!"
+        )
+    else:
+        achieve_context = (
+            f"{count} groupmates just earned the "
+            f"achievement \"{achievement_name}\" "
+            f"at the same time: {names_str}."
+        )
 
     if is_rp:
         style = (
@@ -1798,9 +2159,12 @@ def build_group_achievement_reaction_prompt(
         )
     else:
         style = (
-            "Congratulate the group naturally in "
-            "party chat. Address them as a group, "
-            "not one by one. Be excited!"
+            "React like a real WoW player noticing several "
+            "groupmates get the achievement at once. Keep it "
+            "brief and low-effort. A quick congratulations, "
+            "simple acknowledgement, mild reaction, or "
+            "throwaway comment is enough. Do not force "
+            "excitement or make it sound like a major event."
         )
 
     prompt = _build_speaker_header(
@@ -1823,14 +2187,29 @@ def build_group_achievement_reaction_prompt(
         f"- Can mention the achievement by name\n"
         f"- You may mention a few names but don't "
         f"list everyone\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A simple 'gz', 'nice', or similarly ordinary "
+            f"reaction is completely valid\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_spell_cast_reaction_prompt(
     bot, traits, caster_name, spell_name,
@@ -1957,6 +2336,15 @@ def build_spell_cast_reaction_prompt(
                 + (f" on {target_name}"
                    if target_name else "")
             )
+
+        # Normal mode gets factual cast context only.
+        if not is_rp:
+            situation = (
+                f"You just cast {spell_name}"
+                + (f" on {target_name}"
+                   if target_name else "")
+            )
+
     else:
         # Bot is observing someone else's cast
         if spell_category == 'heal':
@@ -2058,13 +2446,20 @@ def build_spell_cast_reaction_prompt(
                 "Casual and brief."
             )
 
-    # Instruction differs based on caster vs observer
+    # Instruction differs by caster/observer and mode.
     if is_caster:
-        instruction = (
-            f"Say something in party chat to "
-            f"{target_name} about your spell. "
-            f"Mention {target_name} by name."
-        )
+        if is_rp:
+            instruction = (
+                f"Say something in party chat to "
+                f"{target_name} about your spell. "
+                f"Mention {target_name} by name."
+            )
+        else:
+            instruction = (
+                "Say a short reaction in party chat about "
+                "the cast. You do not need to address anyone "
+                "or mention a name."
+            )
     else:
         instruction = (
             f"Say a short reaction in party chat."
@@ -2137,7 +2532,24 @@ def build_spell_cast_reaction_prompt(
         f"- Short reaction, one sentence only\n"
         f"- No quotes around your message\n"
         f"- No emojis\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A minimal acknowledgement or practical "
+            f"callout is valid; do not force praise, "
+            f"aggression, gratitude, or a joke\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
         f"{anti_rep_block}"
@@ -2145,7 +2557,6 @@ def build_spell_cast_reaction_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_player_response_prompt(
     bot, traits, player_name, player_message, mode,
@@ -2157,6 +2568,7 @@ def build_player_response_prompt(
     stored_tone=None,
     memories=None,
     travel_context="",
+    playerbot_action_context="",
 ):
     """Build prompt for a bot responding to a real
     player's party chat message. The bot should
@@ -2226,12 +2638,18 @@ def build_player_response_prompt(
             "Reply like a real WoW player who is busy "
             "playing the game. Respond directly to what "
             "the player said and preserve relevant conversation "
-            "context. Most replies should still be concise. "
-            "Lowercase, fragments, shorthand, missing punctuation, "
-            "one-word answers, and occasional typos are normal. "
-            "If the player is sustaining a conversation, continue "
-            "the thread naturally instead of forcing it to end. "
-            "Do not narrate actions or scenery."
+            "context. Match the amount of detail to the message: "
+            "routine acknowledgements can be very short, while questions "
+            "and sustained conversation should get enough detail to be "
+            "useful and natural. "
+            "Player typing styles vary. Normal sentences and punctuation "
+            "are common; lowercase, fragments, shorthand, missing "
+            "punctuation, one-word answers, and occasional typos are also "
+            "possible. Do not make every bot use the same abbreviated style. "
+            "If the player is sustaining a conversation, continue the "
+            "thread naturally instead of forcing it to end. Clarifying "
+            "questions should usually produce a more specific answer, not "
+            "a vaguer one. Do not narrate actions or scenery."
         )
 
     prompt = _build_speaker_header(
@@ -2242,6 +2660,12 @@ def build_player_response_prompt(
     )
     if factual_context:
         prompt += f"\n{factual_context}\n"
+
+    if playerbot_action_context:
+        prompt += (
+            f"\n{playerbot_action_context}\n"
+        )
+
     if speaker_talent_context:
         prompt += f"{speaker_talent_context}\n"
     if target_talent_context:
@@ -2371,13 +2795,22 @@ def build_player_response_prompt(
         prompt += (
             "Rules:\n"
             "- No quotes, no emojis\n"
-            "- The authoritative live bot state above "
-            "overrides chat history, memories, personality, "
-            "and previous bot messages for factual claims\n"
-            "- Never invent a quest name, quest objective, "
-            "objective count, mob, item, level, profession, "
-            "equipment, money amount, destination, or other "
-            "specific game-state fact\n"
+            "- Authoritative live bot state overrides prior context only "
+            "when they conflict about CURRENT observable/mechanical state\n"
+            "- Keep precise current facts grounded: exact quest progress/counts, "
+            "inventory/equipment/money, exact current location/activity, local "
+            "world observations, and actual spell/service capability\n"
+            "- General Wrath-era WoW knowledge may be used normally even when "
+            "not present in live state: quests, mobs, NPCs, zones, dungeons, "
+            "items, professions, class knowledge, leveling, and mechanics\n"
+            "- Plausible level/class-appropriate personal history, profession "
+            "history/plans, and future goals may be improvised and kept consistent; "
+            "do not present them as unsupported CURRENT progress or possessions\n"
+            "- Never claim, promise, or imply that your character "
+            "can perform a class-specific spell or ability your actual "
+            "class cannot use. A Priest cannot promise mage water or "
+            "Polymorph, for example. If another class is required, you "
+            "may briefly say so, but never pretend you can do it yourself\n"
             "- The live-state restriction applies only to factual "
             "WoW game-state claims. Harmless social details, opinions, "
             "jokes, preferences, real-world topics, and conversational "
@@ -2386,6 +2819,11 @@ def build_player_response_prompt(
             "social answer is absent from live game state\n"
             "- Answer the player's actual message and preserve relevant "
             "continuity with the recent conversation\n"
+            "- If the player makes a factual claim about YOU that "
+            "conflicts with your authoritative current state, do not "
+            "make the claim true just to keep the conversation smooth. "
+            "A natural correction, disagreement, or confused response "
+            "is allowed\n"
             "- If the player is sustaining a conversation, continue it "
             "naturally instead of artificially ending every answer\n"
             "- Follow-up questions are allowed when a real player would "
@@ -2398,7 +2836,14 @@ def build_player_response_prompt(
             "- Brief mundane replies are fine when they fit, but do "
             "not repeatedly fall back to 'idk', 'lol', or 'not sure' "
             "when the conversation provides enough context to respond\n"
-            "- Most replies should be 1-8 words\n"
+            "- Let reply length follow the message. Greetings and "
+            "routine callouts may be only a few words; ordinary questions "
+            "can use a full sentence, and sustained or genuinely complex "
+            "conversation may use one or two natural sentences\n"
+            "- Keep factual answers consistent across follow-ups unless "
+            "authoritative live state has actually changed\n"
+            "- If the player asks for clarification, become more specific "
+            "when supported instead of retreating to a generic answer\n"
             "- Don't force a conversational ending\n"
         )
     if item_context:
@@ -2462,9 +2907,11 @@ def build_resurrect_reaction_prompt(
         )
     else:
         style = (
-            "React naturally to being brought "
-            "back to life. Could be grateful, "
-            "relieved, dramatic, or casual."
+            "React like a real WoW player who was just "
+            "resurrected. Keep it casual and low-effort. "
+            "A tiny thanks, acknowledgment, joke, complaint, "
+            "or almost no reaction is valid. Do not force "
+            "gratitude, relief, drama, or a big comeback line."
         )
 
     prompt = _build_speaker_header(
@@ -2491,15 +2938,32 @@ def build_resurrect_reaction_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Express gratitude, relief, or drama\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Express gratitude, relief, or drama\n"
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and one-word "
+            f"reactions are valid\n"
+            f"- Simple messages like ty, thanks, back, lol, "
+            f"or similar low-effort reactions are valid\n"
+            f"- Do not force gratitude, relief, drama, or "
+            f"a joke\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_zone_transition_prompt(
     bot, traits, zone_name, zone_id, mode,
     chat_history="", allow_action=True,
@@ -2635,7 +3099,23 @@ def build_zone_transition_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention {location_name} by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A minimal or throwaway location comment is "
+            f"completely valid\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
@@ -2664,7 +3144,6 @@ def build_zone_transition_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_quest_accept_reaction_prompt(
     bot, traits, acceptor_name, quest_name,
     quest_level, zone_name,
@@ -2705,16 +3184,24 @@ def build_quest_accept_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    quest_context = (
-        f"{acceptor_name} just "
-        f"picked up the quest \"{quest_name}\" "
-        f"(level {quest_level}) for the group in "
-        f"{zone_name}. Current Status: "
-        f"PREPARATION. You have the instructions "
-        f"but haven't begun yet. Focus on the "
-        f"task ahead, the travel required, or "
-        f"the plan of attack. Use 'we' language."
-    )
+    if is_rp:
+        quest_context = (
+            f"{acceptor_name} just "
+            f"picked up the quest \"{quest_name}\" "
+            f"(level {quest_level}) for the group in "
+            f"{zone_name}. Current Status: "
+            f"PREPARATION. You have the instructions "
+            f"but haven't begun yet. Focus on the "
+            f"task ahead, the travel required, or "
+            f"the plan of attack. Use 'we' language."
+        )
+    else:
+        quest_context = (
+            f"{acceptor_name} just picked up the quest "
+            f"\"{quest_name}\" (level {quest_level}) "
+            f"for the group in {zone_name}. "
+            f"You have not started it yet."
+        )
 
     level_diff = int(bot['level']) - int(quest_level)
     if level_diff < -3:
@@ -2750,9 +3237,12 @@ def build_quest_accept_reaction_prompt(
         )
     else:
         style = (
-            "Casual comment about heading out "
-            "to start the quest. Focus on the "
-            "journey ahead, not the outcome."
+            "React like a real WoW player noticing the "
+            "group picked up a quest. Keep it brief and "
+            "low-effort. A simple acknowledgement, practical "
+            "question, mild opinion, complaint, or throwaway "
+            "comment is enough. You do not need to discuss "
+            "the journey, make a plan, or sound eager to begin."
         )
 
     prompt = _build_speaker_header(
@@ -2778,7 +3268,25 @@ def build_quest_accept_reaction_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention the quest by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like 'ok', 'nice', or "
+            f"similarly ordinary party chat are valid\n"
+            f"- Do not force 'we' language, a plan, "
+            f"enthusiasm, or a sense of adventure\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
@@ -2797,7 +3305,6 @@ def build_quest_accept_reaction_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_quest_accept_batch_prompt(
     bot, traits, acceptor_name, quest_names,
@@ -2841,13 +3348,20 @@ def build_quest_accept_batch_prompt(
     quest_list = ", ".join(
         f'"{q}"' for q in quest_names
     )
-    quest_context = (
-        f"{acceptor_name} just picked up "
-        f"{len(quest_names)} quests for the "
-        f"group in {zone_name}: {quest_list}. "
-        f"The party has a lot of work ahead. "
-        f"Use 'we' language."
-    )
+    if is_rp:
+        quest_context = (
+            f"{acceptor_name} just picked up "
+            f"{len(quest_names)} quests for the "
+            f"group in {zone_name}: {quest_list}. "
+            f"The party has a lot of work ahead. "
+            f"Use 'we' language."
+        )
+    else:
+        quest_context = (
+            f"{acceptor_name} just picked up "
+            f"{len(quest_names)} quests for the "
+            f"group in {zone_name}: {quest_list}."
+        )
 
     if is_rp:
         style = (
@@ -2860,9 +3374,12 @@ def build_quest_accept_batch_prompt(
         )
     else:
         style = (
-            "Casual comment about picking up a "
-            "bunch of quests. Can joke about "
-            "the to-do list or express readiness."
+            "React like a real WoW player noticing the "
+            "group picked up several quests at once. Keep "
+            "it brief and low-effort. A simple acknowledgement, "
+            "practical comment, mild complaint, observation, "
+            "or throwaway reaction is enough. Do not force "
+            "a joke, readiness, enthusiasm, or a plan."
         )
 
     prompt = _build_speaker_header(
@@ -2888,7 +3405,26 @@ def build_quest_accept_batch_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention one quest name at most\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- Simple reactions like 'ok', 'nice', "
+            f"'thats a lot', or similarly ordinary chat "
+            f"are valid\n"
+            f"- Do not force 'we' language, a joke, "
+            f"readiness, enthusiasm, or a plan\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
@@ -2907,7 +3443,6 @@ def build_quest_accept_batch_prompt(
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_dungeon_entry_prompt(
     db, bot, traits, map_name, is_raid, map_id,
@@ -3016,14 +3551,29 @@ def build_dungeon_entry_prompt(
         f"Rules:\n"
         f"- No quotes, no emojis\n"
         f"- Can mention {map_name} by name\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and very "
+            f"short reactions are valid\n"
+            f"- A minimal or throwaway reaction is valid; "
+            f"do not force excitement, nerves, or readiness\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_wipe_reaction_prompt(
     bot, traits, killer_name, mode,
     chat_history="", extra_data=None,
@@ -3067,9 +3617,9 @@ def build_wipe_reaction_prompt(
     if chat_history:
         rp_context += f"{chat_history}\n"
 
-    # Location context -- dungeon takes priority
+    # Authored dungeon flavor is RP-only.
     dungeon_flav = get_dungeon_flavor(map_id)
-    if dungeon_flav:
+    if is_rp and dungeon_flav:
         rp_context += (
             f"\nDungeon context: {dungeon_flav}"
         )
@@ -3093,9 +3643,11 @@ def build_wipe_reaction_prompt(
         )
     else:
         style = (
-            "React naturally to the wipe. "
-            "Could be frustrated, humorous, "
-            "resigned, or self-deprecating."
+            "React like a real WoW player after a wipe. "
+            "Keep it brief and low-effort. A practical, "
+            "frustrated, resigned, confused, or throwaway "
+            "reaction is fine. Humor can happen naturally, "
+            "but do not try to make the wipe funny."
         )
 
     prompt = _build_speaker_header(
@@ -3120,15 +3672,25 @@ def build_wipe_reaction_prompt(
         prompt += (
             f"- Can reference {killer_name}\n"
         )
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, fragments, and very short reactions "
+            f"are valid\n"
+        )
+
     prompt += (
-        f"- Reflect your personality traits\n"
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_corpse_run_reaction_prompt(
     bot, traits, zone_name, mode,
     chat_history="", dead_name="",
@@ -3195,11 +3757,12 @@ def build_corpse_run_reaction_prompt(
             )
         else:
             style = (
-                "React to your party leader "
-                "dying. Could be sympathetic, "
-                "joking about it, offering to "
-                "wait, or commenting on what "
-                "killed them."
+                "React like a real WoW player to the "
+                "player dying and having to run back. "
+                "Keep it brief and low-effort. You might "
+                "acknowledge it, say you can wait, ask what "
+                "happened, or barely react at all. Do not "
+                "force sympathy, a joke, or a dramatic response."
             )
     else:
         # Bot died themselves
@@ -3222,11 +3785,12 @@ def build_corpse_run_reaction_prompt(
             )
         else:
             style = (
-                "Comment casually on the corpse run. "
-                "Could be annoyed about the walk, "
-                "make a quick joke about dying, "
-                "or just acknowledge the run back. "
-                "Do not describe scenery."
+                "React like a real WoW player doing a corpse "
+                "run. Keep it brief and low-effort. A simple "
+                "acknowledgement, minor complaint, mistake "
+                "admission, or note that you are running back "
+                "is enough. Do not force a joke, narrate being "
+                "a ghost, or describe scenery."
             )
 
     prompt = _build_speaker_header(
@@ -3251,14 +3815,34 @@ def build_corpse_run_reaction_prompt(
         f"{_pick_length_hint(mode)}\n"
         f"Rules:\n"
         f"- No quotes, no emojis\n"
-        f"- Reflect your personality traits\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits\n"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, fragments, and very short reactions "
+            f"are valid\n"
+        )
+
+    prompt += (
         f"- Don't repeat jokes or themes "
         f"already said in chat"
     )
+
     if is_player_death:
-        prompt += (
-            f"\n- Refer to {dead_name} by name"
-        )
+        if is_rp:
+            prompt += (
+                f"\n- Refer to {dead_name} by name"
+            )
+        else:
+            prompt += (
+                f"\n- Using {dead_name}'s name is optional"
+            )
     return append_json_instruction(
         prompt, allow_action
     )
@@ -3323,18 +3907,47 @@ def build_low_health_callout_prompt(
     prompt += (
         f"{rp_context}\n\n"
         f"{situation}\n\n"
-        f"React with urgency — call for help, "
-        f"express pain, or show desperation.\n"
-        f"Say ONE short sentence in party chat.\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"React with urgency — call for help, "
+            f"express pain, or show desperation.\n"
+            f"Say ONE short sentence in party chat.\n"
+        )
+    else:
+        prompt += (
+            f"React like a real WoW player who is very low "
+            f"on health. Keep it immediate and low-effort. "
+            f"A short request for help, warning that you are "
+            f"low, confused reaction, complaint, or minimal "
+            f"callout is enough. Do not roleplay pain, force "
+            f"panic, or make the moment dramatic.\n"
+            f"Say ONE short message in party chat.\n"
+        )
+
+    prompt += (
         f"Rules:\n"
         f"- Extremely brief, 3-10 words\n"
         f"- No quotes, no emojis\n"
-        f"- Reflect your personality traits"
     )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and urgent "
+            f"gameplay callouts are valid\n"
+            f"- Simple messages like heal pls, im low, help, "
+            f"or similar low-effort reactions are valid"
+        )
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_oom_callout_prompt(
     bot, traits, target_name, mode,
     chat_history="", extra_data=None,
@@ -3396,19 +4009,41 @@ def build_oom_callout_prompt(
     prompt += (
         f"{rp_context}\n\n"
         f"{situation}\n\n"
-        f"Alert your group — ask for a moment "
-        f"to drink, warn about low mana, or "
-        f"express frustration.\n"
-        f"Say ONE short sentence in party chat.\n"
-        f"Rules:\n"
-        f"- Extremely brief, 3-10 words\n"
-        f"- No quotes, no emojis\n"
-        f"- Reflect your personality traits"
     )
+
+    if is_rp:
+        prompt += (
+            f"Alert your group — ask for a moment "
+            f"to drink, warn about low mana, or "
+            f"express frustration.\n"
+            f"Say ONE short sentence in party chat.\n"
+            f"Rules:\n"
+            f"- Extremely brief, 3-10 words\n"
+            f"- No quotes, no emojis\n"
+            f"- Reflect your personality traits"
+        )
+    else:
+        prompt += (
+            f"React like a real WoW player who is almost "
+            f"out of mana. Keep it immediate and low-effort. "
+            f"A tiny mana warning, request to wait, note that "
+            f"you need to drink, or bare acknowledgement is "
+            f"enough. Do not force frustration, explanation, "
+            f"or a complete sentence.\n"
+            f"Say ONE very short message in party chat.\n"
+            f"Rules:\n"
+            f"- Extremely brief, 1-6 words\n"
+            f"- No quotes, no emojis\n"
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and one-word "
+            f"callouts are valid\n"
+            f"- Simple messages like oom, mana, sec, drinking, "
+            f"or need mana are valid"
+        )
     return append_json_instruction(
         prompt, allow_action
     )
-
 def build_aggro_loss_callout_prompt(
     bot, traits, target_name, aggro_target,
     mode, chat_history="", extra_data=None,
@@ -3459,21 +4094,49 @@ def build_aggro_loss_callout_prompt(
     prompt += (
         f"{rp_context}\n\n"
         f"{situation}\n\n"
-        f"React with urgency — warn the group, "
-        f"try to get the mob's attention back, "
-        f"or call out the danger.\n"
-        f"Say ONE short sentence in party chat.\n"
+    )
+
+    if is_rp:
+        prompt += (
+            f"React with urgency — warn the group, "
+            f"try to get the mob's attention back, "
+            f"or call out the danger.\n"
+            f"Say ONE short sentence in party chat.\n"
+        )
+    else:
+        prompt += (
+            f"React like a real WoW tank who just lost aggro. "
+            f"Keep it immediate and practical. A short warning, "
+            f"taunt callout, acknowledgement, or minimal reaction "
+            f"is enough. Do not force panic, drama, or a heroic "
+            f"line.\n"
+            f"Say ONE short message in party chat.\n"
+        )
+
+    prompt += (
         f"Rules:\n"
         f"- Extremely brief, 3-10 words\n"
         f"- No quotes, no emojis\n"
         f"- Can mention {target_name} or "
         f"{aggro_target} by name\n"
-        f"- Reflect your personality traits"
     )
+
+    if is_rp:
+        prompt += (
+            f"- Reflect your personality traits"
+        )
+    else:
+        prompt += (
+            f"- Personality may affect the wording subtly, "
+            f"but do not perform a persona\n"
+            f"- Shorthand, lowercase, fragments, and practical "
+            f"combat callouts are valid\n"
+            f"- Simple messages like taunting, got it, watch out, "
+            f"or aggro on you are valid"
+        )
     return append_json_instruction(
         prompt, allow_action
     )
-
 
 def build_precache_combat_pull_prompt(
     bot_name, race, class_name, level,
@@ -4399,18 +5062,21 @@ def build_player_msg_conversation_prompt(
         parts.append(
             "\nGuidelines: These are real WoW players "
             "typing while actively playing. Prioritize "
-            "a direct, low-effort response to what the "
-            "player actually said. Answer questions "
-            "instead of turning them into conversation "
-            "prompts. Most replies should be 1-8 words. "
-            "Fragments, lowercase, missing punctuation, "
-            "WoW shorthand, one-word answers, and "
-            "occasional typos are normal. A longer reply "
-            "is okay when the question genuinely needs "
-            "one. Do not add colorful descriptions, "
-            "scene-setting, invitations, encouragement, "
-            "or conversational flourishes just to make "
-            "the response interesting."
+            "a direct response to what the player actually "
+            "said. Answer questions instead of turning them "
+            "into conversation prompts. Let length follow "
+            "the message: acknowledgements can be only a few "
+            "words, ordinary questions may use a full sentence, "
+            "and sustained or genuinely complex conversation may "
+            "use one or two natural sentences. "
+            "Different speakers should not all type alike. Some "
+            "use normal sentences and punctuation; others may use "
+            "fragments, lowercase, shorthand, missing punctuation, "
+            "one-word answers, abbreviations, or occasional typos. "
+            "Those informal forms are options, not defaults. "
+            "Do not add colorful descriptions, scene-setting, "
+            "invitations, encouragement, or conversational flourishes "
+            "just to make the response interesting."
         )
 
     if is_rp:
@@ -4429,19 +5095,23 @@ def build_player_msg_conversation_prompt(
     else:
         parts.append(
             "Rules:\n"
-            "- The authoritative live bot states above "
-            "override chat history, previous bot messages, "
-            "personality, and other contextual text for "
-            "specific factual claims\n"
-            "- Each speaker may use ONLY the live state "
-            "listed under their own name for facts about "
-            "themselves; never borrow another bot's level, "
-            "quests, objective counts, inventory, gear, "
-            "professions, money, or activity\n"
-            "- Never invent a quest name, quest objective, "
-            "objective count, mob, item, level, profession, "
-            "equipment, money amount, destination, or other "
-            "specific game-state fact\n"
+            "- Authoritative live bot states override prior context only "
+            "when they conflict about CURRENT observable/mechanical state\n"
+            "- Each speaker must use only their OWN authoritative state for "
+            "current quest progress/counts, inventory, gear, money, current "
+            "location/activity, and mechanical capability; never borrow those "
+            "current facts from another bot\n"
+            "- General Wrath-era WoW knowledge may be discussed normally even "
+            "when absent from live state: quests, mobs, NPCs, zones, dungeons, "
+            "items, professions, class knowledge, leveling, and mechanics\n"
+            "- Plausible level/class-appropriate personal history, profession "
+            "history/plans, and future goals may be improvised per speaker and "
+            "kept consistent; do not present them as unsupported CURRENT state\n"
+            "- If the player makes a factual claim about a speaker that "
+            "conflicts with THAT speaker's authoritative current state, "
+            "do not make the claim true or borrow another bot's state. "
+            "That speaker may naturally correct the player, disagree, "
+            "or sound confused\n"
             "- The live-state restriction applies only to factual WoW "
             "game-state claims. Harmless social details, opinions, jokes, "
             "preferences, real-world topics, and conversational personality "
@@ -4458,6 +5128,12 @@ def build_player_msg_conversation_prompt(
             "- If the player is clearly sustaining a conversation, keep "
             "the thread going naturally and remain consistent with earlier "
             "messages\n"
+            "- Once a speaker has established a factual answer, keep it "
+            "stable across follow-ups unless authoritative live state "
+            "actually changes\n"
+            "- If the player asks for clarification, answer more "
+            "specifically when supported instead of falling back to a "
+            "generic or evasive answer\n"
             "- A follow-up question is allowed when it genuinely fits the "
             "conversation; do not force one into every reply\n"
             "- Do not tack on invitations like 'ready for "
@@ -4608,22 +5284,49 @@ BOT_QUESTION_TOPICS = [
 ]
 
 NORMAL_BOT_QUESTION_TOPICS = [
-    'what spec they are playing',
-    'whether they need any quests nearby',
-    'what they are doing next',
-    'whether they need a particular drop',
-    'whether they have run this content before',
-    'what professions they have',
-    'whether they are staying for more quests',
-    'what zone they are heading to next',
-    'whether they need to repair or vendor',
-    'whether they have enough bag space',
-    'what gear upgrade they are looking for',
-    'whether they want to queue for something',
-    'whether they are ready to move on',
-    'whether they know where the next objective is',
-    'whether they need help with another quest',
-    'what class or spec they usually play',
+    # Shared task / practical reasons
+    'what they think the group should do next',
+    'whether they need a minute before moving on',
+    'whether they need help with anything nearby',
+    'whether they are looking for a particular drop',
+    'whether they want to keep doing this content',
+
+    # WoW opinions / player preferences
+    'what they think of the class or spec they are playing',
+    'what class or spec they usually enjoy playing',
+    'something in WoW they find annoying',
+    'a WoW change or feature they have an opinion about',
+    'what kind of WoW content they usually enjoy',
+
+    # Continue existing conversation
+    'asking a natural follow-up to something they already said',
+    'asking for their opinion about something already mentioned in party chat',
+    'clarifying something they said earlier',
+    'returning to an unfinished subject from recent party chat',
+
+    # Other games / entertainment / interests
+    'what other games they have been playing lately',
+    'what game they keep coming back to besides WoW',
+    'what they have been watching lately',
+    'whether they have seen or played something people are currently talking about',
+    'something they are currently interested in',
+    'a casual opinion about games, movies, shows, sports, or technology',
+
+    # Everyday life
+    'what they are doing later or this weekend',
+    'what they have been doing outside the game',
+    'what they are eating or drinking while playing',
+    'whether work or school has been busy lately',
+    'a mundane preference about food or everyday life',
+    'something ordinary they have planned soon',
+
+    # Low-effort social questions
+    'asking their opinion about something small',
+    'asking something mundane because there is a quiet moment',
+    'asking a harmless either-or preference',
+    'asking a casual question that could get a one-line answer',
+    'asking something slightly random that a bored player might type',
+    'asking a casual question without trying to start a deep conversation',
 ]
 
 # Questions focused on the dungeon/raid context
@@ -4650,6 +5353,39 @@ BG_QUESTION_TOPICS = [
     'what frustrates them most about losing a battleground',
     'their opinion on the current team composition',
     'whether they prefer this battleground over others',
+]
+
+# Normal-mode instance questions use practical, ordinary
+# reasons a real player might type during the run. These
+# are fallback seeds, not mandatory subjects.
+NORMAL_DUNGEON_QUESTION_TOPICS = [
+    'whether they have done this dungeon recently',
+    'what they think of this dungeon',
+    'whether they usually like running this one',
+    'whether they are after anything specific here',
+    'whether they want to keep moving or take a quick break',
+    'whether they remember anything annoying coming up',
+    'whether they have had rough groups in this one before',
+    'whether they prefer this dungeon over similar ones',
+    'asking a quick practical question about the next part',
+    'asking what they think of the run so far',
+    'asking whether there is anything the group should watch for',
+    'asking something mundane during a quiet moment in the run',
+]
+
+NORMAL_BG_QUESTION_TOPICS = [
+    'what objective they want to focus on',
+    'whether they want to stick together or split up',
+    'what they think of this battleground',
+    'whether they usually like this battleground',
+    'whether they have been doing much PvP lately',
+    'what tends to annoy them most in battlegrounds',
+    'whether they prefer offense or defense here',
+    'whether they prefer battlegrounds or arenas',
+    'what class or spec they dislike fighting in PvP',
+    'asking a quick practical question about what to do next',
+    'asking whether they want help with an objective',
+    'asking something mundane during a quiet moment in the match',
 ]
 
 
@@ -4698,7 +5434,7 @@ def build_bot_question_prompt(
     # the question should be ABOUT the memory rather
     # than a generic topic.
     # --------------------------------------------------
-    if memories:
+    if is_rp and memories:
         from chatter_memory import (
             sanitize_memory_for_prompt,
         )
@@ -4807,11 +5543,23 @@ def build_bot_question_prompt(
         )
         if is_rp else None
     )
-    # Pick topic pool based on location context
+    # Pick topic pool based on mode and location.
+    # Existing instance pools remain the RP behavior;
+    # Normal uses restrained player-like alternatives.
     if get_dungeon_flavor(map_id) is not None:
-        topic = random.choice(DUNGEON_QUESTION_TOPICS)
+        topic_pool = (
+            DUNGEON_QUESTION_TOPICS
+            if is_rp
+            else NORMAL_DUNGEON_QUESTION_TOPICS
+        )
+        topic = random.choice(topic_pool)
     elif map_id in BG_MAP_NAMES:
-        topic = random.choice(BG_QUESTION_TOPICS)
+        topic_pool = (
+            BG_QUESTION_TOPICS
+            if is_rp
+            else NORMAL_BG_QUESTION_TOPICS
+        )
+        topic = random.choice(topic_pool)
     elif is_rp:
         topic = random.choice(BOT_QUESTION_TOPICS)
     else:
@@ -4922,37 +5670,112 @@ def build_bot_question_prompt(
     if target_talent_context:
         prompt += f"{target_talent_context}\n"
 
+    if not is_rp and memories:
+        from chatter_memory import (
+            sanitize_memory_for_prompt,
+        )
+
+        sanitized_memories = [
+            sanitize_memory_for_prompt(m)
+            for m in memories
+        ]
+        sanitized_memories = [
+            m for m in sanitized_memories if m
+        ]
+
+        if sanitized_memories:
+            mem_lines = '\n'.join(
+                f"  - {m}"
+                for m in sanitized_memories
+            )
+            prompt += (
+                "\nOPTIONAL PAST CONTEXT:\n"
+                f"{mem_lines}\n"
+                "These are previous gameplay moments with "
+                f"{player_name}. They are background continuity, "
+                "not the required subject of your question. "
+                "Use one only if it naturally gives you a reason "
+                "to ask something right now. It is completely fine "
+                "to ignore every memory and ask about something "
+                "else. Do not turn a memory into storytelling or "
+                "a sentimental callback.\n"
+            )
+
     if twist:
         prompt += f"Creative twist: {twist}\n"
 
-    prompt += (
-        f"{rp_context}\n\n"
-        f"You are grouped with {player_name}, "
-        f"a level {player_level} "
-        f"{player_gender + ' ' if player_gender else ''}"
-        f"{player_race} "
-        f"{player_class} (real player).\n"
-        f"You want to ask {player_name} about "
-        f"{topic}.\n\n"
-        f"Ask {player_name} ONE short, creative "
-        f"question in party chat.\n"
-        f"{style}\n\n"
-        f"{_pick_length_hint(mode)}\n"
-        f"Rules:\n"
-        f"- Ask exactly ONE question\n"
-        f"- Your message MUST end with a "
-        f"question mark (?)\n"
-        f"- Keep it to 1-2 sentences\n"
-        f"- Do NOT answer your own question\n"
-        f"- Do NOT ask generic questions like "
-        f"'how are you' or 'what's up'\n"
-        f"- Be specific and creative based on "
-        f"their class, race, the zone, or "
-        f"your personality\n"
-        f"- No quotes around your message\n"
-        f"- No emojis\n"
-        f"- You can use {player_name}'s name"
-    )
+    if is_rp:
+        prompt += (
+            f"{rp_context}\n\n"
+            f"You are grouped with {player_name}, "
+            f"a level {player_level} "
+            f"{player_gender + ' ' if player_gender else ''}"
+            f"{player_race} "
+            f"{player_class} (real player).\n"
+            f"You want to ask {player_name} about "
+            f"{topic}.\n\n"
+            f"Ask {player_name} ONE short, creative "
+            f"question in party chat.\n"
+            f"{style}\n\n"
+            f"{_pick_length_hint(mode)}\n"
+            f"Rules:\n"
+            f"- Ask exactly ONE question\n"
+            f"- Your message MUST end with a "
+            f"question mark (?)\n"
+            f"- Keep it to 1-2 sentences\n"
+            f"- Do NOT answer your own question\n"
+            f"- Do NOT ask generic questions like "
+            f"'how are you' or 'what's up'\n"
+            f"- Be specific and creative based on "
+            f"their class, race, the zone, or "
+            f"your personality\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- You can use {player_name}'s name"
+        )
+    else:
+        prompt += (
+            f"{rp_context}\n\n"
+            f"You are grouped with {player_name}, "
+            f"a level {player_level} "
+            f"{player_gender + ' ' if player_gender else ''}"
+            f"{player_race} "
+            f"{player_class} (real player).\n"
+            f"Possible conversation seed: {topic}.\n"
+            f"This is only a fallback reason to speak, "
+            f"not an assigned subject. If recent party "
+            f"chat contains an active or unfinished "
+            f"conversation, ask a natural follow-up to "
+            f"that instead. You may also ignore the seed "
+            f"when another ordinary question fits better.\n\n"
+        )
+
+        prompt += (
+            f"Ask {player_name} ONE short question "
+            f"in party chat.\n"
+            f"{style}\n\n"
+            f"{_pick_length_hint(mode)}\n"
+            f"Rules:\n"
+            f"- Ask exactly ONE question\n"
+            f"- Your message MUST end with a "
+            f"question mark (?)\n"
+            f"- Keep it to 1-2 sentences; usually "
+            f"one short line is better\n"
+            f"- Do NOT answer your own question\n"
+            f"- Recent party chat outranks a fallback "
+            f"topic when there is something natural "
+            f"to follow up on\n"
+            f"- Do not manufacture a question about "
+            f"class, race, location, or gameplay just "
+            f"because that information is available\n"
+            f"- Ordinary, mundane, low-effort questions "
+            f"are valid\n"
+            f"- Do not try to make the question clever, "
+            f"deep, funny, or especially interesting\n"
+            f"- No quotes around your message\n"
+            f"- No emojis\n"
+            f"- Using {player_name}'s name is optional"
+        )
 
     if is_rp:
         spices = pick_personality_spices(
@@ -5017,31 +5840,39 @@ def build_quest_complete_conversation_prompt(
     }.get(num_bots, str(num_bots))
 
     npc_note = ""
-    if turnin_npc:
-        npc_note = (
-            f" You turned it in to "
-            f"{turnin_npc} (the quest giver NPC)."
-            f" Do NOT address or congratulate the"
-            f" NPC — talk to your PARTY instead."
+    if is_rp:
+        if turnin_npc:
+            npc_note = (
+                f" You turned it in to "
+                f"{turnin_npc} (the quest giver NPC)."
+                f" Do NOT address or congratulate the"
+                f" NPC — talk to your PARTY instead."
+            )
+        quest_context = (
+            f"TRANSACTION COMPLETE: Your group "
+            f"handed in \"{quest_name}\" and got "
+            f"paid.{npc_note} "
+            f"Celebrate the XP, gold, reward item, "
+            f"or simply ticking the quest off the "
+            f"log. This is a TEAM win — use 'we' "
+            f"language."
         )
-
-    quest_context = (
-        f"TRANSACTION COMPLETE: Your group "
-        f"handed in \"{quest_name}\" and got "
-        f"paid.{npc_note} "
-        f"Celebrate the XP, gold, reward item, "
-        f"or simply ticking the quest off the "
-        f"log. This is a TEAM win — use 'we' "
-        f"language."
-    )
-    if quest_details:
-        quest_context += (
-            f" Quest description: {quest_details}"
+        if quest_details:
+            quest_context += (
+                f" Quest description: {quest_details}"
+            )
+        if quest_objectives:
+            quest_context += (
+                f" Objectives: {quest_objectives}"
+            )
+    else:
+        quest_context = (
+            f"The quest \"{quest_name}\" was just completed."
         )
-    if quest_objectives:
-        quest_context += (
-            f" Objectives: {quest_objectives}"
-        )
+        if turnin_npc:
+            quest_context += (
+                f" It was turned in to {turnin_npc}."
+            )
 
     parts = []
     if is_rp:
@@ -5143,12 +5974,25 @@ def build_quest_complete_conversation_prompt(
             "activity, or other character state."
         )
 
-    parts.append(
-        "Celebrate the quest completion — "
-        "relief, satisfaction, humor, or "
-        "excitement about the reward. "
-        "Don't repeat themes from recent chat."
-    )
+    if is_rp:
+        parts.append(
+            "Celebrate the quest completion — "
+            "relief, satisfaction, humor, or "
+            "excitement about the reward. "
+            "Don't repeat themes from recent chat."
+        )
+    else:
+        parts.append(
+            "React only as much as a real WoW player likely "
+            "would. A brief acknowledgment, relief, complaint, "
+            "or moving-on comment is enough. Shorthand, lowercase, "
+            "fragments, and one-word replies are valid. Do not "
+            "force celebration, excitement, gratitude, humor, "
+            "team spirit, or 'we' language. Do not force a "
+            "conversation arc or make every available bot respond. "
+            "Simple replies like done, finally, nice, or next are "
+            "valid. Don't repeat themes from recent chat."
+        )
 
     if is_rp:
         spices = pick_personality_spices(
@@ -5177,7 +6021,6 @@ def build_quest_complete_conversation_prompt(
         allow_action=allow_action,
         require_all_speakers=is_rp,
     )
-
 
 def build_quest_objectives_conversation_prompt(
     bots, traits_map, quest_name,
@@ -5213,23 +6056,29 @@ def build_quest_objectives_conversation_prompt(
         2: "two", 3: "three", 4: "four"
     }.get(num_bots, str(num_bots))
 
-    quest_context = (
-        f"The objectives for \"{quest_name}\" "
-        f"are done, but the quest is PENDING "
-        f"TURN-IN. You are still in the field. "
-        f"Your immediate goal is to travel back "
-        f"to the quest giver and get paid. "
-        f"Focus on the relief that the hard "
-        f"work is done and that it's time to "
-        f"head back — not on the story outcome."
-    )
-    if quest_details:
-        quest_context += (
-            f" Quest description: {quest_details}"
+    if is_rp:
+        quest_context = (
+            f"The objectives for \"{quest_name}\" "
+            f"are done, but the quest is PENDING "
+            f"TURN-IN. You are still in the field. "
+            f"Your immediate goal is to travel back "
+            f"to the quest giver and get paid. "
+            f"Focus on the relief that the hard "
+            f"work is done and that it's time to "
+            f"head back — not on the story outcome."
         )
-    if quest_objectives:
-        quest_context += (
-            f" Objectives: {quest_objectives}"
+        if quest_details:
+            quest_context += (
+                f" Quest description: {quest_details}"
+            )
+        if quest_objectives:
+            quest_context += (
+                f" Objectives: {quest_objectives}"
+            )
+    else:
+        quest_context = (
+            f"The objectives for \"{quest_name}\" are complete, "
+            f"but the quest has not been turned in yet."
         )
 
     parts = []
@@ -5242,10 +6091,12 @@ def build_quest_objectives_conversation_prompt(
         )
     else:
         parts.append(
-            f"Generate a short casual party chat "
-            f"exchange between {count_word} WoW "
-            f"players reacting to finishing "
-            f"quest objectives."
+            f"{count_word} bot players are available to "
+            f"react to the completed quest objectives. "
+            f"Generate the requested number of natural party "
+            f"chat replies without forcing every available "
+            f"speaker to participate or creating a conversation "
+            f"arc."
         )
 
     parts.append(quest_context)
@@ -5331,13 +6182,27 @@ def build_quest_objectives_conversation_prompt(
             "activity, or other character state."
         )
 
-    parts.append(
-        "React to objectives being done — "
-        "relief, readiness to head back, or "
-        "casual satisfaction. Don't attribute "
-        "the completion to any specific player."
-        " Don't repeat themes from recent chat."
-    )
+    if is_rp:
+        parts.append(
+            "React to objectives being done — "
+            "relief, readiness to head back, or "
+            "casual satisfaction. Don't attribute "
+            "the completion to any specific player."
+            " Don't repeat themes from recent chat."
+        )
+    else:
+        parts.append(
+            "React only as much as real WoW players likely "
+            "would. A brief acknowledgment, relief, complaint, "
+            "question about turning it in, or moving-on comment "
+            "is enough. Shorthand, lowercase, fragments, and "
+            "one-word replies are valid. Do not force relief, "
+            "excitement, teamwork, humor, or a plan to immediately "
+            "head back. Simple replies like done, finally, nice, "
+            "turn in?, or next are valid. Do not attribute the "
+            "completion to any specific player. Don't repeat "
+            "themes from recent chat."
+        )
 
     if is_rp:
         spices = pick_personality_spices(
@@ -5365,7 +6230,6 @@ def build_quest_objectives_conversation_prompt(
         allow_action=allow_action,
 	require_all_speakers=is_rp,
     )
-
 
 def build_quest_accept_conversation_prompt(
     bots, traits_map, acceptor_name,
@@ -5404,23 +6268,29 @@ def build_quest_accept_conversation_prompt(
         2: "two", 3: "three", 4: "four"
     }.get(num_bots, str(num_bots))
 
-    quest_context = (
-        f"{acceptor_name} just picked up the "
-        f"quest \"{quest_name}\" "
-        f"(level {quest_level}) for the group "
-        f"in {zone_name}. Current Status: "
-        f"PREPARATION. You have the instructions"
-        f" but haven't begun yet. Focus on the "
-        f"task ahead, the travel required, or "
-        f"the plan of attack. Use 'we' language."
-    )
-    if quest_details:
-        quest_context += (
-            f" Quest description: {quest_details}"
+    if is_rp:
+        quest_context = (
+            f"{acceptor_name} just picked up the "
+            f"quest \"{quest_name}\" "
+            f"(level {quest_level}) for the group "
+            f"in {zone_name}. Current Status: "
+            f"PREPARATION. You have the instructions"
+            f" but haven't begun yet. Focus on the "
+            f"task ahead, the travel required, or "
+            f"the plan of attack. Use 'we' language."
         )
-    if quest_objectives:
-        quest_context += (
-            f" Objectives: {quest_objectives}"
+        if quest_details:
+            quest_context += (
+                f" Quest description: {quest_details}"
+            )
+        if quest_objectives:
+            quest_context += (
+                f" Objectives: {quest_objectives}"
+            )
+    else:
+        quest_context = (
+            f"The quest \"{quest_name}\" was just accepted "
+            f"for the group."
         )
 
     parts = []
@@ -5433,10 +6303,12 @@ def build_quest_accept_conversation_prompt(
         )
     else:
         parts.append(
-            f"Generate a short casual party chat "
-            f"exchange between {count_word} WoW "
-            f"players discussing a newly "
-            f"accepted quest."
+            f"{count_word} bot players are available to "
+            f"react to the newly accepted quest. Generate "
+            f"the requested number of natural party chat "
+            f"replies without forcing every available "
+            f"speaker to participate or creating a "
+            f"conversation arc."
         )
 
     parts.append(quest_context)
@@ -5520,12 +6392,26 @@ def build_quest_accept_conversation_prompt(
             "travel state, or other character state."
         )
 
-    parts.append(
-        "Discuss the new quest — anticipation, "
-        "caution, eagerness, or planning. Focus "
-        "on the journey ahead, not the outcome. "
-        "Don't repeat themes from recent chat."
-    )
+    if is_rp:
+        parts.append(
+            "Discuss the new quest — anticipation, "
+            "caution, eagerness, or planning. Focus "
+            "on the journey ahead, not the outcome. "
+            "Don't repeat themes from recent chat."
+        )
+    else:
+        parts.append(
+            "React only as much as real WoW players likely "
+            "would. A brief acknowledgment, practical comment, "
+            "question, complaint, or almost no reaction is fine. "
+            "Shorthand, lowercase, fragments, and one-word replies "
+            "are valid. Do not force anticipation, eagerness, "
+            "excitement, planning, teamwork, humor, 'we' language, "
+            "or a discussion about the journey ahead. Simple replies "
+            "like k, got it, sure, nice, or where? are valid. Do not "
+            "force a conversation arc or make every available bot "
+            "participate. Don't repeat themes from recent chat."
+        )
 
     if is_rp:
         spices = pick_personality_spices(

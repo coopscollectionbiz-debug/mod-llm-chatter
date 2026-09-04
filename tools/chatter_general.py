@@ -26,6 +26,8 @@ from chatter_shared import (
     build_race_class_context, parse_extra_data,
     calculate_dynamic_delay,
     find_addressed_bot,
+    find_player_message_state_matches,
+    player_premise_rule,
     insert_chat_message,
     build_anti_repetition_context,
     build_bot_identity_with_level,
@@ -59,10 +61,13 @@ from chatter_db import (
     fail_event,
     get_character_info_by_name,
     mark_event,
+    reserve_playerbot_service_action,
 )
+
 from chatter_group_general_reaction import (
     maybe_queue_group_general_reaction,
 )
+from chatter_llm import quick_llm_analyze
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +143,7 @@ def _pick_length_hint(mode):
         return (
             f"Length: {hint}\n"
             f"Length mode: longer allowed "
-            f"(up to ~150 chars max) — one "
+            f"(up to ~150 chars max) â€” one "
             f"sentence\n"
             f"HARD LIMIT: Never exceed 150 "
             f"characters total"
@@ -280,6 +285,7 @@ def _select_primary_bot(
     db, client, config, bot_guids, bot_names,
     player_name, player_message, mode,
     chat_hist="",
+    bot_states=None,
 ):
     """Pick the primary bot for a General reaction.
 
@@ -308,11 +314,55 @@ def _select_primary_bot(
     addressed = addr_result.get('bot')
 
     bot1_idx = None
+    explicit_recipient = False
+
     if addressed:
         for i, name in enumerate(bot_names):
             if name == addressed:
                 bot1_idx = i
+                explicit_recipient = True
                 break
+
+    if bot1_idx is None and len(bot_guids) == 1:
+        bot1_idx = 0
+        explicit_recipient = True
+
+    if (
+        bot1_idx is None
+        and isinstance(bot_states, dict)
+    ):
+        routing_candidates = []
+
+        for i, raw_guid in enumerate(bot_guids):
+            guid = int(raw_guid)
+
+            state = bot_states.get(
+                str(guid),
+                bot_states.get(guid, {}),
+            )
+
+            routing_candidates.append({
+                'name': bot_names[i],
+                'bot_state': state,
+                '_idx': i,
+            })
+
+        state_matches = (
+            find_player_message_state_matches(
+                player_message,
+                routing_candidates,
+            )
+        )
+
+        if state_matches:
+            picked = random.choice(
+                state_matches
+            )
+
+            bot1_idx = int(
+                picked['candidate']['_idx']
+            )
+
     if bot1_idx is None:
         bot1_idx = random.randint(
             0, len(bot_guids) - 1
@@ -431,15 +481,26 @@ def _build_general_response_prompt(
         if not is_rp:
             prompt += (
                 "\nLIVE STATE RULES:\n"
-                "- The authoritative live bot state above "
-                "overrides chat history, previous bot "
-                "messages, personality, and other context "
-                "for specific factual claims.\n"
-                "- Never invent a quest name, quest "
-                "objective, objective count, mob, item, "
-                "level, profession, equipment, money "
-                "amount, destination, or other specific "
-                "game-state fact.\n"
+                "- Authoritative live state overrides prior context only "
+                "when they conflict about CURRENT observable/mechanical "
+                "character state. Absence from live state is not proof that "
+                "the character lacks general WoW knowledge or past history.\n"
+                "- Keep CURRENT state grounded: exact quest progress/counts, "
+                "current inventory/equipment/money, exact current location or "
+                "activity, nearby/local-world observations, and actual "
+                "spell/service capability must come from authoritative context.\n"
+                "- General Wrath-era WoW knowledge is allowed. You may "
+                "accurately discuss quests, zones, dungeons, mobs, items, "
+                "professions, class knowledge, leveling, and mechanics.\n"
+                "- Plausible level/class-appropriate history and plans may be "
+                "improvised and should remain consistent, including profession "
+                "history/plans and quests previously done or intended. Do not "
+                "invent precise CURRENT progress or possessions.\n"
+                "- If the player makes a factual claim about YOU that "
+                "conflicts with your authoritative current state, do "
+                "not make the claim true merely to keep the reply "
+                "smooth. A natural correction, disagreement, or "
+                "confused response is allowed.\n"
                 "- The live-state restriction applies to factual WoW "
                 "game-state claims. Harmless social details, opinions, "
                 "jokes, preferences, real-world topics, and conversational "
@@ -528,8 +589,12 @@ def _build_general_response_prompt(
         f"- Don't repeat what they said\n"
         f"- If there's chat history, stay "
         f"consistent with the conversation\n"
-        f"- Keep it brief - this is General chat, "
-        f"not a private conversation\n"
+        f"- General is public chat, so drive-by replies and brief "
+        f"answers are normal, but a direct question should still get "
+        f"enough information to answer it clearly\n"
+        f"- Do not make every speaker use lowercase, fragments, slang, "
+        f"abbreviations, or missing punctuation; player typing styles "
+        f"should vary naturally\n"
     )
     spices = pick_personality_spices(
         mode=mode, spice_count_override=_spice_count
@@ -644,15 +709,26 @@ def _build_general_followup_prompt(
         if not is_rp:
             prompt += (
                 "\nLIVE STATE RULES:\n"
-                "- The authoritative live bot state above "
-                "overrides chat history, previous bot "
-                "messages, personality, and other context "
-                "for specific factual claims.\n"
-                "- Never invent a quest name, quest "
-                "objective, objective count, mob, item, "
-                "level, profession, equipment, money "
-                "amount, destination, or other specific "
-                "game-state fact.\n"
+                "- Authoritative live state overrides prior context only "
+                "when they conflict about CURRENT observable/mechanical "
+                "character state. Absence from live state is not proof that "
+                "the character lacks general WoW knowledge or past history.\n"
+                "- Keep CURRENT state grounded: exact quest progress/counts, "
+                "current inventory/equipment/money, exact current location or "
+                "activity, nearby/local-world observations, and actual "
+                "spell/service capability must come from authoritative context.\n"
+                "- General Wrath-era WoW knowledge is allowed. You may "
+                "accurately discuss quests, zones, dungeons, mobs, items, "
+                "professions, class knowledge, leveling, and mechanics.\n"
+                "- Plausible level/class-appropriate history and plans may be "
+                "improvised and should remain consistent, including profession "
+                "history/plans and quests previously done or intended. Do not "
+                "invent precise CURRENT progress or possessions.\n"
+                "- If the player makes a factual claim about YOU that "
+                "conflicts with your authoritative current state, do "
+                "not make the claim true merely to keep the reply "
+                "smooth. A natural correction, disagreement, or "
+                "confused response is allowed.\n"
                 "- The live-state restriction applies to factual WoW "
                 "game-state claims. Harmless social details, opinions, "
                 "jokes, preferences, real-world topics, and conversational "
@@ -760,6 +836,823 @@ def _build_general_followup_prompt(
     return prompt
 
 
+def _classify_general_mage_service(
+    client,
+    config,
+    *,
+    player_name,
+    player_message,
+):
+    """Classify only public Mage-service discovery.
+
+    This intentionally does not use the broad Playerbot action
+    classifier. General is not a gameplay command channel.
+    """
+    prompt = f"""
+You are classifying one World of Warcraft General chat message.
+
+Player: {player_name}
+Message: {player_message}
+
+This classifier is ONLY for public Mage service discovery.
+
+Allowed service values:
+- water
+- food
+- portal
+- none
+
+Allowed canonical portal destinations:
+- stormwind
+- ironforge
+- darnassus
+- exodar
+- orgrimmar
+- undercity
+- thunder_bluff
+- silvermoon
+- shattrath
+- dalaran
+- theramore
+- stonard
+
+Return exactly one JSON object:
+{{"service":"water|food|portal|none",
+  "destination":"canonical_destination_or_empty",
+  "requested_level":null}}
+
+Interpret normal WoW shorthand naturally.
+
+Common portal language includes:
+- port, portal, tele, teleport
+- "port sw", "sw port", "tele IF", "org port?", "dal pls"
+- A Mage plus an obvious destination can imply a portal request,
+  e.g. "mage sw?" or "any mage for dal"
+
+Common destination shorthand:
+- stormwind: sw
+- ironforge: if
+- darnassus: darn
+- exodar: exo
+- orgrimmar: org, orgri
+- undercity: uc
+- thunder_bluff: tb, thunder bluff
+- silvermoon: smc
+- shattrath: shatt, shat
+- dalaran: dal, dala
+- theramore: thera
+- stonard: ston
+
+Normalize portal destinations to the canonical values above.
+A minor typo may be understood when the intended supported
+destination is clear. Never invent an unsupported destination.
+
+Food/water shorthand is also normal:
+- "water", "mage water", "need water", "drink pls"
+- "food", "mage food", "bread pls", "can someone make food"
+- "55 food", "food 55", "can I get 55 food?"
+- "55 water", "water for 55", "lvl 55 water"
+
+IMPORTANT NUMBER RULE:
+- A bare level-like number associated with food/water means the
+  requested CHARACTER LEVEL for the conjured item tier.
+- Example: "55 food" means requested_level=55.
+- It does NOT mean quantity 55.
+- Set requested_level only for food/water.
+- Valid requested_level range is 1 through 80.
+- If no level is stated, use null.
+- Stack/count requests such as "3 stacks water" are not a level;
+  requested_level remains null.
+
+Rules:
+- water = player is asking a Mage for conjured water.
+- food = player is asking a Mage for conjured food.
+- portal = player is asking for a Mage portal/teleport service.
+- none = discussion, jokes, statements, questions about these topics,
+  combat/control requests, buffs, following, attacking, healing,
+  crowd control, unrelated trading, or anything else.
+- A Mage being mentioned by itself is not enough.
+- For portal, destination MUST be one canonical supported destination
+  above, or empty if the player did not specify where.
+- For water/food, destination must be empty.
+- For portal/none, requested_level must be null.
+""".strip()
+
+    raw = quick_llm_analyze(
+        client,
+        config,
+        prompt,
+        max_tokens=120,
+        label='general_mage_service',
+    )
+
+    if not raw:
+        return {
+            'service': 'none',
+            'destination': '',
+            'requested_level': None,
+        }
+
+    import json
+
+    cleaned = str(raw).strip()
+
+    if cleaned.startswith('```'):
+        cleaned = cleaned.strip('`').strip()
+
+        if cleaned.lower().startswith('json'):
+            cleaned = cleaned[4:].strip()
+
+    try:
+        parsed = json.loads(cleaned)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[GEN-SERVICE] invalid classifier JSON: %r",
+            raw,
+        )
+        return {
+            'service': 'none',
+            'destination': '',
+            'requested_level': None,
+        }
+
+    if not isinstance(parsed, dict):
+        return {
+            'service': 'none',
+            'destination': '',
+            'requested_level': None,
+        }
+
+    service = str(
+        parsed.get('service') or 'none'
+    ).strip().lower()
+
+    if service not in {
+        'water',
+        'food',
+        'portal',
+        'none',
+    }:
+        service = 'none'
+
+    destination = str(
+        parsed.get('destination') or ''
+    ).strip().casefold()
+
+    destination_aliases = {
+        'stormwind': 'stormwind',
+        'sw': 'stormwind',
+        'ironforge': 'ironforge',
+        'if': 'ironforge',
+        'darnassus': 'darnassus',
+        'darn': 'darnassus',
+        'exodar': 'exodar',
+        'exo': 'exodar',
+        'orgrimmar': 'orgrimmar',
+        'org': 'orgrimmar',
+        'orgri': 'orgrimmar',
+        'undercity': 'undercity',
+        'uc': 'undercity',
+        'thunder_bluff': 'thunder_bluff',
+        'thunder bluff': 'thunder_bluff',
+        'tb': 'thunder_bluff',
+        'silvermoon': 'silvermoon',
+        'smc': 'silvermoon',
+        'shattrath': 'shattrath',
+        'shatt': 'shattrath',
+        'shat': 'shattrath',
+        'dalaran': 'dalaran',
+        'dal': 'dalaran',
+        'dala': 'dalaran',
+        'theramore': 'theramore',
+        'thera': 'theramore',
+        'stonard': 'stonard',
+        'ston': 'stonard',
+    }
+
+    if service == 'portal':
+        destination = destination_aliases.get(
+            destination,
+            '',
+        )
+    else:
+        destination = ''
+
+    requested_level = None
+
+    if service in {'food', 'water'}:
+        raw_level = parsed.get(
+            'requested_level'
+        )
+
+        try:
+            parsed_level = int(
+                raw_level
+            )
+        except (TypeError, ValueError):
+            parsed_level = 0
+
+        if 1 <= parsed_level <= 80:
+            requested_level = parsed_level
+
+    return {
+        'service': service,
+        'destination': destination,
+        'requested_level': requested_level,
+    }
+
+
+def _pick_general_service_bot(
+    db,
+    bot_guids,
+    bot_states,
+    expected_class_id,
+    return_all=False,
+):
+    """Select exactly one C++-approved service bot deterministically."""
+    candidates = []
+
+    for raw_guid in bot_guids or []:
+        try:
+            guid = int(raw_guid)
+        except (TypeError, ValueError):
+            continue
+
+        if guid <= 0:
+            continue
+
+        state = {}
+
+        if isinstance(bot_states, dict):
+            state = bot_states.get(
+                str(guid),
+                bot_states.get(guid, {}),
+            )
+
+        if not isinstance(state, dict):
+            state = {}
+
+        # C++ service payloads wrap the live snapshot beneath
+        # "bot_state". Accept that authoritative shape while
+        # retaining compatibility with a direct state object.
+        live_state = state.get(
+            'bot_state',
+            state,
+        )
+
+        if not isinstance(live_state, dict):
+            live_state = {}
+
+        identity = live_state.get(
+            'identity',
+            {},
+        )
+
+        if not isinstance(identity, dict):
+            identity = {}
+
+        live_class = str(
+            identity.get('class') or ''
+        ).strip().casefold()
+
+        expected_live_class = {
+            4: 'rogue',
+            8: 'mage',
+        }.get(
+            int(expected_class_id),
+            '',
+        )
+
+        if (
+            not expected_live_class
+            or live_class != expected_live_class
+        ):
+            continue
+
+        info = _get_bot_info(
+            db,
+            guid,
+        )
+
+        if not info:
+            continue
+
+        if (
+            int(info.get('class') or 0)
+            != int(expected_class_id)
+        ):
+            continue
+
+        candidates.append({
+            'guid': guid,
+            'name': str(
+                info.get('name') or ''
+            ).strip(),
+            'race': get_race_name(
+                info.get('race')
+            ),
+            'class': get_class_name(
+                info.get('class')
+            ),
+            'level': int(
+                info.get('level') or 0
+            ),
+            'gender': get_gender_label(
+                info.get('gender')
+            ),
+            'state': state,
+        })
+
+    candidates = [
+        bot
+        for bot in candidates
+        if bot['name']
+    ]
+
+    if not candidates:
+        if return_all:
+            return []
+        return None
+
+    candidates.sort(
+        key=lambda bot: bot['guid']
+    )
+
+    if return_all:
+        return candidates
+
+    return candidates[0]
+
+
+def _pick_general_service_mage(
+    db,
+    bot_guids,
+    bot_states,
+):
+    return _pick_general_service_bot(
+        db,
+        bot_guids,
+        bot_states,
+        expected_class_id=8,
+    )
+
+
+def _pick_general_service_rogue(
+    db,
+    bot_guids,
+    bot_states,
+):
+    return _pick_general_service_bot(
+        db,
+        bot_guids,
+        bot_states,
+        expected_class_id=4,
+    )
+
+
+def _get_general_service_rogues(
+    db,
+    bot_guids,
+    bot_states,
+):
+    return _pick_general_service_bot(
+        db,
+        bot_guids,
+        bot_states,
+        expected_class_id=4,
+        return_all=True,
+    )
+
+
+def _build_general_service_whisper_prompt(
+    *,
+    bot,
+    player_name,
+    player_message,
+    service,
+    destination,
+    zone_name,
+    mode,
+):
+    """Build a private discovery response, never action confirmation."""
+    identity = build_bot_identity_with_level(
+        bot['name'],
+        bot['race'],
+        bot['class'],
+        bot['level'],
+        gender=bot['gender'],
+    )
+
+    factual_context = build_bot_state_context(
+        bot.get('state') or {}
+    )
+
+    service_detail = service
+
+    if service == 'portal' and destination:
+        service_detail = (
+            f"portal requested to: {destination}"
+        )
+
+    if service == 'lockpick':
+        service_detail = (
+            "lockpicking service for the exact linked lockbox"
+        )
+
+    coordination_rule = ""
+
+    if service == 'lockpick':
+        coordination_rule = (
+            "- Tell the player to invite you to their party. "
+            "You have a short service reservation while waiting "
+            "for that party invite. "
+            "Once the normal Playerbots party behavior has brought "
+            "you together, the player should trade the SAME linked "
+            "lockbox in the Do Not Trade slot. "
+            "Do not claim it has already been unlocked.\n"
+        )
+
+    if mode == 'roleplay':
+        style = (
+            "Reply in-character but keep this private whisper "
+            "brief and practical."
+        )
+    else:
+        style = (
+            "Reply like a real WoW player sending a quick private "
+            "whisper after noticing a General chat service request. "
+            "Natural fragments and WoW shorthand are fine."
+        )
+
+    prompt = (
+        f"{identity}\n"
+    )
+
+    if factual_context:
+        prompt += (
+            f"\n{factual_context}\n"
+        )
+
+    prompt += f"""
+You noticed {player_name} ask in General:
+"{player_message}"
+
+Detected public service request:
+{service_detail}
+
+You are now privately whispering {player_name}.
+
+{style}
+
+AUTHORITATIVE ACTION STATUS:
+- This is discovery/coordination only.
+- No Playerbot gameplay action has been queued, accepted, or executed.
+- Do NOT claim that you already gave water or food.
+- Do NOT claim that you already opened or cast a portal.
+- Do NOT claim that you teleported the player.
+- Do NOT claim that you already picked or unlocked a lockbox.
+- Do NOT claim the service is mechanically guaranteed.
+{coordination_rule}- You may acknowledge the request and coordinate the next step.
+- For an unspecified portal destination, ask where they need to go.
+- Keep the whisper short: normally one brief sentence.
+- No quotes and no emojis.
+"""
+
+    prompt = append_json_instruction(
+        prompt,
+        allow_action=False,
+        skip_emote=True,
+        skip_action_rng=True,
+    )
+
+    return prompt
+
+
+def process_general_service_request_event(
+    db,
+    client,
+    config,
+    event,
+):
+    """Handle one dry-run General service discovery event."""
+    event_id = event['id']
+
+    extra_data = parse_extra_data(
+        event.get('extra_data'),
+        event_id,
+        'player_general_service_request',
+    )
+
+    if not extra_data:
+        mark_event(
+            db,
+            event_id,
+            'skipped',
+        )
+        return False
+
+    player_name = str(
+        extra_data.get('player_name') or 'someone'
+    ).strip()
+
+    player_message = str(
+        extra_data.get('player_message') or ''
+    ).strip()
+
+    bot_guids = extra_data.get(
+        'bot_guids',
+        [],
+    )
+
+    bot_states = extra_data.get(
+        'bot_states',
+        {},
+    )
+
+    service_hint = str(
+        extra_data.get('service_hint') or ''
+    ).strip().lower()
+
+    try:
+        item_entry = int(
+            extra_data.get('item_entry') or 0
+        )
+    except (TypeError, ValueError):
+        item_entry = 0
+
+    zone_id = int(
+        extra_data.get('zone_id') or 0
+    )
+
+    zone_name = str(
+        extra_data.get('zone_name')
+        or 'Unknown'
+    ).strip()
+
+    try:
+        player_guid = int(
+            event.get('subject_guid') or 0
+        )
+    except (TypeError, ValueError):
+        player_guid = 0
+
+    if (
+        not player_name
+        or not player_message
+        or not player_guid
+        or not zone_id
+        or not bot_guids
+    ):
+        mark_event(
+            db,
+            event_id,
+            'skipped',
+        )
+        return False
+
+    try:
+        if service_hint == 'lockpick':
+            if item_entry <= 0:
+                logger.warning(
+                    "[GEN-SERVICE] event=%s player=%s "
+                    "lockpick payload missing item_entry",
+                    event_id,
+                    player_name,
+                )
+
+                mark_event(
+                    db,
+                    event_id,
+                    'skipped',
+                )
+                return False
+
+            service = 'lockpick'
+            destination = ''
+        else:
+            classification = (
+                _classify_general_mage_service(
+                    client,
+                    config,
+                    player_name=player_name,
+                    player_message=player_message,
+                )
+            )
+
+            service = classification['service']
+            destination = classification['destination']
+
+        if service == 'none':
+            logger.info(
+                "[GEN-SERVICE] event=%s player=%s "
+                "message=%r result=classifier_rejected",
+                event_id,
+                player_name,
+                player_message,
+            )
+
+            mark_event(
+                db,
+                event_id,
+                'skipped',
+            )
+            return False
+
+        reservation_id = 0
+
+        if service == 'lockpick':
+            service_bot = None
+
+            rogue_candidates = (
+                _get_general_service_rogues(
+                    db,
+                    bot_guids,
+                    bot_states,
+                )
+            )
+
+            for rogue in rogue_candidates:
+                reservation_id = (
+                    reserve_playerbot_service_action(
+                        db,
+                        player_guid=player_guid,
+                        bot_guid=rogue['guid'],
+                        source_channel='general',
+                        action_key='lockpick_trade_item',
+                        action_arg=str(item_entry),
+                        target_type='player',
+                        target_guid=player_guid,
+                        target_name=player_name,
+                        event_id=event_id,
+                        waiting_seconds=120,
+                    )
+                )
+
+                if reservation_id:
+                    service_bot = rogue
+                    break
+        else:
+            service_bot = _pick_general_service_mage(
+                db,
+                bot_guids,
+                bot_states,
+            )
+
+        if not service_bot:
+            logger.info(
+                "[GEN-SERVICE] event=%s player=%s "
+                "service=%s result=no_valid_service_bot",
+                event_id,
+                player_name,
+                service,
+            )
+
+            mark_event(
+                db,
+                event_id,
+                'skipped',
+            )
+            return False
+
+        logger.info(
+            "[PLAYERBOT-DRYRUN] event=%s player=%s "
+            "channel=general service=%s destination=%r "
+            "resolved=[%s:%s] reservation=%s gameplay=none",
+            event_id,
+            player_name,
+            service,
+            destination,
+            service_bot['guid'],
+            service_bot['name'],
+            reservation_id or 0,
+        )
+
+        mode = get_chatter_mode(
+            config
+        )
+
+        prompt = (
+            _build_general_service_whisper_prompt(
+                bot=service_bot,
+                player_name=player_name,
+                player_message=player_message,
+                service=service,
+                destination=destination,
+                zone_name=zone_name,
+                mode=mode,
+            )
+        )
+
+        max_tokens = min(
+            int(
+                config.get(
+                    'LLMChatter.MaxTokens',
+                    200,
+                )
+            ),
+            120,
+        )
+
+        response = call_llm(
+            client,
+            prompt,
+            config,
+            max_tokens_override=max_tokens,
+            context=(
+                f"general-service:#{event_id}:"
+                f"{service_bot['name']}"
+            ),
+            label='general_service_reply',
+            metadata={
+                'zone_id': zone_id,
+                'zone_name': zone_name,
+                'service': service,
+            },
+        )
+
+        if not response:
+            mark_event(
+                db,
+                event_id,
+                'skipped',
+            )
+            return False
+
+        parsed = parse_single_response(
+            response
+        )
+
+        message = strip_speaker_prefix(
+            parsed.get('message', ''),
+            service_bot['name'],
+        )
+
+        message = cleanup_message(
+            message,
+            action=None,
+        )
+
+        if not message:
+            mark_event(
+                db,
+                event_id,
+                'skipped',
+            )
+            return False
+
+        if len(message) > 255:
+            message = (
+                message[:252]
+                + '...'
+            )
+
+        delay = min(
+            calculate_dynamic_delay(
+                len(message),
+                config,
+                prev_message_length=len(
+                    player_message
+                ),
+                responsive=True,
+            ),
+            5.0,
+        )
+
+        insert_chat_message(
+            db,
+            service_bot['guid'],
+            service_bot['name'],
+            message,
+            channel='whisper',
+            delay_seconds=delay,
+            event_id=event_id,
+            player_guid=player_guid,
+            config=config,
+            delivery_policy='responsive',
+            delivery_reason=(
+                'general_service_discovery'
+            ),
+            owner_subsystem='general_service',
+        )
+
+        mark_event(
+            db,
+            event_id,
+            'completed',
+        )
+
+        return True
+
+    except Exception:
+        fail_event(
+            db,
+            event_id,
+            'player_general_service_request',
+            'handler error',
+        )
+        return False
+
+
 def process_general_player_msg_event(
     event, db, client, config
 ):
@@ -829,12 +1722,18 @@ def process_general_player_msg_event(
         )
         chat_hist = _format_general_history(history)
 
-        # Pick primary bot and decide conv vs stmt
+        routing_bot_states = extra_data.get(
+            'bot_states',
+            {},
+        )
+
+        # Explicit recipient beats current-state inference.
         primary = _select_primary_bot(
             db, client, config, bot_guids,
             bot_names, player_name,
             player_message, mode,
             chat_hist=chat_hist,
+            bot_states=routing_bot_states,
         )
         if not primary:
             mark_event(db, event_id, 'skipped')
@@ -1000,7 +1899,7 @@ def process_general_player_msg_event(
             msg1 = msg1[:252] + "..."
 
 
-        # Queue first bot's message — responsive
+        # Queue first bot's message â€” responsive
         # since player is waiting for a reply.
         # Skip zone gap: the player asked a direct
         # question and is actively waiting. Cap at
@@ -1493,14 +2392,18 @@ def _build_general_continuation_prompt(
         style = (
             "Reply like a real WoW player casually "
             "typing in General chat while playing. "
-            "Keep it low-effort and conversational. "
-            "Lowercase, fragments, abbreviations, "
-            "WoW shorthand, and occasional internet "
-            "slang are natural when they fit. "
-            "A dry joke or mildly salty comment is fine, "
-            "but do not force memes, snark, or trash talk. "
-            "Do not sound like an NPC, lore writer, "
-            "Reddit essay, or scripted comedian."
+            "Keep it conversational and appropriate for public chat. "
+            "Different players type differently: some use complete "
+            "sentences, normal capitalization, and punctuation; others "
+            "may use lowercase, fragments, abbreviations, WoW shorthand, "
+            "or occasional internet slang. These are optional styles, "
+            "not a shared voice for every speaker. "
+            "As a conversation develops, answer substantive or clarifying "
+            "questions with enough detail to move the thread forward "
+            "instead of repeatedly giving generic throwaway replies. "
+            "A dry joke or mildly salty comment is fine, but do not force "
+            "memes, snark, or trash talk. Do not sound like an NPC, lore "
+            "writer, Reddit essay, or scripted comedian."
         )
 
     # Format the conversation thread
@@ -1551,15 +2454,21 @@ def _build_general_continuation_prompt(
         if not is_rp:
             prompt += (
                 "\nLIVE STATE RULES:\n"
-                "- The authoritative live bot state above "
-                "overrides chat history, previous bot "
-                "messages, personality, and other context "
-                "for specific factual claims.\n"
-                "- Never invent a quest name, quest "
-                "objective, objective count, mob, item, "
-                "level, profession, equipment, money "
-                "amount, destination, or other specific "
-                "game-state fact.\n"
+                "- Authoritative live state overrides prior context only "
+                "when they conflict about CURRENT observable/mechanical "
+                "character state. Absence from live state is not proof that "
+                "the character lacks general WoW knowledge or past history.\n"
+                "- Keep CURRENT state grounded: exact quest progress/counts, "
+                "current inventory/equipment/money, exact current location or "
+                "activity, nearby/local-world observations, and actual "
+                "spell/service capability must come from authoritative context.\n"
+                "- General Wrath-era WoW knowledge is allowed. You may "
+                "accurately discuss quests, zones, dungeons, mobs, items, "
+                "professions, class knowledge, leveling, and mechanics.\n"
+                "- Plausible level/class-appropriate history and plans may be "
+                "improvised and should remain consistent, including profession "
+                "history/plans and quests previously done or intended. Do not "
+                "invent precise CURRENT progress or possessions.\n"
                 "- The live-state restriction applies to factual WoW "
                 "game-state claims. Harmless social details, opinions, "
                 "jokes, preferences, real-world topics, and conversational "
@@ -1628,6 +2537,10 @@ def _build_general_continuation_prompt(
         f"NPC, zone, or faction names - write them "
         f"as plain text\n"
         f"- Don't repeat what others said\n"
+        f"- Keep established factual claims consistent across follow-ups "
+        f"unless authoritative live state actually changes\n"
+        f"- If someone asks for clarification, become more specific when "
+        f"supported instead of retreating to a generic answer\n"
         f"- Stay on the subject of the current conversation. "
         f"Do not introduce an unrelated topic just to make "
         f"the reply interesting\n"
@@ -1826,7 +2739,7 @@ def _general_extended_conversation(
                 p for p in participants
                 if p['guid'] != speaker['guid']
             ]
-            # Don't consume a turn — retry
+            # Don't consume a turn â€” retry
             continue
 
         sp_race = get_race_name(sp_info['race'])
@@ -2120,4 +3033,3 @@ def _general_extended_conversation(
         })
         last_speaker_guid = speaker['guid']
         cont_turn += 1
-

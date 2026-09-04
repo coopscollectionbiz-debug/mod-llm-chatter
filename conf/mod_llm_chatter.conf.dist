@@ -456,6 +456,71 @@ LLMChatter.Database.Name = acore_characters
 LLMChatter.ChatterMode = roleplay
 
 #
+#   LLMChatter.CurrentTopics.Enable [BRIDGE]
+#       Gives Normal-mode bots optional knowledge of recent real-world
+#       topics such as games, trailers, movies, technology, sports,
+#       and major news. This context is NEVER injected in roleplay mode.
+#       Headlines are background knowledge, not mandatory chat topics.
+#       Default: 1
+#
+LLMChatter.CurrentTopics.Enable = 1
+
+#
+#   LLMChatter.CurrentTopics.RefreshMinutes [BRIDGE]
+#       How often the bridge refreshes the shared RSS topic cache.
+#       Default: 180
+#
+LLMChatter.CurrentTopics.RefreshMinutes = 180
+
+#
+#   LLMChatter.CurrentTopics.MaxCacheItems [BRIDGE]
+#       Maximum number of recent deduplicated topics retained.
+#       Default: 20
+#
+LLMChatter.CurrentTopics.MaxCacheItems = 20
+
+#
+#   LLMChatter.CurrentTopics.ItemsPerPrompt [BRIDGE]
+#       Number of randomly sampled current topics exposed to an eligible
+#       Normal-mode generation call. Set 0 to retain the cache but inject
+#       no current-world knowledge.
+#       Default: 4
+#
+LLMChatter.CurrentTopics.ItemsPerPrompt = 4
+
+#
+#   LLMChatter.CurrentTopics.InjectionChancePercent [BRIDGE]
+#       Chance that an eligible Normal-mode generation receives
+#       current-world context at all. This keeps contemporary subjects
+#       occasional rather than constantly sitting in model attention.
+#       RP mode is always excluded regardless of this value.
+#       Default: 25
+#
+LLMChatter.CurrentTopics.InjectionChancePercent = 25
+
+#
+#   LLMChatter.CurrentTopics.MaxAgeHours [BRIDGE]
+#       Ignore dated feed items older than this many hours.
+#       Default: 168 (7 days)
+#
+LLMChatter.CurrentTopics.MaxAgeHours = 168
+
+#
+#   LLMChatter.CurrentTopics.FetchTimeoutSeconds [BRIDGE]
+#       Per-feed HTTP timeout.
+#       Default: 8
+#
+LLMChatter.CurrentTopics.FetchTimeoutSeconds = 8
+
+#
+#   LLMChatter.CurrentTopics.Feeds [BRIDGE]
+#       Optional custom RSS/Atom feed URLs separated by |.
+#       Leave blank to use the built-in gaming, entertainment,
+#       technology, sports, and general-interest Google News feeds.
+#
+LLMChatter.CurrentTopics.Feeds =
+
+#
 #   LLMChatter.Language [BRIDGE]
 #       Language the LLM should use when generating bot chat.
 #       WoW proper nouns (zone, creature, item, spell, quest,
@@ -845,6 +910,16 @@ LLMChatter.ProximityChatter.MaxConversationLines = 4
 LLMChatter.ProximityChatter.ConversationLineDelay = 2
 
 #
+#   LLMChatter.ProximityChatter.StopAndChatEnable
+#       Temporarily stops the selected non-party Playerbot
+#       speaker while a player /say scene remains active.
+#       Combat, distance, death, and scene expiration release it.
+#       Party and raid Playerbots are never stopped.
+#       Default: 1
+#
+LLMChatter.ProximityChatter.StopAndChatEnable = 1
+
+#
 #   LLMChatter.ProximityChatter.ReplyWindowSeconds
 #       How long a delivered scene stays eligible for a
 #       player /say reply.
@@ -892,6 +967,23 @@ LLMChatter.ProximityChatter.FacingResetDelay = 8
 #       Default: 40
 #
 LLMChatter.ProximityChatter.PlayerSayScanRadius = 40
+
+#
+#   LLMChatter.ProximityChatter.PlayerObservationRadius
+#       Maximum distance (yards) for an INFERRED /say
+#       recipient.
+#
+#       Examples:
+#           "nice swords"
+#           "cool staff"
+#           "nice shield"
+#
+#       Explicitly named or selected PlayerBots still use
+#       the normal PlayerSayScanRadius.
+#
+#       Default: 20
+#
+LLMChatter.ProximityChatter.PlayerObservationRadius = 20
 
 ###############################################################################
 # GROUP CHATTER TUNING [SERVER]
@@ -1454,7 +1546,7 @@ LLMChatter.GeneralChat.MinZoneGap = 15
 #       Default: 30
 #       [BRIDGE]
 #
-LLMChatter.GeneralChat.ConversationChance = 30
+LLMChatter.GeneralChat.ConversationChance = 60
 
 #
 #   LLMChatter.GeneralChat.ExtendedConversationChance
@@ -1466,7 +1558,7 @@ LLMChatter.GeneralChat.ConversationChance = 30
 #       Default: 40
 #       [BRIDGE]
 #
-LLMChatter.GeneralChat.ExtendedConversationChance = 40
+LLMChatter.GeneralChat.ExtendedConversationChance = 65
 
 #
 #   LLMChatter.GeneralChat.ExtendedMaxMessages
@@ -1477,7 +1569,7 @@ LLMChatter.GeneralChat.ExtendedConversationChance = 40
 #       Default: 3
 #       [BRIDGE]
 #
-LLMChatter.GeneralChat.ExtendedMaxMessages = 3
+LLMChatter.GeneralChat.ExtendedMaxMessages = 5
 
 ###############################################################################
 # RAID CHATTER TUNING [SERVER]
@@ -2647,4 +2739,3 @@ LLMChatter.Screenshot.BoundAccountId = 0
 #       Default: (uses LLMChatter.Database.Host)
 #
 # LLMChatter.Screenshot.DBHost = 127.0.0.1
-
