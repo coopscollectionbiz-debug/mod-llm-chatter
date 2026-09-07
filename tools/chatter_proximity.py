@@ -227,6 +227,24 @@ def _single_prompt(
     )
 
     speaker_desc = _describe_speaker(db, speaker)
+
+    bot_state = {}
+    bot_states = extra.get('bot_states') or {}
+
+    if (
+        not is_npc
+        and isinstance(bot_states, dict)
+    ):
+        speaker_guid = speaker.get('id')
+        if speaker_guid is not None:
+            bot_state = bot_states.get(
+                str(speaker_guid), {}
+            )
+
+    factual_context = build_bot_state_context(
+        bot_state
+    )
+
     nearby_names = extra.get('nearby_names') or []
 
     speaker_traits = []
@@ -289,6 +307,22 @@ def _single_prompt(
             f"Speaker: {speaker_desc}",
             f"Zone for factual context only: {zone_name}",
         ]
+
+    if factual_context and not is_npc:
+        lines.extend([
+            "",
+            "AUTHORITATIVE LIVE SPEAKER STATE:",
+            factual_context,
+            "",
+            "Ground all personal gameplay capability claims in "
+            "the authoritative state above.",
+            "Do not claim or offer tanking, healing, summons, "
+            "portals, teleports, conjured food/water, buffs, "
+            "or other class services unless that capability is "
+            "affirmatively supported for THIS speaker.",
+            "Never infer a service merely because the speaker's "
+            "class can potentially perform it.",
+        ])
 
     if speaker_traits and (is_rp or is_npc):
         lines.append(
@@ -382,6 +416,9 @@ def _single_prompt(
             "The player may make a mundane comment, ask a "
             "small question, complain briefly, say something "
             "practical, or say almost nothing.",
+            "Do not advertise or solicit class/group services "
+            "such as tanking, healing, summons, portals, buffs, "
+            "food, or water in unsolicited ambient chat.",
             "It does not need to start a conversation.",
         ])
 
@@ -900,45 +937,139 @@ def _fetch_proximity_history(
     db, player_guid: int, zone_id: int,
     limit: int = 10,
 ) -> List[Dict]:
-    """Fetch recent proximity messages for context."""
+    """Fetch recent two-sided proximity conversation for context."""
     if not player_guid or not zone_id:
         return []
+
     try:
         cursor = db.cursor(dictionary=True)
+
+        # Historically this fetched only delivered bot messages, which
+        # removed the human side of the conversation. Reconstruct both
+        # sides so follow-ups such as "what flavor?" or "that's mine"
+        # retain their actual conversational referents.
+        #
+        # Only include a player event after at least one response from
+        # that event has actually been delivered. This keeps the current
+        # in-flight player message from appearing twice in its own prompt.
+        row_limit = max(2, int(limit) * 2)
+
         cursor.execute(
-            "SELECT t.bot_name, t.message FROM ("
-            "  SELECT m.bot_name, m.message,"
-            "         m.delivered_at"
-            "  FROM llm_chatter_messages m"
-            "  JOIN llm_chatter_events e"
-            "    ON m.event_id = e.id"
-            "  WHERE m.delivered = 1"
-            "    AND m.channel IN ('say', 'msay')"
-            "    AND e.zone_id = %s"
-            "    AND m.player_guid = %s"
-            "    AND m.delivered_at"
-            "        > DATE_SUB(NOW(),"
-            "          INTERVAL 5 MINUTE)"
-            "  ORDER BY m.delivered_at DESC"
-            "  LIMIT %s"
-            ") t ORDER BY t.delivered_at ASC",
-            (zone_id, player_guid, limit),
+            """
+            SELECT t.name, t.message
+            FROM (
+                SELECT
+                    u.name,
+                    u.message,
+                    u.sort_time,
+                    u.sort_event_id,
+                    u.sort_order,
+                    u.sort_sequence
+                FROM (
+                    SELECT
+                        e.target_name AS name,
+                        JSON_UNQUOTE(
+                            JSON_EXTRACT(
+                                e.extra_data,
+                                '$.player_message'
+                            )
+                        ) AS message,
+                        e.created_at AS sort_time,
+                        e.id AS sort_event_id,
+                        0 AS sort_order,
+                        0 AS sort_sequence
+                    FROM llm_chatter_events e
+                    WHERE e.event_type IN (
+                        'proximity_player_say',
+                        'proximity_player_conversation',
+                        'proximity_reply'
+                    )
+                      AND e.zone_id = %s
+                      AND e.target_guid = %s
+                      AND e.created_at > DATE_SUB(
+                          NOW(), INTERVAL 5 MINUTE
+                      )
+                      AND JSON_UNQUOTE(
+                          JSON_EXTRACT(
+                              e.extra_data,
+                              '$.player_message'
+                          )
+                      ) IS NOT NULL
+                      AND JSON_UNQUOTE(
+                          JSON_EXTRACT(
+                              e.extra_data,
+                              '$.player_message'
+                          )
+                      ) <> ''
+                      AND EXISTS (
+                          SELECT 1
+                          FROM llm_chatter_messages dm
+                          WHERE dm.event_id = e.id
+                            AND dm.delivered = 1
+                            AND dm.channel IN ('say', 'msay')
+                            AND dm.player_guid = %s
+                      )
+
+                    UNION ALL
+
+                    SELECT
+                        m.bot_name AS name,
+                        m.message AS message,
+                        m.delivered_at AS sort_time,
+                        e.id AS sort_event_id,
+                        1 AS sort_order,
+                        m.sequence AS sort_sequence
+                    FROM llm_chatter_messages m
+                    JOIN llm_chatter_events e
+                      ON m.event_id = e.id
+                    WHERE m.delivered = 1
+                      AND m.channel IN ('say', 'msay')
+                      AND e.zone_id = %s
+                      AND m.player_guid = %s
+                      AND m.delivered_at > DATE_SUB(
+                          NOW(), INTERVAL 5 MINUTE
+                      )
+                ) u
+                ORDER BY
+                    u.sort_time DESC,
+                    u.sort_event_id DESC,
+                    u.sort_order DESC,
+                    u.sort_sequence DESC
+                LIMIT %s
+            ) t
+            ORDER BY
+                t.sort_time ASC,
+                t.sort_event_id ASC,
+                t.sort_order ASC,
+                t.sort_sequence ASC
+            """,
+            (
+                zone_id,
+                player_guid,
+                player_guid,
+                zone_id,
+                player_guid,
+                row_limit,
+            ),
         )
+
         rows = cursor.fetchall()
+
         return [
             {
-                'name': r['bot_name'],
+                'name': r['name'],
                 'message': r['message'],
             }
             for r in rows
+            if r.get('name') and r.get('message')
         ]
+
     except Exception:
         logger.error(
             "fetch proximity history failed",
             exc_info=True,
         )
         return []
-
 
 def _proximity_playerbot_candidates(
     raw_candidates: List[Dict],
