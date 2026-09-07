@@ -1030,7 +1030,7 @@ LLMChatter.GroupChatter.IdleCooldown = 40
 #       Boss and rare kills always trigger (100%).
 #       Default: 20
 #
-LLMChatter.GroupChatter.KillChanceNormal = 20
+LLMChatter.GroupChatter.KillChanceNormal = 0
 
 #
 #   LLMChatter.GroupChatter.KillCooldown
@@ -1136,7 +1136,7 @@ LLMChatter.GroupChatter.ResurrectCooldown = 30
 #       triggers a group reaction.
 #       Default: 20
 #
-LLMChatter.GroupChatter.SpellCastChance = 30
+LLMChatter.GroupChatter.SpellCastChance = 0
 
 #
 #   LLMChatter.GroupChatter.SpellCastCooldown
@@ -1146,6 +1146,30 @@ LLMChatter.GroupChatter.SpellCastChance = 30
 #       Default: 10
 #
 LLMChatter.GroupChatter.SpellCastCooldown = 10
+
+#
+#   LLMChatter.GroupChatter.CombatChance.Boss
+#       Percent chance (0-100) that entering combat with a boss
+#       triggers a party reaction.
+#       Default: 100
+#
+LLMChatter.GroupChatter.CombatChance.Boss = 0
+
+#
+#   LLMChatter.GroupChatter.CombatChance.Elite
+#       Percent chance (0-100) that entering combat with an elite
+#       triggers a party reaction.
+#       Default: 40
+#
+LLMChatter.GroupChatter.CombatChance.Elite = 0
+
+#
+#   LLMChatter.GroupChatter.CombatChance.Normal
+#       Percent chance (0-100) that entering combat with a normal mob
+#       triggers a party reaction.
+#       Default: 15
+#
+LLMChatter.GroupChatter.CombatChance.Normal = 0
 
 #
 #   LLMChatter.GroupChatter.StateCalloutEnable
