@@ -1690,12 +1690,18 @@ void HandleGroupPlayerSpellCastImpl(
     else
     {
         uint32 numBots = CountBotsInGroup(group);
+        uint32 configuredChance =
+            sLLMChatterConfig->_groupSpellCastChance;
+
+        if (configuredChance == 0)
+            return;
+
         uint32 effectiveChance =
-            sLLMChatterConfig
-                ->_groupSpellCastChance
-            / std::max(numBots, 1u);
+            configuredChance / std::max(numBots, 1u);
+
         if (effectiveChance < 1)
             effectiveChance = 1;
+
         if (urand(1, 100) > effectiveChance)
             return;
     }
