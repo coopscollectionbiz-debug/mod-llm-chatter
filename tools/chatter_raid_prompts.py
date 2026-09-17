@@ -25,6 +25,7 @@ from chatter_prompts import (
     pick_personality_spices,
     build_environmental_context_lines,
 )
+from chatter_mode import resolve_player_personality
 
 LOG = logging.getLogger("chatter_raid_prompts")
 
@@ -492,12 +493,25 @@ def _raid_base_context(extra_data, bot_data):
             f". Difficulty: {difficulty}.\n"
         )
 
-        if traits:
+        player_traits, player_tone = resolve_player_personality(
+            bot_name,
+            traits=traits or [],
+            tone=bot_data.get('tone', ''),
+            mode=chatter_mode,
+        )
+
+        if player_traits:
             trait_str = ', '.join(
-                str(t) for t in traits[:3])
+                str(t) for t in player_traits[:3])
             ctx += (
-                f"General personality tendencies: "
+                f"General player tendencies: "
                 f"{trait_str}\n"
+            )
+
+        if player_tone:
+            ctx += (
+                f"Communication style: "
+                f"{player_tone}\n"
             )
 
     if talent_ctx:

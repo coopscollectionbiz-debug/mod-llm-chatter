@@ -34,6 +34,7 @@ from chatter_text import (
     parse_single_response,
     strip_speaker_prefix,
 )
+from chatter_mode import resolve_player_personality
 
 logger = logging.getLogger(__name__)
 
@@ -262,12 +263,34 @@ def _build_guild_prompt(
     )
 
     traits = speaker.get('traits') or []
-    if traits:
-        lines.append(
-            "Personality: " + ", ".join(traits) + "."
+    tone = speaker.get('tone') or ''
+
+    if not is_rp:
+        traits, tone = resolve_player_personality(
+            speaker_name,
+            traits=traits,
+            tone=tone,
+            mode=chatter_mode,
         )
-    if speaker.get('tone'):
-        lines.append(f"Tone: {speaker['tone']}.")
+
+    if traits:
+        label = (
+            "Personality"
+            if is_rp
+            else "General player tendencies"
+        )
+        lines.append(
+            f"{label}: {', '.join(traits)}."
+        )
+
+    if tone:
+        label = (
+            "Tone"
+            if is_rp
+            else "Communication style"
+        )
+        lines.append(f"{label}: {tone}.")
+
     if is_rp and speaker.get('backstory'):
         lines.append(
             f"Background: {speaker['backstory']}"
@@ -950,14 +973,34 @@ def _participant_identity_lines(
             )
 
     traits = speaker.get('traits') or []
-    if traits:
-        lines.append(
-            f"{name} personality: {', '.join(traits)}."
+    tone = speaker.get('tone') or ''
+
+    if not is_rp:
+        traits, tone = resolve_player_personality(
+            name,
+            traits=traits,
+            tone=tone,
+            mode=chatter_mode,
         )
 
-    if speaker.get('tone'):
+    if traits:
+        label = (
+            "personality"
+            if is_rp
+            else "player tendencies"
+        )
         lines.append(
-            f"{name} speaking tone: {speaker['tone']}."
+            f"{name} {label}: {', '.join(traits)}."
+        )
+
+    if tone:
+        label = (
+            "speaking tone"
+            if is_rp
+            else "communication style"
+        )
+        lines.append(
+            f"{name} {label}: {tone}."
         )
 
     if is_rp and speaker.get('backstory'):

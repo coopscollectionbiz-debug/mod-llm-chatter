@@ -387,9 +387,11 @@ def _single_prompt(
             lines.extend([
                 "Respond like an ordinary player who heard "
                 "that message.",
-                "Answer it if an answer makes sense, but you "
-                "may also be brief, uncertain, confused, or "
-                "only partially helpful.",
+                "Answer directly when an answer makes sense. "
+                "Be brief when natural, but do not become "
+                "vague or noncommittal without a real reason.",
+                "Express uncertainty only when the speaker "
+                "would genuinely be uncertain.",
                 "Do not invent specific game facts just to "
                 "provide an answer.",
             ])

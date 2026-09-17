@@ -68,6 +68,7 @@ from chatter_group_general_reaction import (
     maybe_queue_group_general_reaction,
 )
 from chatter_llm import quick_llm_analyze
+from chatter_mode import resolve_player_personality
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +410,17 @@ def _build_general_response_prompt(
     player's General channel message.
     """
     is_rp = (mode == 'roleplay')
-    trait_str = ', '.join(traits)
+
+    if is_rp:
+        trait_str = ', '.join(traits)
+    else:
+        player_traits, _player_tone = resolve_player_personality(
+            bot_name,
+            traits=traits,
+            mode=mode,
+        )
+        trait_str = ', '.join(player_traits)
+
     tone = pick_random_tone(mode)
     mood = pick_random_mood(mode)
     twist = maybe_get_creative_twist(
@@ -469,7 +480,11 @@ def _build_general_response_prompt(
     )
     prompt = (
         f"{identity}\n"
-        f"Your personality: {trait_str}\n"
+        + (
+            f"Your personality: {trait_str}\n"
+            if is_rp
+            else f"General player tendencies: {trait_str}\n"
+        )
     )
 
     factual_context = build_bot_state_context(
@@ -636,8 +651,20 @@ def _build_general_followup_prompt(
     on the 1st bot's reaction in General channel.
     """
     is_rp = (mode == 'roleplay')
-    trait_str = ', '.join(traits)
-    tone = pick_random_tone(mode)
+
+    if is_rp:
+        trait_str = ', '.join(traits)
+        tone = pick_random_tone(mode)
+    else:
+        player_traits, player_tone = resolve_player_personality(
+            bot_name,
+            traits=traits,
+            tone='',
+            mode=mode,
+        )
+        trait_str = ', '.join(player_traits)
+        tone = player_tone
+
     mood = pick_random_mood(mode)
 
     rp_context = ""
@@ -697,7 +724,11 @@ def _build_general_followup_prompt(
     )
     prompt = (
         f"{identity}\n"
-        f"Your personality: {trait_str}\n"
+        + (
+            f"Your personality: {trait_str}\n"
+            if is_rp
+            else f"General player tendencies: {trait_str}\n"
+        )
     )
 
     factual_context = build_bot_state_context(
@@ -808,7 +839,11 @@ def _build_general_followup_prompt(
         f"practical gameplay context only\n"
         f"{address_hint}"
         f"- Keep it brief - General channel\n"
-        f"- Reflect your personality traits"
+        + (
+            "- Reflect your personality traits"
+            if is_rp
+            else "- Let your player tendencies influence wording subtly"
+        )
     )
     spices = (
         pick_personality_spices(
@@ -2359,8 +2394,20 @@ def _build_general_continuation_prompt(
       [{'name': str, 'message': str, 'is_bot': bool}]
     """
     is_rp = (mode == 'roleplay')
-    trait_str = ', '.join(traits)
-    tone = pick_random_tone(mode)
+
+    if is_rp:
+        trait_str = ', '.join(traits)
+        tone = pick_random_tone(mode)
+    else:
+        player_traits, player_tone = resolve_player_personality(
+            bot_name,
+            traits=traits,
+            tone='',
+            mode=mode,
+        )
+        trait_str = ', '.join(player_traits)
+        tone = player_tone
+
     mood = pick_random_mood(mode)
 
     rp_context = ""
@@ -2442,7 +2489,11 @@ def _build_general_continuation_prompt(
     )
     prompt = (
         f"{identity}\n"
-        f"Your personality: {trait_str}\n"
+        + (
+            f"Your personality: {trait_str}\n"
+            if is_rp
+            else f"General player tendencies: {trait_str}\n"
+        )
     )
 
     factual_context = build_bot_state_context(

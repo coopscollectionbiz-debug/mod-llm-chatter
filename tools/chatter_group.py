@@ -76,6 +76,7 @@ from chatter_shared import (
     select_conversation_message_count,
     strip_conversation_actions,
 )
+from chatter_mode import resolve_player_personality
 from chatter_db import (
     get_character_info_by_name,
     get_group_location,
@@ -3149,7 +3150,19 @@ def _build_composition_comment_prompt(
     on the group's composition after joining.
     """
     is_rp = (mode == 'roleplay')
-    trait_str = ', '.join(traits)
+
+    if is_rp:
+        resolved_traits = traits
+        resolved_tone = stored_tone or pick_random_tone(mode)
+    else:
+        resolved_traits, resolved_tone = resolve_player_personality(
+            bot.get('name', ''),
+            traits=traits,
+            tone=stored_tone or '',
+            mode=mode,
+        )
+
+    trait_str = ', '.join(resolved_traits)
 
     rp_context = ""
     if is_rp:
@@ -3165,15 +3178,16 @@ def _build_composition_comment_prompt(
             f"{build_bot_identity_from_dict(bot, suffix='.')}\n"
             f"Your personality: {trait_str}"
             f"\nYour tone: "
-            f"{stored_tone or pick_random_tone(mode)}"
+            f"{resolved_tone}"
             f"{rp_context}\n"
         )
     else:
         prompt = (
             f"You are {bot['name']}, a real WoW player "
             f"controlling a {bot['class']} character.\n"
-            f"General personality tendencies: "
+            f"General player tendencies: "
             f"{trait_str}.\n"
+            f"Communication style: {resolved_tone}.\n"
             f"Keep them subtle; do not perform a persona.\n"
         )
     if speaker_talent_context:
@@ -3784,11 +3798,20 @@ def build_idle_chatter_prompt(
             f"Your tone: {tone}\n"
         )
     else:
+        player_traits, player_tone = resolve_player_personality(
+            bot.get('name', ''),
+            traits=traits,
+            tone=stored_tone or '',
+            mode=mode,
+        )
+        player_trait_str = ', '.join(player_traits)
+
         prompt = (
             f"You are {bot['name']}, a real WoW player "
             f"controlling a {bot['class']} character.\n"
-            f"General personality tendencies: "
-            f"{trait_str}.\n"
+            f"General player tendencies: "
+            f"{player_trait_str}.\n"
+            f"Communication style: {player_tone}.\n"
             f"Keep them subtle; do not perform a persona.\n"
         )
 
@@ -4287,10 +4310,19 @@ def build_idle_conversation_prompt(
                 f"{dead_tag}"
             )
         else:
+            player_traits, _player_tone = resolve_player_personality(
+                bot.get('name', ''),
+                traits=t,
+                mode=mode,
+            )
+            player_trait_str = (
+                ', '.join(player_traits)
+                if player_traits else 'average'
+            )
             parts.append(
                 f"{bot['name']}: level "
                 f"{bot['level']} {bot['class']} "
-                f"(general tendencies: {trait_str})"
+                f"(general player tendencies: {player_trait_str})"
                 f"{dead_tag}"
             )
         if bot.get('travel_context'):

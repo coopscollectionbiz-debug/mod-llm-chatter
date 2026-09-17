@@ -651,10 +651,13 @@ def build_bot_state_context(extra_data):
 
     lines = [
         "<authoritative_bot_state>",
-        "The facts below come from the bot's live game "
-        "state and are authoritative.",
-        "Never contradict them or invent a specific fact "
-        "that is not present.",
+        "These are current live game facts about the bot. "
+        "Do not contradict them.",
+        "They describe what is true right now; they do not "
+        "limit opinions, plans, intentions, preferences, "
+        "social decisions, or future actions.",
+        "Do not hedge merely because a future action or "
+        "decision is not yet reflected in live state.",
     ]
 
     identity = state.get('identity') or {}
@@ -1114,11 +1117,18 @@ def build_bot_state_context(extra_data):
             )
 
     lines.extend([
-        "Use only these facts for specific factual "
-        "claims about yourself.",
-        "If a requested fact is not present here, do not "
-        "invent a name, number, item, quest, NPC, mob, "
-        "location, or objective.",
+        "Use supplied live state when making specific "
+        "claims about current game facts.",
+        "Do not invent specific names, numbers, items, "
+        "quests, NPCs, mobs, locations, or objectives "
+        "that would require live game knowledge.",
+        "For ordinary conversation, you may freely make "
+        "plans, commit to actions, express preferences, "
+        "offer help, disagree, speculate, or change your "
+        "mind when natural.",
+        "Prefer a definite natural response over needless "
+        "maybe/might/probably hedging unless the speaker "
+        "is genuinely uncertain.",
         "For supplied [[quest:...]] and [[item:...]] "
         "tokens: copy the token exactly if relevant, "
         "or omit it. Never create or modify a token.",

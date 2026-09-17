@@ -37,6 +37,7 @@ from chatter_constants import (
     BG_LORE,
     CLASS_ROLE_MAP,
 )
+from chatter_mode import resolve_player_personality
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,9 @@ def _build_speaker_header(
     without turning every message into a performance.
     """
     is_rp = (mode == 'roleplay')
-    trait_str = ', '.join(traits) if traits else 'average'
 
     if is_rp:
+        trait_str = ', '.join(traits) if traits else 'average'
         tone = stored_tone or pick_random_tone(mode)
         return (
             f"{build_bot_identity_from_dict(bot)}\n"
@@ -73,10 +74,22 @@ def _build_speaker_header(
             f"Your tone: {tone}\n"
         )
 
+    player_traits, player_tone = resolve_player_personality(
+        bot.get('name', ''),
+        traits=traits,
+        tone=stored_tone or '',
+        mode=mode,
+    )
+    trait_str = (
+        ', '.join(player_traits)
+        if player_traits else 'average'
+    )
+
     return (
         f"You are {bot['name']}, a real WoW player "
         f"controlling a {bot['class']} character.\n"
-        f"General personality tendencies: {trait_str}.\n"
+        f"General player tendencies: {trait_str}.\n"
+        f"Communication style: {player_tone}.\n"
         f"These are subtle tendencies, not a persona to "
         f"perform. They may affect what you say, but do "
         f"not force them into every message.\n"
@@ -4549,14 +4562,26 @@ def build_nearby_object_reaction_prompt(
             f"({setting}) with your group."
         )
     else:
+        player_traits, player_tone = resolve_player_personality(
+            bot_name,
+            traits=traits or [],
+            tone=stored_tone or '',
+            mode=mode,
+        )
+        player_trait_str = ", ".join(player_traits)
+
         prompt = (
             f"You are {bot_name}, a real WoW player "
             f"controlling a {class_name} character.\n"
         )
-        if trait_str:
+        if player_trait_str:
             prompt += (
-                f"General personality tendencies: "
-                f"{trait_str}. Keep them subtle.\n"
+                f"General player tendencies: "
+                f"{player_trait_str}. Keep them subtle.\n"
+            )
+        if player_tone:
+            prompt += (
+                f"Communication style: {player_tone}.\n"
             )
         prompt += (
             f"You are currently in {location} "

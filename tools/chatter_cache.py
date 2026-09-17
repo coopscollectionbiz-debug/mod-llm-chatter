@@ -25,7 +25,9 @@ from chatter_shared import (
     strip_speaker_prefix,
     pick_emote_for_statement,
     parse_single_response,
+    get_chatter_mode,
 )
+from chatter_mode import resolve_player_personality
 from chatter_constants import CLASS_NAMES, RACE_NAMES
 
 logger = logging.getLogger(__name__)
@@ -325,6 +327,15 @@ def refill_precache_pool(db, client, config):
 
         role = bot_row.get('role')
         stored_tone = bot_row.get('tone')
+
+        chatter_mode = get_chatter_mode(config)
+        if chatter_mode != 'roleplay':
+            traits, stored_tone = resolve_player_personality(
+                bot_name,
+                traits=traits,
+                tone=stored_tone or '',
+                mode=chatter_mode,
+            )
 
         # Look up race/class/level/class_id
         char_info = _get_bot_race_class(
