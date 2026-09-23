@@ -49,6 +49,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "PlayerbotAIConfig.h"
 #include "RandomPlayerbotMgr.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -953,6 +954,14 @@ bool IsLikelyPlayerbotControlCommand(
     if (msg.empty())
         return false;
 
+    // Explicit Playerbots command-prefix traffic belongs to
+    // mod-playerbots and must never enter the LLM queue.
+    if (!sPlayerbotAIConfig.commandPrefix.empty()
+        && message.find(sPlayerbotAIConfig.commandPrefix) == 0)
+    {
+        return true;
+    }
+
     static std::unordered_set<std::string>
         exactCommands = {
             "u", "c", "e", "s", "b", "r", "t",
@@ -997,7 +1006,8 @@ bool IsLikelyPlayerbotControlCommand(
             "outdoors", "ginvite",
             "guild promote", "guild demote",
             "guild remove", "guild leave", "lfg",
-            "chat", "loot"
+            "chat", "loot", "outfit",
+            "stopcasting", "statsofplayer"
         };
 
     if (exactCommands.find(msg)
@@ -1097,7 +1107,7 @@ void CleanupGroupSession(uint32 groupId)
     _emoteObserverCooldowns.erase(groupId);
 
     // Prune combined-key (groupId<<32|questId) maps
-    // unordered_map has no lower_bound — linear scan
+    // unordered_map has no lower_bound - linear scan
     {
         uint64 lo = (uint64)groupId << 32;
         uint64 hi = lo | 0xFFFFFFFFu;
