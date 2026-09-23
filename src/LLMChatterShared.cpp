@@ -3534,12 +3534,12 @@ void SendPartyMessageInstant(
     ChatHandler::BuildChatPacket(
         data,
         CHAT_MSG_PARTY,
-        message,
         LANG_UNIVERSAL,
-        CHAT_TAG_NONE,
         bot->GetGUID(),
+        ObjectGuid::Empty,
+        message,
+        CHAT_TAG_NONE,
         bot->GetName());
-
     int subGroup = -1;
     if (group->isRaidGroup())
         subGroup = group->GetMemberGroup(bot->GetGUID());
