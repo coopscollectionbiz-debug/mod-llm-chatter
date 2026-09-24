@@ -110,6 +110,9 @@ def log_request(
     duration_ms: int,
     metadata: dict = None,
     system_prompt: str = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
 ) -> None:
     """Write one JSONL entry. No-op when disabled.
 
@@ -139,6 +142,9 @@ def log_request(
             'model': model,
             'provider': provider,
             'duration_ms': duration_ms,
+            'prompt_tokens': int(prompt_tokens or 0),
+            'completion_tokens': int(completion_tokens or 0),
+            'total_tokens': int(total_tokens or 0),
         }
         if metadata:
             for k, v in metadata.items():

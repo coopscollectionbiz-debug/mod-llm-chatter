@@ -332,6 +332,10 @@ def call_llm(
 
     t0 = time.monotonic()
     result = None
+    response = None
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
     sys_msg, user_msg = _split_prompt(prompt)
     current_context = ""
 
@@ -455,6 +459,41 @@ def call_llm(
         duration_ms = int(
             (time.monotonic() - t0) * 1000
         )
+
+        # Capture provider-reported token usage when available.
+        # OpenAI-compatible providers expose prompt/completion/total
+        # tokens. Anthropic exposes input/output tokens.
+        try:
+            usage = getattr(response, 'usage', None)
+
+            if usage is not None:
+                prompt_tokens = int(
+                    getattr(
+                        usage,
+                        'prompt_tokens',
+                        getattr(usage, 'input_tokens', 0),
+                    ) or 0
+                )
+                completion_tokens = int(
+                    getattr(
+                        usage,
+                        'completion_tokens',
+                        getattr(usage, 'output_tokens', 0),
+                    ) or 0
+                )
+                total_tokens = int(
+                    getattr(usage, 'total_tokens', 0) or 0
+                )
+
+                if not total_tokens:
+                    total_tokens = (
+                        prompt_tokens + completion_tokens
+                    )
+        except Exception:
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+
         try:
             from chatter_request_logger import (
                 log_request,
@@ -464,6 +503,9 @@ def call_llm(
                 model, provider, duration_ms,
                 metadata=metadata,
                 system_prompt=sys_msg,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
             )
         except Exception:
             pass
