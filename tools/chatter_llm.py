@@ -206,6 +206,11 @@ def get_llm_client(config):
     """
     global _main_client, _main_client_provider
 
+    if str(config.get(
+        'LLMChatter.ZeroTokenMode', '0'
+    )).strip() == '1':
+        return None
+
     provider = config.get(
         'LLMChatter.Provider', 'anthropic'
     ).lower()
@@ -289,6 +294,15 @@ def call_llm(
 
     Supports Anthropic, OpenAI, Google, OpenRouter, and Ollama.
     """
+    if str(config.get(
+        'LLMChatter.ZeroTokenMode', '0'
+    )).strip() == '1':
+        logger.warning(
+            "[ZERO-TOKEN] blocked call_llm | label=%s",
+            label or 'unlabeled',
+        )
+        return ""
+
     provider = config.get(
         'LLMChatter.Provider', 'anthropic'
     ).lower()
@@ -593,6 +607,15 @@ def quick_llm_analyze(
 
     Returns raw text response, or None on error.
     """
+    if str(config.get(
+        'LLMChatter.ZeroTokenMode', '0'
+    )).strip() == '1':
+        logger.warning(
+            "[ZERO-TOKEN] blocked quick_llm_analyze | label=%s",
+            label or 'unlabeled',
+        )
+        return None
+
     # Check for separate quick analyze provider
     qa_client, provider = (
         _get_quick_analyze_client(config)

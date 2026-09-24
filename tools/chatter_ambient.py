@@ -1609,12 +1609,14 @@ def _build_city_social(bots):
     """
     Build occasional zero-token public city General chatter.
 
-    General should feel like a quiet public city channel:
-    questions, navigation, game-system questions, and occasional
-    server observations.
+    General should feel like a real Wrath-era public channel, not a
+    help desk. Most messages are standalone player observations,
+    opinions, discussion starters, or light banter. Basic navigation
+    and game-system questions are deliberately uncommon.
 
-    Do not manufacture replies, private-status chatter, or random
-    reaction lines with no conversation to react to.
+    Do not manufacture replies, private-status chatter, achievements,
+    owned gear, professions, or random reactions to conversations
+    that did not happen.
     """
     if not bots:
         return []
@@ -1629,79 +1631,139 @@ def _build_city_social(bots):
         level = 1
 
     # --------------------------------------------------------
-    # Universal city/public questions.
+    # General city chatter is selected by category first.
+    #
+    # This prevents a large collection of differently-worded
+    # beginner questions from dominating simply because that pool
+    # contains more strings.
     # --------------------------------------------------------
-    lines = [
-        "lag for anyone else?",
-        "anyone else lagging?",
-        "server lagging?",
-        "anyone else getting lag?",
-        "anyone getting dc'd?",
-        "ah laggy for anyone else?",
-
-        "wheres ah",
-        "where is ah?",
-        "where bank",
-        "wheres the bank",
-        "where fm",
-        "where flight master",
-        "where is the inn?",
-        "where barber",
-        "anyone know where the barber is?",
-        "where do i train riding?",
-        "where is riding trainer?",
-        "where weapon trainer?",
-
-        "how much is dual spec?",
-        "what lvl is dual spec?",
-        "can you queue bg from anywhere?",
-        "where do you turn in marks?",
-        "how do i link an item?",
-        "how do i leave a channel?",
-        "can you reset talents here?",
-        "where do i buy reagents?",
-        "any repair nearby?",
-        "where is mailbox?",
-        "wheres mailbox",
-    ]
+    roll = random.randint(1, 100)
 
     # --------------------------------------------------------
-    # Higher-level Wrath questions. Keep these out of low-level
-    # speakers so a level 18 character doesn't constantly sound
-    # like an endgame veteran.
+    # 35% - casual WoW observations / comments
     # --------------------------------------------------------
-    if level >= 68:
-        lines.extend([
-            "where do i learn cold weather flying?",
-            "cold weather flying trainer where?",
-            "how much is cold weather flying?",
-            "what time does wg start?",
-            "when is next wg?",
-            "who has wg?",
-            "is wg up?",
-            "where do you buy heirlooms?",
-            "where is badge vendor?",
-            "where do i spend emblems?",
-            "can you queue heroic right at 80?",
-            "what ilvl for heroics?",
-            "is dalaran laggy for anyone else?",
-        ])
+    if roll <= 35:
+        lines = [
+            "dalaran is always packed",
+            "stormwind music never gets old",
+            "org is a maze sometimes",
+            "old world zones still look better imo",
+            "flying makes the world feel tiny",
+            "some of these old dungeons are huge",
+            "vanilla dungeons had some wild layouts",
+            "wrath zones are still my favorite",
+            "northrend music is so good",
+            "grizzly hills soundtrack is undefeated",
+            "sholazar is underrated",
+            "icecrown still looks awesome",
+            "wintergrasp gets chaotic fast",
+            "nothing beats finally getting a fast mount",
+            "bag space is the real endgame",
+            "alts always sound like a good idea at first",
+            "leveling goes way faster than i remember",
+            "some flight paths take forever",
+            "the mailbox is always surrounded",
+            "cities feel way better when they're busy",
+        ]
 
     # --------------------------------------------------------
-    # Lower/mid-level questions.
+    # 30% - class / gearing / progression discussion
+    # These are general opinions or questions, not claims about the
+    # speaker's own equipment, spec, achievements, or progression.
     # --------------------------------------------------------
-    if level < 68:
-        lines.extend([
-            "what lvl can you get epic riding?",
-            "where do i learn first aid?",
-            "anyone know where cooking trainer is?",
-            "where do i train professions?",
-            "when do mounts get faster?",
-            "what lvl can you fly?",
-            "where do i change talents?",
-        ])
+    elif roll <= 65:
+        lines = [
+            "what class is everyone leveling lately?",
+            "what healer is the most fun in wrath?",
+            "what tank do you guys like playing?",
+            "which class has the best tier sets?",
+            "what class is the most fun for pvp?",
+            "any class you never get tired of playing?",
+            "what alt is everyone working on?",
+            "what class has the best leveling experience?",
+            "healers always seem harder to find than tanks",
+            "everyone needs tanks until you roll one",
+            "melee or ranged for raids?",
+            "what spec is the most fun at 80?",
+            "which class has the best animations?",
+            "what class would you never level again?",
+            "heroics are way better with a good tank",
+            "finding a healer always takes longer than expected",
+            "gear score arguments never end",
+            "people care way too much about gear score",
+        ]
 
-    # Avoid obvious bot repetition across different speakers.
+        if level >= 68:
+            lines.extend([
+                "what heroic do you guys actually like running?",
+                "which heroic do you always skip?",
+                "favorite wrath raid?",
+                "10 man or 25 man?",
+                "naxx or ulduar?",
+                "ulduar is still one of the best raids",
+                "icc has some great fights",
+                "toc gets way too much hate",
+                "what raid has the best tier sets?",
+                "what's everyone spending emblems on first?",
+            ])
+
+    # --------------------------------------------------------
+    # 20% - opinions / discussion starters
+    # --------------------------------------------------------
+    elif roll <= 85:
+        lines = [
+            "favorite city?",
+            "best looking capital?",
+            "what zone has the best music?",
+            "favorite leveling zone?",
+            "worst leveling zone?",
+            "favorite dungeon?",
+            "what dungeon do you avoid?",
+            "ground mounts or flying mounts?",
+            "what race has the best starting zone?",
+            "best looking mount in wrath?",
+            "what expansion had the best zones?",
+            "anyone actually like leveling professions?",
+            "what profession is the biggest pain to level?",
+            "what zone do you always skip while leveling?",
+            "what's the most confusing capital?",
+            "which city has the best layout?",
+            "favorite battleground?",
+            "least favorite battleground?",
+            "what's everyone's favorite class?",
+            "what's your favorite race to play?",
+        ]
+
+    # --------------------------------------------------------
+    # 15% - light standalone banter
+    # --------------------------------------------------------
+    else:
+        lines = [
+            "another day another alt",
+            "there is never enough bag space",
+            "bank alts doing all the real work",
+            "the auction house always wins",
+            "repair bills are the real gold sink",
+            "one more alt won't hurt",
+            "famous last words: one more dungeon",
+            "everyone has too many alts",
+            "half the game is organizing your bags",
+            "somehow my bags are always full",
+            "the hardest boss is finding a group",
+            "waiting for a tank is a classic",
+            "everyone suddenly disappears when you need a healer",
+            "nothing starts an argument faster than gear score",
+            "city chat never changes",
+            "there's always someone jumping around the bank",
+            "people will duel anywhere",
+            "auction house pvp is real",
+        ]
+
+    # --------------------------------------------------------
+    # Avoid exact recent-line repetition across speakers.
+    # With category weighting above, this is now a secondary
+    # safeguard rather than our primary source of variety.
+    # --------------------------------------------------------
     available = [
         line
         for line in lines
@@ -1719,15 +1781,13 @@ def _build_city_social(bots):
         message
     )
 
-    # Remember enough history that short utility lines do not
-    # noticeably repeat during the same city-chat sample.
-    del _city_social_recent_lines[:-14]
+    # Keep a longer cross-speaker history now that the overall
+    # social pool is substantially larger.
+    del _city_social_recent_lines[:-30]
 
     return [
         (speaker, message),
     ]
-
-
 
 def _build_city_boost(bot):
     """

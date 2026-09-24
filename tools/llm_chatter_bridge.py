@@ -1398,6 +1398,10 @@ def main():
     snapshot_dir = _prepare_snapshot_dir(snapshot_dir)
 
     # Get provider and initialize appropriate client
+    zero_token_mode = str(config.get(
+        'LLMChatter.ZeroTokenMode', '0'
+    )).strip() == '1'
+
     provider = config.get(
         'LLMChatter.Provider', 'anthropic'
     ).lower()
@@ -1412,7 +1416,18 @@ def main():
         'LLMChatter.Model', default_model
     )
 
-    if provider == 'ollama':
+    if zero_token_mode:
+        client = None
+        logger.info(
+            "[LLM-CHATTER] Mode: ZERO TOKEN"
+        )
+        logger.info(
+            "[LLM-CHATTER] Model generation: DISABLED"
+        )
+        logger.info(
+            "[LLM-CHATTER] Deterministic chatter: ENABLED"
+        )
+    elif provider == 'ollama':
         # Ollama runs locally - no API key needed
         # Uses OpenAI-compatible API endpoint
         base_url = config.get(
@@ -1536,10 +1551,16 @@ def main():
     logger.info("LLM Chatter Bridge v4.0")
     logger.info("=" * 60)
     logger.info(f"ChatterMode: {chatter_mode}")
-    logger.info(f"Provider: {provider}")
-    logger.info(
-        f"Model: {model}"
-    )
+    if zero_token_mode:
+        logger.info(
+            f"Provider: disabled (configured: {provider})"
+        )
+        logger.info("Model: disabled")
+    else:
+        logger.info(f"Provider: {provider}")
+        logger.info(
+            f"Model: {model}"
+        )
     if provider == 'ollama':
         base_url = config.get(
             'LLMChatter.Ollama.BaseUrl',
@@ -1948,9 +1969,12 @@ def main():
     # placeholder API key, unreachable LLM endpoint) in the
     # container logs and loud-exits on a critical failure.
     if config.get('LLMChatter.HealthCheck.Enable', '1') == '1':
-        do_llm = config.get(
-            'LLMChatter.HealthCheck.LLMProbe', '1'
-        ) == '1'
+        do_llm = (
+            not zero_token_mode
+            and config.get(
+                'LLMChatter.HealthCheck.LLMProbe', '1'
+            ) == '1'
+        )
         config['__healthcheck_config_path__'] = args.config
         try:
             from chatter_healthcheck import (
@@ -2260,6 +2284,7 @@ def main():
                 # immediately no-ops in RP mode or when disabled.
                 if (
                     players_online
+                    and not zero_token_mode
                     and not current_topics_future
                     and current_time
                     - last_current_topics_refresh
@@ -2285,6 +2310,7 @@ def main():
 
                 if (
                     players_online
+                    and not zero_token_mode
                     and not tone_regen_future
                 ):
                     tone_regen_future = (
@@ -2298,7 +2324,11 @@ def main():
 
                 # Fetch + dispatch events
                 dispatched = 0
-                if use_event_system and players_online:
+                if (
+                    use_event_system
+                    and players_online
+                    and not zero_token_mode
+                ):
                     available = (
                         max_concurrent
                         - len(active_futures)
@@ -2363,6 +2393,7 @@ def main():
                 # Idle chatter -> worker pool
                 if (
                     players_online
+                    and not zero_token_mode
                     and use_event_system
                     and group_chatter_enabled
                     and not idle_chatter_future
@@ -2383,6 +2414,7 @@ def main():
                 # Bot questions -> worker pool
                 if (
                     players_online
+                    and not zero_token_mode
                     and use_event_system
                     and group_chatter_enabled
                     and not bot_question_future
@@ -2403,6 +2435,7 @@ def main():
                 # Pre-cache -> worker pool
                 if (
                     players_online
+                    and not zero_token_mode
                     and precache_enabled
                     and not precache_future
                     and current_time
