@@ -33,6 +33,11 @@ from chatter_playerbot_intent import (
     should_analyze_playerbot_intent,
 )
 
+from chatter_group import (
+    _is_explicit_native_playerbot_command,
+    _is_playerbot_command,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -521,6 +526,27 @@ def process_player_bot_whisper_event(
 
     try:
         mark_event(db, event_id, 'processing')
+
+        # Native PlayerBots whisper commands belong exclusively to
+        # PlayerBots. Do not also generate an LLM whisper response.
+        #
+        # Unlike party chat, whispers are a native PlayerBots command
+        # channel, so unprefixed commands such as "follow", "stay",
+        # and "cast Holy Light" must also be suppressed here.
+        if (
+            _is_explicit_native_playerbot_command(player_message)
+            or _is_playerbot_command(player_message)
+        ):
+            logger.info(
+                "[WHISPER] native PlayerBots command suppressed "
+                "event=%s player=%s bot=%s message=%r",
+                event_id,
+                player_name,
+                bot_name,
+                player_message,
+            )
+            mark_event(db, event_id, 'skipped')
+            return False
 
         playerbot_action_result = None
 
