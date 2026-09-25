@@ -1025,7 +1025,7 @@ static void QueueChatterRequest(
     }
 }
 
-void TryTriggerChatter()
+void TryTriggerChatter(bool capitalsOnly)
 {
     if (!sLLMChatterConfig->_generalChannelEnable)
         return;
@@ -1054,16 +1054,17 @@ void TryTriggerChatter()
 
     for (uint32 selectedZone : validZones)
     {
+        bool isCapitalCity =
+            IsCapitalCity(selectedZone);
+
+        // Normal zones and capitals run on separate clocks.
+        if (capitalsOnly != isCapitalCity)
+            continue;
+
         uint32 triggerChance =
-            sLLMChatterConfig->_triggerChance;
-        if (IsCapitalCity(selectedZone))
-        {
-            triggerChance = std::min(
-                triggerChance
-                    * sLLMChatterConfig
-                          ->_cityChatterMultiplier,
-                100u);
-        }
+            isCapitalCity
+                ? sLLMChatterConfig->_cityTriggerChance
+                : sLLMChatterConfig->_triggerChance;
 
         if (urand(1, 100) > triggerChance)
             continue;
@@ -1083,10 +1084,13 @@ void TryTriggerChatter()
                 }),
             bots.end());
 
+        uint32 conversationChance =
+            isCapitalCity
+                ? sLLMChatterConfig->_cityConversationChance
+                : sLLMChatterConfig->_conversationChance;
+
         bool isConversation =
-            (urand(1, 100)
-             <= sLLMChatterConfig
-                    ->_conversationChance);
+            (urand(1, 100) <= conversationChance);
         uint32 requiredBots =
             isConversation ? 2 : 1;
         if (bots.size() < requiredBots)

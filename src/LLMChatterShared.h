@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+class Channel;
 class Creature;
 class Group;
 class Map;
@@ -83,6 +84,8 @@ void RecordPartyChatGateActivity(
     uint32 groupId,
     const std::string& deliveryPolicy,
     const std::string& deliveryReason);
+Channel* EnsureBotInChatChannel(
+    Player* bot, uint32 channelId);
 void EnsureBotInGeneralChannel(Player* bot);
 bool CanSpeakInGeneralChannel(Player* bot);
 bool IsEventOnCooldown(

@@ -44,6 +44,13 @@ public:
     uint32 _triggerIntervalSeconds;
     uint32 _conversationChance;
     uint32 _triggerChance;
+
+    // Capital-city ambient General chatter
+    uint32 _cityConversationChance;
+    uint32 _cityTriggerChance;
+    uint32 _capitalTriggerMinSeconds;
+    uint32 _capitalTriggerMaxSeconds;
+
     uint32 _ambientNpcGossipChance;
     uint32 _ambientBotGossipChance;
     uint32 _ambientTradeQualityWeightBonus;

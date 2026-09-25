@@ -433,7 +433,7 @@ void DeliverPendingMessagesImpl()
     // disabled, deliberately consume any already-queued General
     // rows instead of speaking them. The row was claimed
     // (delivered = 1) above, so returning here drops it without
-    // retry — flipping LLMChatter.GeneralChannel.Enable = 0 via
+    // retry -- flipping LLMChatter.GeneralChannel.Enable = 0 via
     // .reload config takes effect immediately for pending rows.
     if (channel == "general"
         && !sLLMChatterConfig->_generalChannelEnable)
@@ -984,6 +984,48 @@ void DeliverPendingMessagesImpl()
                 {
                     sent = ai->Yell(
                         processedMessage);
+                }
+            }
+            else if (channel == "trade")
+            {
+                Channel* ch =
+                    EnsureBotInChatChannel(
+                        bot,
+                        ChatChannelId::TRADE);
+
+                if (ch)
+                {
+                    ch->Say(
+                        bot->GetGUID(),
+                        processedMessage.c_str(),
+                        LANG_UNIVERSAL);
+                    sent = true;
+                }
+            }
+            else if (channel == "lookingforgroup")
+            {
+                EnsureBotInChatChannel(
+                    bot,
+                    ChatChannelId::LOOKING_FOR_GROUP);
+
+                sent = ai->SayToChannel(
+                    processedMessage,
+                    ChatChannelId::LOOKING_FOR_GROUP);
+            }
+            else if (channel == "guild_recruitment")
+            {
+                Channel* ch =
+                    EnsureBotInChatChannel(
+                        bot,
+                        ChatChannelId::GUILD_RECRUITMENT);
+
+                if (ch)
+                {
+                    ch->Say(
+                        bot->GetGUID(),
+                        processedMessage.c_str(),
+                        LANG_UNIVERSAL);
+                    sent = true;
                 }
             }
             else

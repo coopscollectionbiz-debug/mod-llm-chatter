@@ -39,47 +39,104 @@
 #include <string>
 #include <vector>
 
-void EnsureBotInGeneralChannel(
-    Player* bot)
+Channel* EnsureBotInChatChannel(
+    Player* bot, uint32 channelId)
 {
     if (!bot || !bot->IsInWorld())
-        return;
-
-    uint32 zoneId = bot->GetZoneId();
-    AreaTableEntry const* area =
-        sAreaTableStore.LookupEntry(zoneId);
-    if (!area)
-        return;
-
-    uint8 locale = sWorld->GetDefaultDbcLocale();
-    char const* n = area->area_name[locale];
-    std::string zoneName = n ? n : "";
-    if (zoneName.empty())
-    {
-        n = area->area_name[LOCALE_enUS];
-        zoneName = n ? n : "";
-    }
-    if (zoneName.empty())
-        return;
+        return nullptr;
 
     ChatChannelsEntry const* chEntry =
-        sChatChannelsStore.LookupEntry(
-            ChatChannelId::GENERAL);
+        sChatChannelsStore.LookupEntry(channelId);
     if (!chEntry)
-        return;
+        return nullptr;
 
-    char nameBuf[100];
-    std::snprintf(
-        nameBuf,
-        sizeof(nameBuf),
-        chEntry->pattern[locale],
-        zoneName.c_str());
-    std::string newChanName(nameBuf);
+    uint8 locale = sWorld->GetDefaultDbcLocale();
+
+    char const* pattern = chEntry->pattern[locale];
+    if (!pattern || !*pattern)
+        pattern = chEntry->pattern[LOCALE_enUS];
+    if (!pattern || !*pattern)
+        return nullptr;
+
+    std::string newChanName;
+
+    if (channelId == ChatChannelId::GENERAL
+        || channelId == ChatChannelId::LOCAL_DEFENSE)
+    {
+        AreaTableEntry const* area =
+            sAreaTableStore.LookupEntry(
+                bot->GetZoneId());
+        if (!area)
+            return nullptr;
+
+        char const* n = area->area_name[locale];
+        std::string zoneName = n ? n : "";
+        if (zoneName.empty())
+        {
+            n = area->area_name[LOCALE_enUS];
+            zoneName = n ? n : "";
+        }
+        if (zoneName.empty())
+            return nullptr;
+
+        char nameBuf[100];
+        std::snprintf(
+            nameBuf,
+            sizeof(nameBuf),
+            pattern,
+            zoneName.c_str());
+
+        newChanName = nameBuf;
+    }
+    else if (channelId == ChatChannelId::TRADE
+        || channelId
+            == ChatChannelId::GUILD_RECRUITMENT)
+    {
+        AreaTableEntry const* cityArea =
+            sAreaTableStore.LookupEntry(3459);
+        if (!cityArea)
+            return nullptr;
+
+        char const* n =
+            cityArea->area_name[locale];
+        std::string cityName = n ? n : "";
+        if (cityName.empty())
+        {
+            n = cityArea->area_name[LOCALE_enUS];
+            cityName = n ? n : "";
+        }
+        if (cityName.empty())
+            return nullptr;
+
+        char nameBuf[100];
+        std::snprintf(
+            nameBuf,
+            sizeof(nameBuf),
+            pattern,
+            cityName.c_str());
+
+        newChanName = nameBuf;
+    }
+    else if (
+        channelId
+            == ChatChannelId::LOOKING_FOR_GROUP
+        || channelId
+            == ChatChannelId::WORLD_DEFENSE)
+    {
+        newChanName = pattern;
+    }
+    else
+    {
+        return nullptr;
+    }
+
+    if (newChanName.empty())
+        return nullptr;
 
     ChannelMgr* cMgr =
         ChannelMgr::forTeam(bot->GetTeamId());
     if (!cMgr)
-        return;
+        return nullptr;
 
     static std::mutex channelsLock;
     std::lock_guard<std::mutex> guard(
@@ -91,9 +148,10 @@ void EnsureBotInGeneralChannel(
         if (!channel)
             continue;
         if (channel->GetChannelId()
-            != ChatChannelId::GENERAL)
+            != channelId)
             continue;
-        if (channel->GetName() == newChanName)
+        if (channel->GetName()
+            == newChanName)
             continue;
 
         channel->LeaveChannel(bot, false);
@@ -103,9 +161,21 @@ void EnsureBotInGeneralChannel(
     Channel* joinChan =
         cMgr->GetJoinChannel(
             newChanName,
-            ChatChannelId::GENERAL);
+            channelId);
+
     if (joinChan)
         joinChan->JoinChannel(bot, "");
+
+    return joinChan;
+}
+
+
+void EnsureBotInGeneralChannel(
+    Player* bot)
+{
+    EnsureBotInChatChannel(
+        bot,
+        ChatChannelId::GENERAL);
 }
 
 static std::map<uint64, time_t> _generalChatCooldowns;
@@ -416,7 +486,7 @@ static void HandleBotEntersEnemyTerritory(
         return;
 
     // Only fire when a real human player is in the
-    // target zone to witness the yell — no point
+    // target zone to witness the yell -- no point
     // generating LLM chatter for bot-vs-bot events
     // in empty zones the user will never see.
     {
@@ -533,7 +603,7 @@ static void HandleBotEntersEnemyTerritory(
 }
 
 // ============================================================
-// Delayed rejoin queue — definitions + processing
+// Delayed rejoin queue -- definitions + processing
 // ============================================================
 
 std::mutex _rejoinMutex;
@@ -589,7 +659,7 @@ void ProcessPendingRejoins()
         // Player* objects. Uses the persisted member
         // list (GetMemberSlots) for the total count
         // and live GroupReference for loaded count.
-        // No bot-type filtering — avoids coupling
+        // No bot-type filtering -- avoids coupling
         // to mod-playerbots eligibility categories.
         auto const& slots =
             group->GetMemberSlots();
@@ -612,7 +682,7 @@ void ProcessPendingRejoins()
         }
 
         // Defer if members still loading, unless
-        // the hard cap (120s) has been reached —
+        // the hard cap (120s) has been reached --
         // then process whatever is available.
         if (loadedOther < totalOther && !timedOut)
         {
@@ -620,7 +690,7 @@ void ProcessPendingRejoins()
             continue;
         }
 
-        // All members loaded — collect bot data.
+        // All members loaded -- collect bot data.
         uint32 groupId = entry.groupId;
         uint32 pZone = player->GetZoneId();
         uint32 pArea = player->GetAreaId();
@@ -788,7 +858,7 @@ public:
         // 5-minute window: entries this old are
         // definitively stale (crash recovery only).
         // Protects active sessions of other online
-        // players — normal delivery completes in
+        // players -- normal delivery completes in
         // seconds, never minutes.
         CharacterDatabase.Execute(
             "UPDATE llm_chatter_queue "
@@ -951,7 +1021,7 @@ public:
         safeMsg = NormalizeChatTextForDb(
             safeMsg, sLLMChatterConfig->_maxMessageLength);
         // Normalization can strip an all-invalid payload
-        // (e.g. \xFF\xFF...) down to empty — drop it.
+        // (e.g. \xFF\xFF...) down to empty -- drop it.
         if (safeMsg.empty())
             return true;
         if (sLLMChatterConfig
@@ -1269,7 +1339,7 @@ public:
         if (oldArea == newArea || !newArea)
             return;
 
-        // Skip if the zone also changed — the
+        // Skip if the zone also changed -- the
         // zone transition handler covers that
         uint32 curZone = player->GetZoneId();
         AreaTableEntry const* oldEntry =

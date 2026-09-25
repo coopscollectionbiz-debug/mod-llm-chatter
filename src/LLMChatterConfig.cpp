@@ -302,6 +302,25 @@ void LLMChatterConfig::LoadConfig()
     _conversationChance = GetChatterOption<uint32>(
         "LLMChatter.ConversationChance", 40);
     _triggerChance = GetChatterOption<uint32>("LLMChatter.TriggerChance", 15);
+
+    _cityTriggerChance = GetChatterOption<uint32>(
+        "LLMChatter.CityTriggerChance", 75);
+
+    _cityConversationChance = GetChatterOption<uint32>(
+        "LLMChatter.CityConversationChance", 60);
+
+    _capitalTriggerMinSeconds = GetChatterOption<uint32>(
+        "LLMChatter.CapitalTriggerMinSeconds", 3);
+
+    _capitalTriggerMaxSeconds = GetChatterOption<uint32>(
+        "LLMChatter.CapitalTriggerMaxSeconds", 8);
+
+    if (_capitalTriggerMinSeconds < 1)
+        _capitalTriggerMinSeconds = 1;
+
+    if (_capitalTriggerMaxSeconds < _capitalTriggerMinSeconds)
+        _capitalTriggerMaxSeconds = _capitalTriggerMinSeconds;
+
     _ambientNpcGossipChance = GetChatterOption<uint32>(
         "LLMChatter.AmbientNpcGossipChance", 5);
     _ambientBotGossipChance = GetChatterOption<uint32>(

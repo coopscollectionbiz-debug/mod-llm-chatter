@@ -142,7 +142,7 @@ _ZONE_GAP_DEFAULT = 15  # seconds
 def _evict_zone_delivery_cache() -> None:
     """Remove stale entries from _zone_last_delivery.
 
-    Entries older than 1 hour are irrelevant — no
+    Entries older than 1 hour are irrelevant â€” no
     meaningful gap enforcement needed after that long.
     Called probabilistically from the zone reservation
     (~1% of calls) to bound memory growth.
@@ -226,14 +226,14 @@ def stagger_if_needed(
     stagger_max: float = 0.0,
 ) -> None:
     """If another system submitted an LLM call this
-    poll cycle, sleep a random stagger_min–stagger_max
+    poll cycle, sleep a random stagger_minâ€“stagger_max
     seconds so messages land in different delivery
     buckets.
 
     If stagger_min/stagger_max are 0 (or omitted),
-    falls back to 1–2x poll_interval.
+    falls back to 1â€“2x poll_interval.
 
-    Must be called from worker threads only — never
+    Must be called from worker threads only â€” never
     from the main poll loop.
     """
     global _last_system_submission_time
@@ -272,7 +272,7 @@ def pick_random_max_tokens(config: dict) -> int:
     statement LLM calls. Creates natural length
     variety that the LLM can't override.
 
-    NOT for conversations — those need the full
+    NOT for conversations â€” those need the full
     token budget for multi-message JSON arrays.
 
     Distribution:
@@ -526,7 +526,7 @@ def build_race_class_context(
                 f"You may naturally weave in a "
                 f"phrase from your native tongue: "
                 f'"{phrase}" ({meaning}). '
-                f"Use it only if it fits — never "
+                f"Use it only if it fits â€” never "
                 f"force it."
             )
         lore = profile.get('lore')
@@ -556,11 +556,11 @@ def build_race_class_context_parts(
     """Return (per_bot, shared_race, shared_class) strings.
 
     per_bot: traits line + random class modifier +
-        optional vocab (unique per bot — always emitted)
+        optional vocab (unique per bot â€” always emitted)
     shared_race: worldview + lore (same for all bots of
-        same race — caller deduplicates, emitted once)
+        same race â€” caller deduplicates, emitted once)
     shared_class: fixed role perspective only (same for
-        all bots of same class — caller deduplicates)
+        all bots of same class â€” caller deduplicates)
 
     race_count: number of bots sharing this race in the
         conversation. Used to compute cumulative lore
@@ -595,7 +595,7 @@ def build_race_class_context_parts(
                 f"You may naturally weave in a "
                 f"phrase from your native tongue: "
                 f'"{phrase}" ({meaning}). '
-                f"Use it only if it fits — never "
+                f"Use it only if it fits â€” never "
                 f"force it."
             )
 
@@ -619,7 +619,7 @@ def build_race_class_context_parts(
                 f"Lore: {lore_str}"
             )
 
-    # Per-bot: class modifier (random per bot — distinct)
+    # Per-bot: class modifier (random per bot â€” distinct)
     modifier = CLASS_SPEECH_MODIFIERS.get(class_name)
     if modifier:
         if isinstance(modifier, list):
@@ -896,7 +896,7 @@ def parse_config(config_path: str) -> dict:
     """Parse the WoW-style config file."""
     config = {}
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
@@ -934,7 +934,7 @@ def get_dungeon_flavor(map_id: int) -> Optional[str]:
 def get_group_area(db, group_id: int) -> int:
     """Get the current area (subzone) for a group.
 
-    Reads from llm_group_bot_traits — all bots in
+    Reads from llm_group_bot_traits â€” all bots in
     the group share the same area (set by real
     player's OnPlayerUpdateArea hook).
 
@@ -959,7 +959,7 @@ def get_group_area(db, group_id: int) -> int:
     return 0
 
 
-# ── Subzone lore (loaded once from JSON) ────────
+# â”€â”€ Subzone lore (loaded once from JSON) â”€â”€â”€â”€â”€â”€â”€â”€
 _subzone_lore: Optional[Dict] = None
 
 
@@ -988,7 +988,7 @@ def get_subzone_lore(
     """Get rich subzone lore description.
 
     Returns None if area_id equals zone_id (no
-    subzone — use zone_flavor instead), or if no
+    subzone â€” use zone_flavor instead), or if no
     lore entry exists for this area.
     """
     if not area_id or area_id == zone_id:
@@ -1090,7 +1090,7 @@ def get_dungeon_bosses(
     - instance_encounters creature credits
     - rank=3 (raid bosses)
     - positive CreatureImmunitiesId AND single spawn
-      (named dungeon bosses — immune mobs that
+      (named dungeon bosses â€” immune mobs that
       spawn only once per map are reliably bosses;
       multi-spawn immune mobs like Molten Elementals
       or Haunted Servitors are trash)
@@ -1347,17 +1347,17 @@ def get_language_rule() -> str:
     if not _language:
         return ""
     return (
-        f"\nLanguage: Write EVERY field in {_language} — "
+        f"\nLanguage: Write EVERY field in {_language} â€” "
         "the \"message\" field AND the \"action\" "
         "narrator field must both be fully in "
         f"{_language}. Do not mix languages. "
         "Exception: keep WoW proper nouns (zone, "
         "subzone, creature, NPC, item, spell, quest, "
         "and character names) in English exactly as "
-        "written — never translate them. Any prior "
+        "written â€” never translate them. Any prior "
         "chat, memories, quoted lines, or examples in "
         "this prompt may be in English or another "
-        "language — treat them only as content to react "
+        "language â€” treat them only as content to react "
         "to, never as a guide for which language to "
         f"use. Your entire output must be in {_language} "
         "no matter what language that context is in."
@@ -1553,13 +1553,13 @@ def append_json_instruction(
             "commas, no code fences, no markdown.\n"
             f"{narrator_rule}"
             "CRITICAL: Follow the Length instruction "
-            "in the prompt exactly — never exceed the "
+            "in the prompt exactly â€” never exceed the "
             "stated character limit."
             f"{lang_rule}"
         )
         return PromptParts(prompt, block)
     # Apply ActionChance RNG: allow_action=True means
-    # "eligible for action" — the RNG decides.
+    # "eligible for action" â€” the RNG decides.
     # allow_action=False means "never include action"
     # (e.g. raid channel).
     # skip_action_rng=True defers RNG to post-parse.
@@ -1574,7 +1574,7 @@ def append_json_instruction(
             "NEVER put {item:}, {quest:}, or "
             "{spell:} placeholders in action. "
             "NEVER include your own name in the "
-            "action — the client already shows it.\n"
+            "action â€” the client already shows it.\n"
         )
     else:
         action_desc = (
@@ -1602,7 +1602,7 @@ def append_json_instruction(
     lang_rule = get_language_rule()
     # Also inject the language rule into the user
     # prompt so split-system providers (Anthropic)
-    # see it close to generation — system prompts
+    # see it close to generation â€” system prompts
     # lose steering weight against English few-shot
     # content that sits inside the user prompt.
     if lang_rule:
@@ -1630,7 +1630,7 @@ def append_json_instruction(
         "Rules: double quotes only, no trailing "
         "commas, no code fences, no markdown.\n"
         "CRITICAL: Follow the Length instruction "
-        "in the prompt exactly — never exceed the "
+        "in the prompt exactly â€” never exceed the "
         "stated character limit."
         f"{lang_rule}"
     )
@@ -1692,14 +1692,14 @@ def append_conversation_json_instruction(
             f"{narrator_rule}"
             "ONLY the JSON array, nothing else.\n"
             "CRITICAL: Follow the Length instruction "
-            "in the prompt exactly â€” never exceed the "
+            "in the prompt exactly Ã¢â‚¬â€ never exceed the "
             "stated character limit."
             f"{lang_rule}"
         )
         return PromptParts(prompt, block)
 
     # When actions are enabled, every message MUST
-    # include an action — strip_conversation_actions()
+    # include an action â€” strip_conversation_actions()
     # enforces ActionChance per-message post-parse.
     # _action_disabled=True (non-RP mode) disables all.
     action_speakers: List[str] = (
@@ -1716,14 +1716,14 @@ def append_conversation_json_instruction(
     if action_speakers:
         action_text = (
             "Actions: EVERY message MUST include a "
-            "non-null \"action\" field — a 2-5 word "
+            "non-null \"action\" field â€” a 2-5 word "
             "physical narration in the configured "
             "language. "
             "NEVER include the speaker's own name in "
-            "the action — the client already shows it. "
+            "the action â€” the client already shows it. "
             "NEVER put {item:}, {quest:}, or "
             "{spell:} placeholders in the action "
-            f"field — those belong in message only. "
+            f"field â€” those belong in message only. "
             f"{_no_narrator}"
         )
     else:
@@ -1802,7 +1802,7 @@ def append_conversation_json_instruction(
         "]\n"
         "ONLY the JSON array, nothing else.\n"
         "CRITICAL: Follow the Length instruction "
-        "in the prompt exactly — never exceed the "
+        "in the prompt exactly â€” never exceed the "
         "stated character limit."
         f"{lang_rule}"
     )
@@ -1880,12 +1880,12 @@ def calculate_dynamic_delay(
     )
 
     if responsive:
-        # Player is waiting — fast reply.  The LLM
+        # Player is waiting â€” fast reply.  The LLM
         # already took several seconds ("thinking"),
         # so keep the typing simulation short.
         return random.uniform(4.0, 8.0)
 
-    # Ambient/idle — full simulation
+    # Ambient/idle â€” full simulation
     reading_time = (
         prev_message_length / random.uniform(4.0, 9.0)
         if prev_message_length > 0 else 0
@@ -2582,7 +2582,7 @@ def parse_extra_data(
 def pick_emote_for_statement(message: str) -> Optional[str]:
     """Keyword-match an emote for a plain-text statement.
 
-    90% RNG gate — most messages attempt emote matching.
+    90% RNG gate â€” most messages attempt emote matching.
     Returns a valid emote name or None.
     """
     if not message or random.random() > 0.90:
@@ -2667,11 +2667,11 @@ def format_item_context(
                 can_use = True
             if can_use:
                 desc += (
-                    f" — {bot_class} CAN equip"
+                    f" â€” {bot_class} CAN equip"
                 )
             else:
                 desc += (
-                    f" — {bot_class} CANNOT equip"
+                    f" â€” {bot_class} CANNOT equip"
                 )
 
         # Add stat highlights
@@ -2775,7 +2775,7 @@ def _normalize_target_description(
     # 2. Possessive
     result = re.sub(r'\byour\b', 'their', result)
     result = re.sub(r'\bYour\b', 'Their', result)
-    # 3. Subject-form "you" — at sentence start,
+    # 3. Subject-form "you" â€” at sentence start,
     #    after conjunctions, or after relative/
     #    subordinating words where "you" is subject.
     #    Uses capture group (not lookbehind) to
@@ -2802,7 +2802,7 @@ def _normalize_target_description(
         r'[Yy]ou\b',
         r'\1they', result,
     )
-    # "you [verb]" — subject "you" followed by a
+    # "you [verb]" â€” subject "you" followed by a
     # common verb (catches relative clauses like
     # "the damage you deal")
     _SUBJ_VERBS = (
@@ -2851,7 +2851,7 @@ def _normalize_target_description(
     return result
 
 
-# ── Spec Personalities (Phase 2) ─────────────────
+# â”€â”€ Spec Personalities (Phase 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Keys: (class_lower, tree_name_lower)
 # Values: personality traits that color how this
 # spec speaks and behaves in casual conversation.
@@ -3092,7 +3092,7 @@ def build_talent_context(
     # Instruction to prevent literal name-dropping
     natural_hint = (
         " Use this to subtly color your attitude "
-        "or words — do NOT name the talent "
+        "or words â€” do NOT name the talent "
         "directly or put it in parentheses."
     )
 
@@ -3109,7 +3109,7 @@ def build_talent_context(
             )
             result = (
                 f"{char_name} specializes in "
-                f"{tree_name} techniques — "
+                f"{tree_name} techniques â€” "
                 f"{desc}{natural_hint}"
             )
         else:

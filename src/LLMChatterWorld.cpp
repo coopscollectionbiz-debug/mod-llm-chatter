@@ -332,6 +332,10 @@ public:
         LoadNamedBossCache();
 
         _lastTriggerTime = 0;
+        _lastCapitalTriggerTime = getMSTime();
+        _capitalTriggerIntervalSeconds = urand(
+            sLLMChatterConfig->_capitalTriggerMinSeconds,
+            sLLMChatterConfig->_capitalTriggerMaxSeconds);
         _lastDeliveryTime = 0;
         _lastGeneralAudienceRefreshTime = 0;
         _lastEnvironmentCheckTime = 0;
@@ -369,12 +373,26 @@ public:
             DeliverPendingMessages();
         }
 
+        // Normal outdoor-zone ambient chatter.
         if (now - _lastTriggerTime
             >= sLLMChatterConfig->_triggerIntervalSeconds
                 * 1000)
         {
             _lastTriggerTime = now;
-            TryTriggerChatter();
+            TryTriggerChatter(false);
+        }
+
+        // Capital cities use their own randomized fast cadence.
+        if (now - _lastCapitalTriggerTime
+            >= _capitalTriggerIntervalSeconds * 1000)
+        {
+            _lastCapitalTriggerTime = now;
+
+            TryTriggerChatter(true);
+
+            _capitalTriggerIntervalSeconds = urand(
+                sLLMChatterConfig->_capitalTriggerMinSeconds,
+                sLLMChatterConfig->_capitalTriggerMaxSeconds);
         }
 
         if (sLLMChatterConfig->_useEventSystem
@@ -516,6 +534,8 @@ public:
 
 private:
     uint32 _lastTriggerTime = 0;
+    uint32 _lastCapitalTriggerTime = 0;
+    uint32 _capitalTriggerIntervalSeconds = 3;
     uint32 _lastDeliveryTime = 0;
     uint32 _lastGeneralAudienceRefreshTime = 0;
     uint32 _lastEnvironmentCheckTime = 0;
@@ -1057,9 +1077,9 @@ private:
         return bots;
     }
 
-    void TryTriggerChatter()
+    void TryTriggerChatter(bool capitalsOnly)
     {
-        ::TryTriggerChatter();
+        ::TryTriggerChatter(capitalsOnly);
     }
 
     void DeliverPendingMessages()
@@ -1074,4 +1094,3 @@ void AddLLMChatterWorldScripts()
     new LLMChatterGameEventScript();
     new LLMChatterALEScript();
 }
-

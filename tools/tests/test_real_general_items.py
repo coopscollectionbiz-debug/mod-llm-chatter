@@ -376,7 +376,7 @@ def test_cpp_source_contracts_for_hot_path_and_bounded_state():
     assert 'contentRoll <= 62' in selector
     assert 'contentRoll <= 95' in selector
 
-    trigger = ambient[ambient.index('void TryTriggerChatter()'):]
+    trigger = ambient[ambient.index('void TryTriggerChatter(bool capitalsOnly)'):]
     type_selection = trigger.index('SelectAmbientMessageType(')
     inventory_scan = trigger.index('SelectChatterTradeItem(bot1)')
     assert type_selection < inventory_scan
