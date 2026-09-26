@@ -324,12 +324,6 @@ def build_dynamic_guidelines(
             "text. Only use {quest:Name}, "
             "{item:Name}, or {spell:Name} "
             "placeholders when explicitly told to.",
-            "Prefer full words over internet slang "
-            "— use abbreviations sparingly, not in "
-            "every message (lol, omg, ngl, tbh are "
-            "ok occasionally). Basic WoW terms are "
-            "always fine (dps, tank, healer, gg, "
-            "buff, nerf, aggro).",
         ]
 
     length_pool = RP_LENGTH_HINTS if is_rp else LENGTH_HINTS

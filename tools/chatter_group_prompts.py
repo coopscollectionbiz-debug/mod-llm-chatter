@@ -236,9 +236,8 @@ def build_bot_greeting_prompt(
         )
     else:
         style_guide = (
-            "Sound like a normal person chatting "
-            "in a game. Casual but natural, "
-            "no excessive slang or abbreviations."
+            "Respond naturally to what is happening. "
+            "Let your assigned personality shape how you phrase it."
         )
 
     # Location context: BG > dungeon > zone flavor
@@ -524,9 +523,8 @@ def build_bot_welcome_prompt(
         )
     else:
         style_guide = (
-            "Sound like a normal person chatting "
-            "in a game. Casual but natural, "
-            "no excessive slang or abbreviations."
+            "Respond naturally to what is happening. "
+            "Let your assigned personality shape how you phrase it."
         )
 
     prompt = (
@@ -659,9 +657,8 @@ def build_batch_welcome_prompt(
         )
     else:
         style_guide = (
-            "Sound like a normal person chatting "
-            "in a game. Casual but natural, "
-            "no excessive slang or abbreviations."
+            "Respond naturally to what is happening. "
+            "Let your assigned personality shape how you phrase it."
         )
 
     names_str = ', '.join(new_bot_names)
