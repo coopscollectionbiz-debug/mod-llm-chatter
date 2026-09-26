@@ -634,6 +634,11 @@ void HandleGroupLootEventImpl(
 void HandleGroupPlayerEnterCombatImpl(
     Player* player, Unit* enemy)
 {
+    // Automatic combat-entry chatter is intentionally disabled.
+    // Entering combat, attacking mobs, and engaging elites or
+    // bosses should not generate player chat or battle cries.
+    return;
+
     if (!sLLMChatterConfig
         || !sLLMChatterConfig->IsEnabled()
         || !sLLMChatterConfig->_useGroupChatter)
@@ -1430,6 +1435,12 @@ void HandleGroupPlayerAchievementCompleteImpl(
 void HandleGroupPlayerSpellCastImpl(
     Player* player, Spell* spell)
 {
+    // Automatic spell-cast chatter is intentionally disabled.
+    // Routine combat actions such as attacks, heals, buffs,
+    // dispels, shields, and other spell casts should not
+    // generate player chat.
+    return;
+
     if (!sLLMChatterConfig
         || !sLLMChatterConfig->IsEnabled()
         || !sLLMChatterConfig->_useGroupChatter)
