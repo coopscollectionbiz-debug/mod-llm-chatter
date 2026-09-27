@@ -480,10 +480,9 @@ def _shared_prompt_lines(
         "the speakers can see, touch, or stand beside "
         "one another.",
         (
-            "For this brief turn, use either concise spoken text or one "
-            "short third-person narrator action featuring the speaker. "
-            "Do not use roleplay asterisks, slash commands, or name "
-            "prefixes."
+            "For this brief turn, use concise spoken text only. "
+            "Do not use narrator actions, roleplay asterisks, "
+            "slash commands, emotes, or name prefixes."
             if brief_casual
             else "Each line is spoken text only: no narrator text, "
             "roleplay asterisks, slash commands, emotes, or name prefixes."
@@ -542,9 +541,7 @@ def _build_single_prompt(
             build_conversational_scale_guidance(
                 force_brief=True,
             ),
-            "A simple acknowledgement is enough; do not embellish it.",
-            "You may instead use one short third-person narrator action "
-            f"featuring {participant['name']}, with no added speech.",
+            "A simple spoken acknowledgement is enough; do not embellish it.",
         ])
     else:
         lines.extend([
@@ -572,7 +569,7 @@ def _build_single_prompt(
         "\n".join(lines),
         allow_action=False,
         message_only=True,
-        allow_narrator_message=brief_casual,
+        allow_narrator_message=False,
     )
 
 
@@ -732,7 +729,7 @@ def _build_multi_prompt(
         message_count,
         allow_action=False,
         message_only=True,
-        allow_narrator_messages=brief_casual,
+        allow_narrator_messages=False,
     )
     return prompt, reference_plans, message_count
 

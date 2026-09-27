@@ -581,7 +581,7 @@ def test_scale_guidance_covers_player_response_prompts():
         assert 'build_conversational_scale_guidance' in source
 
 
-def test_brief_guild_prompt_has_hard_limit_and_narrator_option():
+def test_brief_guild_prompt_has_hard_limit_and_spoken_text_only():
     prompt = chatter_guild_player._build_single_prompt(
         _candidate(11, 'Grourrel'),
         'Dreamkeepers',
@@ -596,7 +596,9 @@ def test_brief_guild_prompt_has_hard_limit_and_narrator_option():
         brief_casual=True,
     )
     assert 'Use 2-8 words and no more than 50 characters' in prompt
-    assert 'third-person narrator action' in prompt
+    assert 'third-person narrator action' not in prompt
+    assert 'use concise spoken text only' in prompt
+    assert 'Do not use narrator actions' in prompt
     assert 'Length: medium' not in prompt
     assert 'Length: long' not in prompt
     assert chatter_shared.brief_casual_response_fits('Aye, cheers!')

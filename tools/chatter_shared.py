@@ -1564,7 +1564,7 @@ def append_json_instruction(
     # (e.g. raid channel).
     # skip_action_rng=True defers RNG to post-parse.
     if (allow_action and not skip_action_rng
-            and random.random() >= _action_chance):
+            and random.random() >= get_action_chance()):
         allow_action = False
     action_desc = ""
     if allow_action:
