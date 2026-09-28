@@ -461,6 +461,16 @@ def build_plain_statement_prompt(
 
     if topic:
         parts.append(f"Topic: {topic}")
+        if not is_rp:
+            parts.append(
+                "GROUNDING: The topic describes the kind of General-chat "
+                "message to make, not a specific event that definitely "
+                "happened. Do not invent a specific quest name, NPC name, "
+                "item name, objective, drop, location, player service, or "
+                "other concrete game fact unless that specific information "
+                "is provided elsewhere in this prompt. When the topic is "
+                "broad, keep those details broad too."
+            )
 
     zone_flavor = get_zone_flavor(zone_id)
     if is_rp and zone_flavor:
@@ -1018,6 +1028,16 @@ def build_plain_conversation_prompt(
 
     if topic:
         parts.append(f"Topic: {topic}")
+        if not is_rp:
+            parts.append(
+                "GROUNDING: The topic describes the kind of General-chat "
+                "exchange to make, not a specific event that definitely "
+                "happened. Do not invent a specific quest name, NPC name, "
+                "item name, objective, drop, location, player service, or "
+                "other concrete game fact unless that specific information "
+                "is provided elsewhere in this prompt. When the topic is "
+                "broad, keep those details broad too."
+            )
 
     zone_flavor = get_zone_flavor(zone_id)
     if is_rp and zone_flavor:
@@ -1159,7 +1179,7 @@ def build_plain_conversation_prompt(
             "complaining about something",
             "celebrating something",
         ]
-    if random.random() < 0.5:
+    if not topic and random.random() < 0.5:
         parts.append(
             f"Topic hint: {random.choice(topics)}"
         )

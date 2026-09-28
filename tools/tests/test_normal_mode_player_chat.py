@@ -561,6 +561,66 @@ def test_general_conversation_uses_public_channel_contract():
     assert 'or coordinating together' in prompt
 
 
+def test_general_statement_explicit_topic_is_grounded():
+    prompt = build_plain_statement_prompt(
+        {**BOT, 'zone': 'Elwynn Forest'},
+        config=NORMAL_CONFIG,
+        topic='asking whether anyone knows how to finish a quest',
+    )
+    assert (
+        'The topic describes the kind of General-chat message to make'
+        in prompt.user_prompt
+    )
+    assert (
+        'Do not invent a specific quest name, NPC name, item name'
+        in prompt.user_prompt
+    )
+    assert (
+        'When the topic is broad, keep those details broad too.'
+        in prompt.user_prompt
+    )
+
+
+def test_general_conversation_explicit_topic_is_grounded():
+    bots = [
+        {**BOT, 'name': 'Aliss', 'zone': 'Elwynn Forest'},
+        {**BOT, 'name': 'Borin', 'zone': 'Elwynn Forest'},
+    ]
+    prompt = build_plain_conversation_prompt(
+        bots,
+        config=NORMAL_CONFIG,
+        topic='asking a simple gameplay question',
+    )
+    assert (
+        'The topic describes the kind of General-chat exchange to make'
+        in prompt
+    )
+    assert (
+        'Do not invent a specific quest name, NPC name, item name'
+        in prompt
+    )
+    assert (
+        'When the topic is broad, keep those details broad too.'
+        in prompt
+    )
+
+
+def test_general_conversation_explicit_topic_has_no_second_topic_hint():
+    bots = [
+        {**BOT, 'name': 'Aliss', 'zone': 'Elwynn Forest'},
+        {**BOT, 'name': 'Borin', 'zone': 'Elwynn Forest'},
+    ]
+    with patch('chatter_prompts.random.random', return_value=0.0):
+        prompt = build_plain_conversation_prompt(
+            bots,
+            config=NORMAL_CONFIG,
+            topic='asking a simple gameplay question',
+        )
+
+    assert 'Topic: asking a simple gameplay question' in prompt
+    assert 'Topic hint:' not in prompt
+
+
 def test_precache_prompt_is_mode_aware():
     normal = build_precache_state_prompt(
         'low_health', 'Aliss', 'Human', 'Mage', 32,
