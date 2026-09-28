@@ -1654,6 +1654,14 @@ _AMBIENT_CHAT_TOPICS_SHARED = [
 # These are broad reasons a real player might deliberately type in /1.
 # They must make sense to unrelated players across the zone. Do not put
 # party coordination or assumed shared activity in this pool.
+GENERAL_CHAT_CREATURE_CONTEXT_TOPICS = {
+    'asking where a quest NPC, enemy, object, or objective is',
+    'asking whether anyone has seen a particular NPC or enemy',
+    'asking whether a rare or named enemy is up',
+    'mentioning that a rare, named enemy, or useful objective is up',
+}
+
+
 GENERAL_CHAT_TOPICS = [
     # Zone / quest questions
     'asking the zone where something is',

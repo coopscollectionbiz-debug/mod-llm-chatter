@@ -12,6 +12,7 @@ from typing import List
 
 from chatter_constants import (
     GENERAL_CHAT_TOPICS,
+    GENERAL_CHAT_CREATURE_CONTEXT_TOPICS,
     AMBIENT_CHAT_TOPICS_RP,
 )
 from chatter_shared import (
@@ -2073,15 +2074,6 @@ def process_statement(
     # Build appropriate prompt
     chosen_topic = ""
     if msg_type == "plain":
-        # Get zone mobs for context
-        zone_mobs = []
-        mobs = query_zone_mobs(
-            config, zone_id, bot['level']
-        )
-        if mobs:
-            zone_mobs = random.sample(
-                mobs, min(10, len(mobs))
-            )
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
@@ -2089,6 +2081,23 @@ def process_statement(
         )
         topic = random.choice(topic_pool)
         chosen_topic = topic
+
+        # Creature names are strong prompt context, so only provide them
+        # when the selected topic actually needs creature grounding.
+        # Roleplay retains its existing environmental context behavior.
+        zone_mobs = []
+        needs_creature_context = (
+            mode == 'roleplay'
+            or topic in GENERAL_CHAT_CREATURE_CONTEXT_TOPICS
+        )
+        if needs_creature_context:
+            mobs = query_zone_mobs(
+                config, zone_id, bot['level']
+            )
+            if mobs:
+                zone_mobs = random.sample(
+                    mobs, min(10, len(mobs))
+                )
         prompt = build_plain_statement_prompt(
             bot, zone_id, zone_mobs,
             config, current_weather,
@@ -2370,15 +2379,6 @@ def process_conversation(
     # Build prompt
     chosen_topic = ""
     if msg_type == "plain":
-        # Get zone mobs for context
-        zone_mobs = []
-        mobs = query_zone_mobs(
-            config, zone_id, bots[0]['level']
-        )
-        if mobs:
-            zone_mobs = random.sample(
-                mobs, min(10, len(mobs))
-            )
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
@@ -2386,6 +2386,23 @@ def process_conversation(
         )
         topic = random.choice(topic_pool)
         chosen_topic = topic
+
+        # As with statements, ordinary Normal-mode General conversations
+        # should not be biased toward mentioning creatures merely because
+        # creature names were supplied as optional context.
+        zone_mobs = []
+        needs_creature_context = (
+            mode == 'roleplay'
+            or topic in GENERAL_CHAT_CREATURE_CONTEXT_TOPICS
+        )
+        if needs_creature_context:
+            mobs = query_zone_mobs(
+                config, zone_id, bots[0]['level']
+            )
+            if mobs:
+                zone_mobs = random.sample(
+                    mobs, min(10, len(mobs))
+                )
         prompt = build_plain_conversation_prompt(
             bots, zone_id, zone_mobs,
             config, current_weather,

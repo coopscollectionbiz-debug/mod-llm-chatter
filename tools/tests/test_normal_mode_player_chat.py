@@ -44,6 +44,7 @@ from chatter_cache import discard_ready_precache  # noqa: E402
 from chatter_constants import (  # noqa: E402
     AMBIENT_CHAT_TOPICS_RP,
     GENERAL_CHAT_TOPICS,
+    GENERAL_CHAT_CREATURE_CONTEXT_TOPICS,
     PARTY_CHAT_TOPICS,
     GUILD_CHAT_TOPICS,
     MESSAGE_CATEGORIES,
@@ -388,6 +389,46 @@ def test_normal_channel_topics_do_not_leak_into_roleplay_pool():
     for topic in party_only:
         assert topic in PARTY_CHAT_TOPICS
         assert topic not in AMBIENT_CHAT_TOPICS_RP
+
+
+def test_general_creature_context_topics_are_explicit_and_valid():
+    expected = {
+        'asking where a quest NPC, enemy, object, or objective is',
+        'asking whether anyone has seen a particular NPC or enemy',
+        'asking whether a rare or named enemy is up',
+        'mentioning that a rare, named enemy, or useful objective is up',
+    }
+    assert GENERAL_CHAT_CREATURE_CONTEXT_TOPICS == expected
+    assert GENERAL_CHAT_CREATURE_CONTEXT_TOPICS <= set(
+        GENERAL_CHAT_TOPICS
+    )
+
+
+def test_normal_general_only_queries_mobs_for_creature_topics():
+    source = (
+        TOOLS_DIR / 'chatter_ambient.py'
+    ).read_text(encoding='utf-8')
+
+    statement = source.split(
+        'def process_statement(', 1
+    )[1].split(
+        '\ndef process_conversation(', 1
+    )[0]
+
+    conversation = source.split(
+        'def process_conversation(', 1
+    )[1]
+
+    for block in (statement, conversation):
+        topic_choice = block.index(
+            'topic = random.choice(topic_pool)'
+        )
+        creature_gate = block.index(
+            'topic in GENERAL_CHAT_CREATURE_CONTEXT_TOPICS'
+        )
+        mob_query = block.index('mobs = query_zone_mobs(')
+
+        assert topic_choice < creature_gate < mob_query
 
 
 def test_party_low_health_uses_character_boundary():
