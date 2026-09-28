@@ -160,7 +160,7 @@ from chatter_group_prompts import (
 from chatter_constants import (
     RACE_SPEECH_PROFILES,
     CLASS_ROLE_MAP,
-    AMBIENT_CHAT_TOPICS,
+    PARTY_CHAT_TOPICS,
     AMBIENT_CHAT_TOPICS_RP,
     BG_MAP_NAMES,
     RAID_MAP_IDS,
@@ -3013,7 +3013,7 @@ def build_idle_chatter_prompt(
         chance=1.0, mode=mode
     )
     # Detect dungeon/BG before topic selection so we
-    # can skip AMBIENT topics when inside an instance
+    # can skip party topics when inside an instance
     # or battleground.
     dungeon_flav_early = get_dungeon_flavor(map_id)
     in_dungeon_early = dungeon_flav_early is not None
@@ -3024,7 +3024,7 @@ def build_idle_chatter_prompt(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else PARTY_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
 
@@ -4448,7 +4448,7 @@ def _idle_conversation(
         ]
 
     bot_names = [b['name'] for b in bots]
-    # Skip AMBIENT topics inside dungeons and BGs —
+    # Skip party topics inside dungeons and BGs —
     # the instance/BG context injected by the prompt
     # builder already grounds the conversation.
     if (
@@ -4460,7 +4460,7 @@ def _idle_conversation(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else PARTY_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
 

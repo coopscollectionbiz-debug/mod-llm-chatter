@@ -1649,104 +1649,213 @@ _AMBIENT_CHAT_TOPICS_SHARED = [
 
 # Additional player-side topics used only in normal mode. Keep these out of
 # AMBIENT_CHAT_TOPICS_RP so expanding OOC variety cannot change RP behavior.
-AMBIENT_CHAT_TOPICS = _AMBIENT_CHAT_TOPICS_SHARED + [
-    # Zone navigation and pacing
-    'commenting on whether the current route feels efficient',
-    'wondering if the group missed a turn or useful shortcut',
-    'mentioning that this area is easier to navigate with the map open',
-    'comparing the pace here with another part of the game',
-    'noticing that the group has circled past the same landmark',
-    'asking whether everyone wants to keep moving or pause briefly',
-    'commenting on how spread out the group has become',
-    'mentioning that the next safe stopping point should be close',
-    'wondering whether mounting would actually save time here',
-    'commenting on a route that looks direct but rarely is',
-    'noticing that the area is busier or quieter than usual',
-    'mentioning that the current location is a useful meeting point',
+# Normal-mode autonomous General chat.
+#
+# These are broad reasons a real player might deliberately type in /1.
+# They must make sense to unrelated players across the zone. Do not put
+# party coordination or assumed shared activity in this pool.
+GENERAL_CHAT_TOPICS = [
+    # Zone / quest questions
+    'asking the zone where something is',
+    'asking for directions to something in the zone',
+    'asking where a quest NPC, enemy, object, or objective is',
+    'asking whether anyone knows how to finish a quest',
+    'asking whether anyone has seen a particular NPC or enemy',
+    'asking whether a rare or named enemy is up',
+    'asking where the flight path, inn, vendor, trainer, or repair NPC is',
+    'asking whether a quest or activity nearby is worth doing',
+    'asking whether anyone else is working on a particular quest',
+    'asking for help with something difficult nearby',
 
-    # Group play and cooperation
-    'checking whether the current pace suits everyone',
-    'giving the group credit for staying together',
-    'mentioning that the group composition feels comfortable',
-    'asking whether anyone needs a short break before continuing',
-    'commenting on how smoothly everyone is handling the session',
-    'noticing that communication has been pleasantly simple',
-    'mentioning that relaxed groups can still make good progress',
-    'asking whether someone wants to lead the way for a while',
-    'commenting on a party member quietly doing their role well',
-    'mentioning that nobody seems to be in a rush',
-    'asking whether the group wants advice or prefers to experiment',
-    'commenting on how different classes complement each other',
+    # Finding other players
+    'looking for other players for a quest or objective',
+    'asking whether anyone wants to group for something nearby',
+    'asking whether anyone is heading toward the same area',
+    'asking whether anyone wants to share or work on a quest',
+    'asking if anyone nearby can provide a useful player service',
 
-    # Combat rhythm and playstyle
-    'commenting on whether the recent fights feel easy or demanding',
-    'mentioning that the group has found a comfortable combat rhythm',
-    'wondering whether the next section will require more care',
-    'commenting on a useful interrupt, heal, or defensive play',
-    'mentioning that careful positioning is making things easier',
-    'asking whether the group prefers larger or safer pulls',
-    'commenting on an enemy type that is awkward for their role',
-    'mentioning that resource management is going better now',
-    'wondering whether a different target order would feel smoother',
-    'commenting on how quickly the group recovers between fights',
-    'mentioning that a close call was handled calmly',
-    'asking whether everyone is ready before the pace picks up',
+    # Public WoW discussion
+    'asking the zone what class or spec people enjoy playing',
+    'asking for opinions about a class, spec, talent, or ability',
+    'asking a simple gameplay question',
+    'asking a quick question about gear',
+    'asking about an addon or interface setting',
+    'asking what people think about a dungeon, zone, profession, or other part of the game',
+    'asking what people around this level are doing',
+    'asking where people usually level or go next',
+    'asking an ordinary low-pressure WoW question',
+    'starting casual game-related small talk with the zone',
 
-    # Roles, classes, and character progress
-    'mentioning that their current role feels good in this group',
-    'commenting on an ability that is useful more often than expected',
-    'wondering how another class approaches the same situation',
-    'mentioning a talent choice they are still getting used to',
-    'commenting on how their class playstyle has changed while leveling',
-    'asking whether another player enjoys their current role',
-    'mentioning a class weakness they have learned to work around',
-    'commenting on a simple gameplay habit that improved their play',
-    'wondering which role they would try on another character',
-    'mentioning that they are close to a personal character milestone',
-    'commenting on how equipment changes can alter the feel of a class',
-    'asking whether someone prefers solo play or group support',
+    # Public observations / opinions
+    'making a casual observation about the zone or leveling',
+    'making a brief observation about travel or getting around',
+    'sharing a casual opinion about something in WoW',
+    'making a throwaway comment about an everyday WoW annoyance',
+    'complaining briefly about a quest, enemy, drop rate, respawn, or other game annoyance',
+    'making a mildly sarcastic comment about the game',
+    'making a quick dry joke about WoW',
+    'sharing a random game-related thought that does not need to be important',
+    'making an ordinary low-information comment that still makes sense to strangers',
+    'reacting publicly to finally finishing or getting something annoying',
 
-    # Interface, performance, and controls
-    'mentioning a minimap detail they almost overlooked',
-    'commenting on a brief delay or harmless lag spike',
-    'wondering whether anyone else changed a useful interface setting',
-    'mentioning a keybind they are still trying to remember',
-    'commenting on camera movement in a cramped area',
-    'asking whether someone plays with many addons or very few',
-    'mentioning that the game music fits the current area well',
-    'commenting on how clear or cluttered the screen feels right now',
-    'wondering whether a sound cue came from the game or voice chat',
-    'mentioning that the frame rate is better away from a busy city',
-    'commenting on an interface notification arriving at an odd time',
-    'asking whether anyone else accidentally pressed the wrong key',
+    # Progress / leveling
+    'mentioning they are almost level',
+    'reacting casually to gaining a level',
+    'mentioning they finally got a quest item or objective',
+    'asking whether an item or reward is worth keeping',
+    'commenting casually on leveling an alt',
+    'asking what alt other people are leveling',
 
-    # Session habits and ordinary small talk
-    'asking how long everyone plans to keep playing',
-    'mentioning that they are settling into a relaxed session',
-    'commenting on playing after a long day without making it dramatic',
-    'asking whether anyone is leveling another character too',
-    'mentioning that they came online without a particular plan',
-    'commenting on how quickly the session has passed',
-    'asking whether the others usually play around this time',
-    'mentioning that they may need to step away briefly later',
-    'commenting on enjoying quiet conversation while playing',
-    'asking a low-pressure question about how everyone is doing',
-    'mentioning a snack, drink, or short real-life distraction',
-    'commenting that complete sentences are easier than typing in combat',
+    # Trade / professions
+    'asking whether anyone in the zone has a particular profession',
+    'asking whether anyone can craft something',
+    'offering to craft or provide a useful player-made item',
+    'asking whether anyone wants an item they do not need',
+    'asking to buy an ordinary item or crafting material',
+    'offering an ordinary item or crafting material for sale',
+    'asking a casual profession question',
 
-    # Light humour and player texture
-    'making a dry joke about confidently going the wrong direction',
-    'joking that the map and the actual route disagree',
-    'making a self-deprecating comment about reaction time',
-    'joking about forgetting what they were about to say',
-    'commenting that standing still somehow became the current strategy',
-    'making a mild joke about everyone waiting for everyone else',
-    'admitting they were watching the wrong part of the screen',
-    'joking about needing more bag space without discussing an item',
-    'making a dry observation about another routine repair stop',
-    'commenting on a harmless mistake that looked intentional',
-    'joking that the group is professionally avoiding the obvious route',
-    'mentioning that patience is carrying the run more than skill',
+    # Things appropriate to broadcast
+    'asking whether anyone else is having lag',
+    'mentioning useful information other players in the zone could act on',
+    'mentioning that a rare, named enemy, or useful objective is up',
+    'mentioning where they found something other players may be looking for',
+    'asking whether anyone else just noticed something unusual in the game',
+    'making a quick comment about something happening publicly nearby',
+]
+
+# Normal-mode private party chatter.
+#
+# Unlike General, these topics may assume shared immediate context: the
+# same route, quest, fight, loot, group members, or play session.
+PARTY_CHAT_TOPICS = [
+    # Immediate gameplay reactions
+    'reacting briefly to something that just went wrong',
+    'reacting briefly to something that just went well',
+    'reacting to a close or messy fight',
+    'reacting to finally finishing something annoying',
+    'complaining briefly about an annoying enemy',
+    'commenting on an enemy that keeps doing something irritating',
+    'admitting they made a small gameplay mistake',
+    'making a quick joke about a recent mistake',
+    'reacting to an unexpectedly easy fight',
+    'reacting to an unexpectedly difficult fight',
+
+    # Questions with an actual reason to use chat
+    'asking where something is',
+    'asking which direction to go',
+    'asking what the group is doing next',
+    'asking whether anyone needs the same quest',
+    'asking whether anyone knows how to finish something nearby',
+    'asking whether the group should keep going',
+    'asking whether anyone needs a short break',
+    'asking a simple class or gameplay question',
+    'asking whether anyone else is having lag',
+    'asking whether someone can help with something nearby',
+    'asking whether anyone needs food, water, or a useful player-made item',
+
+    # Navigation and getting around
+    'mentioning they got turned around or went the wrong way',
+    'realizing they have already passed the same place',
+    'complaining briefly about having to run a long way',
+    'wondering if there is a faster way to get somewhere',
+    'asking where the flight path, inn, vendor, or repair NPC is',
+    'making a quick joke about being lost',
+    'mentioning they should have mounted sooner',
+    'asking if everyone is still together',
+
+    # Quests and leveling
+    'complaining that a quest is taking longer than expected',
+    'reacting to finally getting a quest objective or drop',
+    'asking whether a quest objective is nearby',
+    'mentioning they are almost done with a quest',
+    'mentioning they are almost level',
+    'reacting to gaining a level',
+    'wondering what quest to do next',
+    'complaining about a bad quest drop rate',
+    'mentioning they forgot how annoying a quest was',
+    'asking if anyone wants to turn quests in soon',
+
+    # Loot, gear, bags, repairs, and professions
+    'reacting briefly to a useful drop',
+    'reacting briefly to bad or useless loot',
+    'complaining about running out of bag space',
+    'mentioning they need to repair soon',
+    'mentioning they need to sell junk soon',
+    'asking whether anyone needs an item that just dropped',
+    'mentioning they are hoping for an upgrade',
+    'asking a quick question about a piece of gear',
+    'mentioning their profession skill is getting close to a milestone',
+    'asking whether anyone needs something crafted',
+    'mentioning they need to gather something if they see it',
+
+    # Class and group play
+    'thanking someone briefly for a heal, buff, save, or other useful play',
+    'complimenting a useful play without analyzing it',
+    'asking for a buff, heal, summon, food, water, or other class utility',
+    'mentioning an ability is on cooldown',
+    'mentioning they are low on mana or another game resource',
+    'asking the group to wait a second',
+    'asking whether everyone is ready',
+    'suggesting a simple next move',
+    'asking whether to pull more or slow down',
+    'mentioning they are still getting used to an ability or talent',
+
+    # UI, performance, and ordinary player problems
+    'complaining briefly about lag or a short delay',
+    'mentioning they hit the wrong key',
+    'mentioning they almost missed something on the minimap',
+    'asking about an addon or interface setting',
+    'mentioning their camera or view is being annoying',
+    'commenting briefly on the game music',
+    'mentioning their bags, quest log, or UI are cluttered',
+    'wondering whether a sound came from the game or voice chat',
+
+    # Session logistics
+    'saying they need to go afk for a minute',
+    'saying they are back after being afk',
+    'mentioning they may need to log off soon',
+    'asking how much longer everyone is playing',
+    'mentioning they have time for one or two more things',
+    'saying they are grabbing a drink or snack',
+    'mentioning they logged in without much of a plan',
+    'asking what everyone feels like doing',
+
+    # Low-information chat is normal player chat too
+    'making a very short reaction that does not need explanation',
+    'agreeing or disagreeing with something in a few words',
+    'making an ordinary throwaway comment',
+    'making a quick dry joke',
+    'making a mildly sarcastic comment about the game',
+    'admitting they were not paying attention',
+    'joking about confidently doing the wrong thing',
+    'making a self-deprecating comment about their gameplay',
+    'complaining about something minor without turning it into a story',
+    'sharing a random thought that does not need to be interesting',
+    'asking an ordinary low-pressure question',
+    'starting casual small talk unrelated to Azeroth lore',
+
+    # More ordinary reasons a player might actually type
+    'asking if anyone has seen a particular enemy or NPC nearby',
+    'asking if a nearby rare or named enemy is up',
+    'mentioning they just noticed something useful on the map',
+    'asking whether something is worth doing',
+    'asking if anyone remembers how a mechanic works',
+    'saying they need a second to check something',
+    'mentioning they forgot to train or buy something earlier',
+    'realizing they forgot to set their hearthstone somewhere useful',
+    'complaining briefly about a long respawn',
+    'complaining briefly about competing for quest mobs or objectives',
+    'reacting to accidentally pulling an extra enemy',
+    'reacting to someone unexpectedly saving the group',
+    'asking whether someone wants an item they cannot use',
+    'mentioning they are one item or objective away from being done',
+    'asking if anyone is heading toward the same place',
+    'mentioning they need to empty their bags before doing much more',
+    'asking whether it is worth going back to town now',
+    'making a quick comment about another player doing something odd',
+    'mentioning they forgot what they were about to do',
+    'asking a simple question because they genuinely do not remember',
 ]
 
 # Topics for roleplay mode: the original shared ambient topics plus
@@ -1834,7 +1943,7 @@ AMBIENT_CHAT_TOPICS_RP = _AMBIENT_CHAT_TOPICS_SHARED + [
 # Topics for proximity /say chatter between bots, NPCs, and the player.
 # These are casual, lightweight, daily-life snippets — overheard
 # fragments as the player walks through the world.  Distinct from
-# AMBIENT_CHAT_TOPICS which are party/group-focused.
+# PARTY_CHAT_TOPICS which are party/group-focused.
 # Keep entries short and concrete so the LLM produces brief replies.
 PROXIMITY_CHAT_TOPICS = [
     # ── Weather & Nature ────────────────────────────────────────────

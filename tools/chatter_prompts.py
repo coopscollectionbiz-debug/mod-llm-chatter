@@ -450,7 +450,11 @@ def build_plain_statement_prompt(
     else:
         parts.append(
             f"Generate a brief WoW General chat message "
-            f"from a player in {bot['zone']}. Speak as "
+            f"from a player in {bot['zone']}. General is a public "
+            f"zone channel heard by unrelated players, not your party. "
+            f"The message must make sense to strangers who are not "
+            f"traveling, fighting, questing, waiting, or coordinating "
+            f"with you. Speak as "
             f"a player talking about the game — not "
             f"roleplaying your character."
         )
@@ -989,15 +993,25 @@ def build_plain_conversation_prompt(
         )
     elif bot_count == 2:
         parts.append(
-            f"Generate a casual General chat exchange between "
+            f"Generate a casual public General chat exchange between "
             f"two WoW players in {bots[0]['zone']}. "
+            f"General is a public zone channel heard by unrelated "
+            f"players, not a private conversation or party channel. "
+            f"The speakers may respond to each other, but must not "
+            f"assume they are traveling, fighting, questing, waiting, "
+            f"or coordinating together. "
             f"They speak as players discussing the game, "
             f"not roleplaying their characters."
         )
     else:
         parts.append(
-            f"Generate a casual General chat exchange between "
+            f"Generate a casual public General chat exchange between "
             f"{bot_count} WoW players in {bots[0]['zone']}. "
+            f"General is a public zone channel heard by unrelated "
+            f"players, not a private conversation or party channel. "
+            f"The speakers may respond to each other, but must not "
+            f"assume they are traveling, fighting, questing, waiting, "
+            f"or coordinating together. "
             f"They speak as players discussing the game, "
             f"not roleplaying their characters."
         )

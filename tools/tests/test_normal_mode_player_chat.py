@@ -42,8 +42,9 @@ from chatter_bg_prompts import (  # noqa: E402
 )
 from chatter_cache import discard_ready_precache  # noqa: E402
 from chatter_constants import (  # noqa: E402
-    AMBIENT_CHAT_TOPICS,
     AMBIENT_CHAT_TOPICS_RP,
+    GENERAL_CHAT_TOPICS,
+    PARTY_CHAT_TOPICS,
     GUILD_CHAT_TOPICS,
     MESSAGE_CATEGORIES,
     MOODS,
@@ -80,7 +81,10 @@ from chatter_mode import (  # noqa: E402
     build_player_prompt_header,
     resolve_player_personality,
 )
-from chatter_prompts import build_plain_statement_prompt  # noqa: E402
+from chatter_prompts import (  # noqa: E402
+    build_plain_conversation_prompt,
+    build_plain_statement_prompt,
+)
 from chatter_proximity import (  # noqa: E402
     _conversation_prompt,
     _single_prompt,
@@ -271,12 +275,18 @@ class _DB:
         self.commits += 1
 
 
-def test_canonical_normal_voice_is_friendly_and_player_side():
+def test_canonical_normal_voice_is_casual_and_player_side():
     text = build_player_chat_guidance('normal', 'party')
     assert 'person playing WoW' in text
-    assert 'Friendly and respectful is the default' in text
-    assert 'never force rudeness' in text
-    assert 'socially imperfect' not in text
+    assert 'actual player typing in WoW chat' in text
+    assert 'typed off the cuff' in text
+    assert 'simplest natural way' in text
+    assert 'Short reactions and fragments' in text
+    assert 'terse' in text
+    assert 'sarcastic' in text
+    assert 'blunt' in text
+    assert 'perfect grammar is not required' in text
+    assert 'Avoid slurs and personal abuse' in text
     assert 'physically feel' in text
     assert 'legacy character metadata' in text
 
@@ -322,7 +332,8 @@ def test_normal_shared_pools_do_not_request_roleplay_sensations():
 
 def test_normal_topic_pools_have_scale_and_no_duplicates():
     minimum_sizes = {
-        'ambient': (AMBIENT_CHAT_TOPICS, 100),
+        'general': (GENERAL_CHAT_TOPICS, 40),
+        'party': (PARTY_CHAT_TOPICS, 100),
         'guild': (GUILD_CHAT_TOPICS, 180),
         'proximity': (PROXIMITY_PLAYER_CHAT_TOPICS, 150),
         'party questions': (BOT_QUESTION_TOPICS_NORMAL, 60),
@@ -338,11 +349,45 @@ def test_normal_topic_pools_have_scale_and_no_duplicates():
         }
         assert len(normalized) == len(pool), label
 
-    normal_only_topic = (
-        'wondering whether anyone else changed a useful interface setting'
+
+def test_general_and_party_topics_are_channel_appropriate():
+    public_topics = (
+        'asking the zone where something is',
+        'looking for other players for a quest or objective',
+        'asking whether anyone else is having lag',
     )
-    assert normal_only_topic in AMBIENT_CHAT_TOPICS
-    assert normal_only_topic not in AMBIENT_CHAT_TOPICS_RP
+    for topic in public_topics:
+        assert topic in GENERAL_CHAT_TOPICS
+
+    party_topics = (
+        'asking what the group is doing next',
+        'asking whether the group should keep going',
+        'asking the group to wait a second',
+        'asking whether everyone is ready',
+        'asking whether to pull more or slow down',
+    )
+    for topic in party_topics:
+        assert topic in PARTY_CHAT_TOPICS
+        assert topic not in GENERAL_CHAT_TOPICS
+
+
+def test_normal_channel_topics_do_not_leak_into_roleplay_pool():
+    general_only = (
+        'asking the zone where something is',
+        'starting casual game-related small talk with the zone',
+    )
+    party_only = (
+        'complaining about running out of bag space',
+        'making a very short reaction that does not need explanation',
+    )
+
+    for topic in general_only:
+        assert topic in GENERAL_CHAT_TOPICS
+        assert topic not in AMBIENT_CHAT_TOPICS_RP
+
+    for topic in party_only:
+        assert topic in PARTY_CHAT_TOPICS
+        assert topic not in AMBIENT_CHAT_TOPICS_RP
 
 
 def test_party_low_health_uses_character_boundary():
@@ -443,15 +488,36 @@ def test_bot_question_uses_shared_length_limiter():
     assert 'message = shorten_chat_question(message)' in question_path
 
 
-def test_general_statement_uses_canonical_normal_guidance():
+def test_general_statement_uses_public_channel_contract():
     prompt = build_plain_statement_prompt(
         {**BOT, 'zone': 'Elwynn Forest'},
         config=NORMAL_CONFIG,
-        topic='the next quest',
+        topic='asking the zone where something is',
     )
     assert 'CHAT MODE: NORMAL' in prompt.user_prompt
+    assert 'public zone channel heard by unrelated players' in prompt.user_prompt
+    assert 'not your party' in prompt.user_prompt
+    assert 'make sense to strangers' in prompt.user_prompt
+    assert 'traveling, fighting, questing, waiting, or coordinating' in prompt.user_prompt
     assert 'not roleplaying your character' in prompt.user_prompt
     assert 'physically feel' in prompt.user_prompt
+
+
+def test_general_conversation_uses_public_channel_contract():
+    bots = [
+        {**BOT, 'name': 'Aliss', 'zone': 'Elwynn Forest'},
+        {**BOT, 'name': 'Borin', 'zone': 'Elwynn Forest'},
+    ]
+    prompt = build_plain_conversation_prompt(
+        bots,
+        config=NORMAL_CONFIG,
+        topic='asking the zone where something is',
+    )
+    assert 'casual public General chat exchange' in prompt
+    assert 'public zone channel heard by unrelated players' in prompt
+    assert 'not a private conversation or party channel' in prompt
+    assert 'must not assume they are traveling' in prompt
+    assert 'or coordinating together' in prompt
 
 
 def test_precache_prompt_is_mode_aware():

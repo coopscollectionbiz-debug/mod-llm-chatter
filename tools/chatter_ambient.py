@@ -11,7 +11,7 @@ import time
 from typing import List
 
 from chatter_constants import (
-    AMBIENT_CHAT_TOPICS,
+    GENERAL_CHAT_TOPICS,
     AMBIENT_CHAT_TOPICS_RP,
 )
 from chatter_shared import (
@@ -2085,7 +2085,7 @@ def process_statement(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else GENERAL_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
         chosen_topic = topic
@@ -2155,7 +2155,7 @@ def process_statement(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else GENERAL_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
         prompt = build_plain_statement_prompt(
@@ -2382,7 +2382,7 @@ def process_conversation(
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
             if mode == 'roleplay'
-            else AMBIENT_CHAT_TOPICS
+            else GENERAL_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
         chosen_topic = topic
