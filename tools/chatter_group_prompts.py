@@ -760,6 +760,43 @@ def build_kill_reaction_prompt(
     Personality traits influence the reaction.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        if is_boss:
+            event = f"The group just killed boss {creature_name}."
+        elif is_rare:
+            event = f"The group just killed rare mob {creature_name}."
+        else:
+            event = f"The group just killed {creature_name}."
+        if extra_data and extra_data.get('in_raid'):
+            event += " This happened during a raid."
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if extra_data:
+            parts.append(
+                build_bot_state_context(extra_data, mode)
+            )
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -894,6 +931,52 @@ def build_loot_reaction_prompt(
     and this bot is reacting to someone else's loot.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        who = looter_name or bot['name']
+        if item_quality >= 200:
+            event = f"{who} picked up loot; item details are unknown."
+        else:
+            qualities = {
+                2: "green", 3: "blue",
+                4: "epic", 5: "legendary",
+            }
+            quality = qualities.get(item_quality, "other")
+            event = (
+                f"{who} looted {item_name} "
+                f"({quality} quality)."
+            )
+        event += (
+            " Do not imply you received or equipped "
+            "an item someone else looted."
+        )
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if extra_data:
+            parts.append(
+                build_bot_state_context(extra_data, mode)
+            )
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -1032,6 +1115,42 @@ def build_combat_reaction_prompt(
     like real-time combat chat.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        kind = "boss" if is_boss else (
+            "elite" if is_elite else "regular mob"
+        )
+        event = (
+            f"The group just engaged {creature_name}, "
+            f"a {kind}."
+        )
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if extra_data:
+            parts.append(
+                build_bot_state_context(extra_data, mode)
+            )
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -1139,6 +1258,40 @@ def build_death_reaction_prompt(
     bot. Works for both bot and player deaths.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        event = f"{dead_name} just died."
+        if killer_name:
+            event += f" Killed by {killer_name}."
+        if is_player_death:
+            event += " This is the real player."
+        parts = [
+            build_player_prompt_header_from_dict(reactor, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(reactor_traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if extra_data:
+            parts.append(
+                build_bot_state_context(extra_data, mode)
+            )
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(reactor_traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -1259,6 +1412,33 @@ def build_levelup_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+    # Normal-mode natural event reaction.
+    if not is_rp:
+        event = f"{leveler_name} just reached level {new_level}."
+        instruction = (
+            "React like a real WoW player who noticed a level-up. "
+            "A quick congrats, observation, or casual comment is enough. "
+            "Do not force excitement, a joke, or a speech."
+        )
+
+        prompt = (
+            f"{build_player_prompt_header_from_dict(bot, mode)}\n"
+            f"{build_player_chat_guidance(mode, 'party')}\n"
+            f"Your personality: {trait_str}\n"
+        )
+        if speaker_talent_context:
+            prompt += f"{speaker_talent_context}\n"
+        if chat_history:
+            prompt += f"{chat_history}\n"
+        prompt += (
+            f"Event: {event}\n"
+            f"{instruction}\n"
+            "Write one short, natural party-chat reaction. "
+            "Stay consistent with your identity and recent conversation. "
+            "Do not repeat something already said.\n"
+        )
+        return append_json_instruction(prompt, allow_action)
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -1343,6 +1523,40 @@ def build_quest_complete_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+    # Normal-mode natural event reaction.
+    if not is_rp:
+        event = f'The group just turned in the quest "{quest_name}".'
+        if turnin_npc:
+            event += f" Turn-in NPC: {turnin_npc}."
+        if quest_details:
+            event += f" Quest details: {quest_details}"
+        if quest_objectives:
+            event += f" Objectives: {quest_objectives}"
+        instruction = (
+            "React casually to finishing and turning in the quest. "
+            "You can acknowledge progress, rewards, or moving on, "
+            "but do not invent a specific reward or force a celebration. "
+            "Talk to the party, not the quest NPC."
+        )
+
+        prompt = (
+            f"{build_player_prompt_header_from_dict(bot, mode)}\n"
+            f"{build_player_chat_guidance(mode, 'party')}\n"
+            f"Your personality: {trait_str}\n"
+        )
+        if speaker_talent_context:
+            prompt += f"{speaker_talent_context}\n"
+        if chat_history:
+            prompt += f"{chat_history}\n"
+        prompt += (
+            f"Event: {event}\n"
+            f"{instruction}\n"
+            "Write one short, natural party-chat reaction. "
+            "Stay consistent with your identity and recent conversation. "
+            "Do not repeat something already said.\n"
+        )
+        return append_json_instruction(prompt, allow_action)
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -1455,6 +1669,42 @@ def build_quest_objectives_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+    # Normal-mode natural event reaction.
+    if not is_rp:
+        event = (
+            f'All objectives for "{quest_name}" are complete, '
+            "but the quest has NOT been turned in yet."
+        )
+        if quest_details:
+            event += f" Quest details: {quest_details}"
+        if quest_objectives:
+            event += f" Objectives: {quest_objectives}"
+        instruction = (
+            "React naturally to the objectives being done. "
+            "You might suggest turning it in, acknowledge the progress, "
+            "or make a brief relevant comment. "
+            "Do not claim the quest has already been turned in "
+            "or that rewards were collected."
+        )
+
+        prompt = (
+            f"{build_player_prompt_header_from_dict(bot, mode)}\n"
+            f"{build_player_chat_guidance(mode, 'party')}\n"
+            f"Your personality: {trait_str}\n"
+        )
+        if speaker_talent_context:
+            prompt += f"{speaker_talent_context}\n"
+        if chat_history:
+            prompt += f"{chat_history}\n"
+        prompt += (
+            f"Event: {event}\n"
+            f"{instruction}\n"
+            "Write one short, natural party-chat reaction. "
+            "Stay consistent with your identity and recent conversation. "
+            "Do not repeat something already said.\n"
+        )
+        return append_json_instruction(prompt, allow_action)
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -1561,6 +1811,38 @@ def build_achievement_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+    # Normal-mode natural event reaction.
+    if not is_rp:
+        event = (
+            f'{achiever_name} just earned the achievement '
+            f'"{achievement_name}".'
+        )
+        instruction = (
+            "React like a real WoW player. If you earned it yourself, "
+            "you may acknowledge it casually. Otherwise, you may "
+            "congratulate the player or comment on the achievement. "
+            "Match the significance of the achievement and your "
+            "personality; do not force exaggerated excitement."
+        )
+
+        prompt = (
+            f"{build_player_prompt_header_from_dict(bot, mode)}\n"
+            f"{build_player_chat_guidance(mode, 'party')}\n"
+            f"Your personality: {trait_str}\n"
+        )
+        if speaker_talent_context:
+            prompt += f"{speaker_talent_context}\n"
+        if chat_history:
+            prompt += f"{chat_history}\n"
+        prompt += (
+            f"Event: {event}\n"
+            f"{instruction}\n"
+            "Write one short, natural party-chat reaction. "
+            "Stay consistent with your identity and recent conversation. "
+            "Do not repeat something already said.\n"
+        )
+        return append_json_instruction(prompt, allow_action)
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -1685,6 +1967,36 @@ def build_group_achievement_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+    # Normal-mode natural event reaction.
+    if not is_rp:
+        event = (
+            f'The achievement "{achievement_name}" was just earned '
+            f'by these group members: {", ".join(achiever_names)}.'
+        )
+        instruction = (
+            "React naturally to the shared achievement. "
+            "A quick group congratulations or relevant comment is fine. "
+            "Do not list every player unnecessarily or force a big celebration."
+        )
+
+        prompt = (
+            f"{build_player_prompt_header_from_dict(bot, mode)}\n"
+            f"{build_player_chat_guidance(mode, 'party')}\n"
+            f"Your personality: {trait_str}\n"
+        )
+        if speaker_talent_context:
+            prompt += f"{speaker_talent_context}\n"
+        if chat_history:
+            prompt += f"{chat_history}\n"
+        prompt += (
+            f"Event: {event}\n"
+            f"{instruction}\n"
+            "Write one short, natural party-chat reaction. "
+            "Stay consistent with your identity and recent conversation. "
+            "Do not repeat something already said.\n"
+        )
+        return append_json_instruction(prompt, allow_action)
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -2327,6 +2639,35 @@ def build_resurrect_reaction_prompt(
     and reacts with gratitude, relief, or drama.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        event = (
+            "Your character was just resurrected "
+            "by someone in the party."
+        )
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -2556,6 +2897,59 @@ def build_quest_accept_reaction_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+
+    if not is_rp:
+        event = (
+            f"{acceptor_name} just accepted the quest "
+            f"{quest_name} (level {quest_level}) "
+            f"in {zone_name}. The quest has not "
+            "been completed or turned in."
+        )
+
+        if quest_details:
+            event += f" Quest description: {quest_details}"
+        if quest_objectives:
+            event += f" Quest objectives: {quest_objectives}"
+
+        try:
+            level_diff = int(bot['level']) - int(quest_level)
+        except (ValueError, TypeError, KeyError):
+            level_diff = None
+
+        if level_diff is not None and level_diff < -3:
+            event += " This quest is above your level."
+        elif level_diff is not None and level_diff > 5:
+            event += " This quest is below your level."
+
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            f"Your personality: {trait_str}",
+            event,
+        ]
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if chat_history:
+            parts.append(
+                "Recent party chat; avoid repeating it:\n"
+                + chat_history
+            )
+
+        parts.append(
+            "If reacting, make a brief, relevant comment "
+            "as an ordinary WoW player. You might discuss "
+            "an objective or ask a practical question, "
+            "but do not announce the quest mechanically. "
+            "Do not force excitement, jokes, or group plans. "
+            "Do not invent quest progress or rewards."
+        )
+
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -2655,7 +3049,7 @@ def build_quest_accept_reaction_prompt(
         f"already said in chat"
     )
     spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
+        mode=mode, spice_count_override=None
     )
     if spices:
         prompt += (
@@ -2683,6 +3077,47 @@ def build_quest_accept_batch_prompt(
     """
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
+
+    if not is_rp:
+        quest_list = ", ".join(
+            str(name) for name in quest_names
+        )
+
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            f"Your personality: {trait_str}",
+            (
+                f"{acceptor_name} just accepted "
+                f"{len(quest_names)} quests in {zone_name}. "
+                f"New quests: {quest_list}. "
+                "These quests have just been accepted, "
+                "not completed."
+            ),
+        ]
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if chat_history:
+            parts.append(
+                "Recent party chat; avoid repeating it:\n"
+                + chat_history
+            )
+
+        parts.append(
+            "If reacting, say something short and natural "
+            "about the current plans or workload. "
+            "Do not recite the quest list; mention at most "
+            "one quest by name. Do not force jokes, "
+            "excitement, or collective enthusiasm. "
+            "Do not invent quest progress or rewards."
+        )
+
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
@@ -2759,7 +3194,7 @@ def build_quest_accept_batch_prompt(
         f"already said in chat"
     )
     spices = pick_personality_spices(
-        mode=mode, spice_count_override=_spice_count
+        mode=mode, spice_count_override=None
     )
     if spices:
         prompt += (
@@ -2896,6 +3331,38 @@ def build_wipe_reaction_prompt(
     or resigned depending on personality.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        event = "The entire party just wiped."
+        if killer_name:
+            event += f" The group wiped to {killer_name}."
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if extra_data:
+            parts.append(
+                build_bot_state_context(extra_data, mode)
+            )
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -3006,6 +3473,43 @@ def build_corpse_run_reaction_prompt(
     the real player died and the bot reacts.
     """
     is_rp = (mode == 'roleplay')
+
+    # Normal mode: human gameplay reaction.
+    if not is_rp:
+        if is_player_death:
+            event = (
+                f"{dead_name} released spirit and "
+                "is running back to their corpse."
+            )
+        else:
+            event = (
+                "Your character released spirit "
+                "and is running back to their corpse."
+            )
+        if zone_name:
+            event += f" Location: {zone_name}."
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            "Your personality: " + ", ".join(traits),
+        ]
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+        parts.append(event)
+        parts.append(
+            "Write one short, believable party-chat reaction "
+            "as a real WoW player. Match the situation and "
+            "your established personality. No forced jokes, "
+            "battle cries, exaggerated emotion, or fantasy "
+            "roleplay. Do not invent actions or outcomes. "
+            "Avoid repeating recent chat."
+        )
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
     trait_str = ', '.join(traits)
     tone = stored_tone or pick_random_tone(mode)
     twist = maybe_get_creative_twist(
@@ -3964,7 +4468,7 @@ def build_nearby_object_conversation_prompt(
     msg_count = min(2 * num_bots, 8)
 
     # Natural flow for 3+ bots
-    if num_bots > 2:
+    if is_rp and num_bots > 2:
         parts.append(
             "IMPORTANT: EVERY speaker MUST have "
             "at least one message — do NOT skip "
@@ -3974,7 +4478,7 @@ def build_nearby_object_conversation_prompt(
         )
 
     # Style guidance
-    length_hint = _pick_length_hint(mode)
+    length_hint = _pick_length_hint(mode) if is_rp else ""
     if is_rp:
         parts.append(
             "Guidelines: Stay in-character for "
@@ -3985,16 +4489,23 @@ def build_nearby_object_conversation_prompt(
         parts.append(
             "Guidelines: Sound like normal "
             "people chatting in a game; casual "
-            f"and relaxed; {length_hint}; "
+            "and relaxed; keep replies concise and natural; "
         )
 
-    parts.append(
-        "React to the nearby objects — "
-        "observations, opinions, memories, "
-        "jokes, or lore. Don't just list what "
-        "you see. Don't repeat themes from "
-        "recent chat."
-    )
+    if is_rp:
+        parts.append(
+            "React to the nearby objects — "
+            "observations, opinions, memories, "
+            "jokes, or lore. Don't just list what "
+            "you see. Don't repeat themes from "
+            "recent chat."
+        )
+    else:
+        parts.append(
+            "Comment naturally on something actually visible "
+            "or relevant nearby. Do not invent events, force "
+            "jokes, or make every bot participate."
+        )
 
     spices = pick_personality_spices(
         mode=mode,
@@ -4019,6 +4530,7 @@ def build_nearby_object_conversation_prompt(
     return append_conversation_json_instruction(
         prompt, bot_names, msg_count,
         allow_action=allow_action,
+        flexible_count=not is_rp,
     )
 
 
@@ -4054,6 +4566,97 @@ def build_player_msg_conversation_prompt(
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
     addressed_name = bot_names[0]
+
+    # Normal mode: flexible player-message replies.
+    # Leave the existing Roleplay path unchanged.
+    if not is_rp:
+        parts = [
+            build_player_chat_guidance(mode, 'party'),
+            f"{player_name} said in party chat: {player_message}",
+            f"Available speakers: {', '.join(bot_names)}",
+        ]
+        _append_bots_with_rp(
+            parts, bots, traits_map, False
+        )
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if target_talent_context:
+            parts.append(target_talent_context)
+        if link_context:
+            parts.append(link_context)
+        if item_context:
+            parts.append(item_context)
+        if members:
+            parts.append(
+                "Party members: " + ", ".join(members)
+            )
+        if chat_history:
+            parts.append(
+                "Recent party chat:\n" + chat_history
+            )
+            anti_rep = build_anti_repetition_context(
+                chat_history.splitlines()[-10:]
+            )
+            if anti_rep:
+                parts.append(anti_rep)
+
+        parts.append(
+            f"{addressed_name} should respond first and "
+            f"directly to {player_name}. Other bots may "
+            "respond only if they have something relevant "
+            "to add. Do not force a group discussion, "
+            "rotate speakers, invent events, or repeat "
+            "the player's words."
+        )
+
+        if brief_casual:
+            parts.append(
+                "Keep each spoken message under 50 "
+                "characters. A relevant emote without "
+                "spoken text is also acceptable."
+            )
+        else:
+            parts.append(
+                "Use natural, concise WoW party chat. "
+                "No fixed word count or forced jokes."
+            )
+
+        action_rule = (
+            "Each message may have an optional action "
+            "field; omit it when unnecessary."
+            if allow_action else
+            "Do not include physical actions."
+        )
+
+        parts.append(
+            "Return 1 to "
+            f"{num_bots} messages, using only the "
+            "available speakers. The first message "
+            f"must be from {addressed_name}. "
+            "Other speakers may remain silent. "
+            + action_rule
+        )
+
+        example = (
+            '{"speaker": "' + addressed_name +
+            '", "message": "...", "emote": null, '
+            '"action": null}'
+        )
+
+        parts.append(
+            "Optional emotes must be selected from: "
+            + EMOTE_LIST_STR
+            + ". For brief casual replies, an empty "
+            "message with a non-null emote is valid. "
+            "Never leave both empty. "
+            "Use double-quoted valid JSON, no markdown "
+            "fences or extra commentary. "
+            "Return ONLY a JSON array such as:\n["
+            + example + "]"
+        )
+        return "\n".join(parts)
+
 
     # Each bot speaks exactly once
     msg_count = num_bots
@@ -4543,6 +5146,90 @@ def build_bot_question_prompt(
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
 
+    # Normal mode: natural player question.
+    # The existing Roleplay implementation remains below.
+    if not is_rp:
+        parts = [
+            build_player_prompt_header_from_dict(bot, mode),
+            build_player_chat_guidance(mode, 'party'),
+            f"Your personality: {trait_str}",
+            (
+                f"You are grouped with {player_name}, "
+                f"a level {player_level} {player_race} "
+                f"{player_class} (real player)."
+            ),
+        ]
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+        if target_talent_context:
+            parts.append(target_talent_context)
+
+        if members:
+            parts.append(
+                "Party members: " + ", ".join(members)
+            )
+
+        if get_dungeon_flavor(map_id) is not None:
+            parts.append(
+                "You are currently in a dungeon."
+            )
+        elif map_id in BG_MAP_NAMES:
+            parts.append(
+                "You are currently in a battleground."
+            )
+
+        if memories:
+            from chatter_memory import (
+                sanitize_memory_for_prompt,
+            )
+            cleaned = [
+                sanitize_memory_for_prompt(m)
+                for m in memories
+            ]
+            cleaned = [m for m in cleaned if m]
+            if cleaned:
+                parts.append(
+                    "Shared gameplay memories (optional "
+                    "context, not a required topic):\n"
+                    + "\n".join(
+                        "- " + m for m in cleaned
+                    )
+                )
+
+        if chat_history:
+            parts.append(
+                "Recent party chat:\n" + chat_history
+            )
+
+        anti_rep = build_anti_repetition_context(
+            recent_messages
+        )
+        if anti_rep:
+            parts.append(anti_rep)
+
+        parts.append(
+            f"Ask {player_name} one genuine, short "
+            "question that a fellow WoW player might "
+            "naturally ask right now. Prefer something "
+            "relevant to the recent conversation, "
+            "current activity, or an established "
+            "shared experience. Memories are optional; "
+            "do not bring one up just to prove you "
+            "remember it. Avoid forced jokes, fantasy "
+            "roleplay, interview-style questions, "
+            "random trivia, and artificial enthusiasm. "
+            "Do not invent game events or claim to "
+            "know things you have not observed. "
+            "Write one concise question, without "
+            "introductory commentary."
+        )
+
+        return append_json_instruction(
+            "\n".join(parts), allow_action
+        )
+
+
     # --------------------------------------------------
     # LEAN MEMORY PATH — when memories are present,
     # the question should be ABOUT the memory rather
@@ -4860,6 +5547,66 @@ def build_quest_complete_conversation_prompt(
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
 
+    # Normal quest event: optional participation.
+    # The original Roleplay path remains below.
+    if not is_rp:
+
+        event = (
+            f"Quest turned in: {quest_name}. "
+            f"Party member: {completer_name}."
+        )
+        if turnin_npc:
+            event += f" Turn-in NPC: {turnin_npc}."
+        event += (
+            " The quest has been handed in. "
+            "Do not invent specific rewards or address the NPC."
+        )
+
+        if quest_details:
+            event += f" Quest description: {quest_details}"
+        if quest_objectives:
+            event += f" Quest objectives: {quest_objectives}"
+
+        parts = [
+            build_player_chat_guidance(mode, 'party'),
+            event,
+            "Available party speakers: " + ", ".join(bot_names),
+        ]
+
+        _append_bots_with_rp(
+            parts, bots, traits_map, False
+        )
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if chat_history:
+            parts.append(
+                "Recent party chat for context; avoid "
+                "repeating it:\n" + chat_history
+            )
+
+        parts.append(
+            "React only if the quest event gives you "
+            "something natural and relevant to say. "
+            "Use casual WoW player language and your "
+            "established personality. One player may "
+            "comment while everyone else stays quiet. "
+            "Do not force celebration, jokes, dramatic "
+            "reactions, or speaker rotation. "
+            "Keep each message concise. "
+            "Do not invent game events or rewards."
+        )
+
+        return append_conversation_json_instruction(
+            "\n".join(parts),
+            bot_names,
+            msg_count,
+            allow_action=allow_action,
+            flexible_count=True,
+        )
+
+
     count_word = {
         2: "two", 3: "three", 4: "four"
     }.get(num_bots, str(num_bots))
@@ -5020,6 +5767,62 @@ def build_quest_objectives_conversation_prompt(
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
 
+    # Normal quest event: optional participation.
+    # The original Roleplay path remains below.
+    if not is_rp:
+
+        event = (
+            f"Quest objectives completed: {quest_name}. "
+            "The quest has NOT been turned in yet. "
+            "Do not claim rewards have been collected. "
+            "This was a group effort."
+        )
+
+        if quest_details:
+            event += f" Quest description: {quest_details}"
+        if quest_objectives:
+            event += f" Quest objectives: {quest_objectives}"
+
+        parts = [
+            build_player_chat_guidance(mode, 'party'),
+            event,
+            "Available party speakers: " + ", ".join(bot_names),
+        ]
+
+        _append_bots_with_rp(
+            parts, bots, traits_map, False
+        )
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if chat_history:
+            parts.append(
+                "Recent party chat for context; avoid "
+                "repeating it:\n" + chat_history
+            )
+
+        parts.append(
+            "React only if the quest event gives you "
+            "something natural and relevant to say. "
+            "Use casual WoW player language and your "
+            "established personality. One player may "
+            "comment while everyone else stays quiet. "
+            "Do not force celebration, jokes, dramatic "
+            "reactions, or speaker rotation. "
+            "Keep each message concise. "
+            "Do not invent game events or rewards."
+        )
+
+        return append_conversation_json_instruction(
+            "\n".join(parts),
+            bot_names,
+            msg_count,
+            allow_action=allow_action,
+            flexible_count=True,
+        )
+
+
     count_word = {
         2: "two", 3: "three", 4: "four"
     }.get(num_bots, str(num_bots))
@@ -5175,6 +5978,63 @@ def build_quest_accept_conversation_prompt(
     is_rp = (mode == 'roleplay')
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
+
+    # Normal quest event: optional participation.
+    # The original Roleplay path remains below.
+    if not is_rp:
+
+        event = (
+            f"New quest accepted by {acceptor_name}: "
+            f"{quest_name} (level {quest_level}) "
+            f"in {zone_name}. "
+            "The quest has just been accepted; "
+            "its objectives are not yet complete."
+        )
+
+        if quest_details:
+            event += f" Quest description: {quest_details}"
+        if quest_objectives:
+            event += f" Quest objectives: {quest_objectives}"
+
+        parts = [
+            build_player_chat_guidance(mode, 'party'),
+            event,
+            "Available party speakers: " + ", ".join(bot_names),
+        ]
+
+        _append_bots_with_rp(
+            parts, bots, traits_map, False
+        )
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if chat_history:
+            parts.append(
+                "Recent party chat for context; avoid "
+                "repeating it:\n" + chat_history
+            )
+
+        parts.append(
+            "React only if the quest event gives you "
+            "something natural and relevant to say. "
+            "Use casual WoW player language and your "
+            "established personality. One player may "
+            "comment while everyone else stays quiet. "
+            "Do not force celebration, jokes, dramatic "
+            "reactions, or speaker rotation. "
+            "Keep each message concise. "
+            "Do not invent game events or rewards."
+        )
+
+        return append_conversation_json_instruction(
+            "\n".join(parts),
+            bot_names,
+            msg_count,
+            allow_action=allow_action,
+            flexible_count=True,
+        )
+
 
     count_word = {
         2: "two", 3: "three", 4: "four"

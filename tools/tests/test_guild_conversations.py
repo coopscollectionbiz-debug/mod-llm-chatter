@@ -658,7 +658,7 @@ def test_invalid_conversation_repairs_once():
     ):
         result = (
             chatter_guild.process_guild_idle_chatter_event(
-                db, None, _config(), _event(names)
+                db, None, {**_config(), 'LLMChatter.ChatterMode': 'roleplay'}, _event(names)
             )
         )
 
@@ -801,3 +801,31 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_normal_conversation_allows_one_speaker():
+    names = ['Aliss', 'Rytsen']
+    messages = [
+        {
+            'name': 'Aliss',
+            'message': 'yeah im down',
+        },
+    ]
+
+    assert chatter_guild._valid_guild_conversation(
+        messages, names, 'normal'
+    )
+    assert not chatter_guild._valid_guild_conversation(
+        messages, names, 'roleplay'
+    )
+
+    assert not chatter_guild._valid_guild_conversation(
+        [{'name': 'Stranger', 'message': 'hello'}],
+        names,
+        'normal',
+    )
+    assert not chatter_guild._valid_guild_conversation(
+        [],
+        names,
+        'normal',
+    )

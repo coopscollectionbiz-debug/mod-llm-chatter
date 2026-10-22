@@ -655,40 +655,53 @@ def build_raid_banter_prompt(
     lore-aware, environment-focused."""
     ctx = _raid_base_context(extra_data, bot_data)
 
-    banter_topics = random.choice([
-        "a funny observation about the raid "
-        "environment or architecture",
-        "a playful jab at a fellow raider or "
-        "a class stereotype",
-        "a lore tidbit or rumor about this place",
-        "a humorous complaint about the trash "
-        "mobs or the walk back",
-        "an irreverent comment about the bosses",
-        "wondering aloud about something weird "
-        "you noticed in this raid",
-        "a joke about repair bills, wipe recovery, "
-        "or consumable costs",
-        "casual banter about food, drink, or "
-        "downtime activities",
-        "a sarcastic remark about raid readiness "
-        "or someone going AFK",
-        "a lighthearted comment about loot drama "
-        "or RNG luck",
-    ])
+    roleplay = is_roleplay(get_chatter_mode(
+        extra_data.get('_config') or {}
+    ))
+    if roleplay:
+        banter_topics = random.choice([
+            "a funny observation about the raid "
+            "environment or architecture",
+            "a playful jab at a fellow raider or "
+            "a class stereotype",
+            "a lore tidbit or rumor about this place",
+            "a humorous complaint about the trash "
+            "mobs or the walk back",
+            "an irreverent comment about the bosses",
+            "wondering aloud about something weird "
+            "you noticed in this raid",
+            "a joke about repair bills, wipe recovery, "
+            "or consumable costs",
+            "casual banter about food, drink, or "
+            "downtime activities",
+            "a sarcastic remark about raid readiness "
+            "or someone going AFK",
+            "a lighthearted comment about loot drama "
+            "or RNG luck",
+        ])
 
-    ctx += (
-        "You are making casual BANTER in raid "
-        "chat between pulls. The mood is relaxed. "
-        "Be humorous, observational, or playful. "
-        "NOT motivational or tactical — save that "
-        "for morale. This is just friends chatting "
-        "in a dungeon.\n"
-    )
-    ctx += f"Topic hint: {banter_topics}\n"
-    ctx += (
-        "ONE short sentence (10-25 words) in the configured chat mode. "
-        "No asterisks."
-    )
+        ctx += (
+            "You are making casual BANTER in raid "
+            "chat between pulls. The mood is relaxed. "
+            "Be humorous, observational, or playful. "
+            "NOT motivational or tactical — save that "
+            "for morale. This is just friends chatting "
+            "in a dungeon.\n"
+        )
+        ctx += f"Topic hint: {banter_topics}\n"
+        ctx += (
+            "ONE short sentence (10-25 words) in the configured chat mode. "
+            "No asterisks."
+        )
+    else:
+        ctx += (
+            'You are a player chatting in raid between pulls. Speak casually,'
+            'as you would with other players. You can make a relevant'
+            'observation, ask a normal question, or continue an existing'
+            "conversation. Don't force jokes, lore trivia, scenery comments,"
+            'or invented incidents. Avoid exaggerated enthusiasm and scripted'
+            'banter. Keep it short and natural. No asterisks.'
+        )
     return append_json_instruction(
         ctx, allow_action=False, skip_emote=True
     )
@@ -700,44 +713,56 @@ def build_raid_morale_prompt(
     """Idle morale — banter between pulls."""
     ctx = _raid_base_context(extra_data, bot_data)
 
-    topics = random.choice([
-        "morale boost or encouragement",
-        "tactical banter about the next pull",
-        "readiness check or gear question",
-        "raid encouragement or hype",
-        "idle commentary between pulls",
-        "joke or light trash talk",
-        "compliment a recent play or save",
-        "reminisce about a past wipe or close call",
-        "comment on the raid's architecture or "
-        "atmosphere",
-        "complain about repair bills or consumables",
-        "speculation about what loot will drop",
-        "lore or history of this raid instance",
-        "banter about who is pulling their weight",
-        "comment on how the raid is progressing",
-        "nervous anticipation about a tough boss "
-        "ahead",
-        "ask if everyone has food and flask buffs",
-        "joke about AFK raiders or slow pullers",
-        "share a rumor or gossip about this place",
-        "comment on the trash mobs they just "
-        "fought through",
-    ])
+    roleplay = is_roleplay(get_chatter_mode(
+        extra_data.get('_config') or {}
+    ))
+    if roleplay:
+        topics = random.choice([
+            "morale boost or encouragement",
+            "tactical banter about the next pull",
+            "readiness check or gear question",
+            "raid encouragement or hype",
+            "idle commentary between pulls",
+            "joke or light trash talk",
+            "compliment a recent play or save",
+            "reminisce about a past wipe or close call",
+            "comment on the raid's architecture or "
+            "atmosphere",
+            "complain about repair bills or consumables",
+            "speculation about what loot will drop",
+            "lore or history of this raid instance",
+            "banter about who is pulling their weight",
+            "comment on how the raid is progressing",
+            "nervous anticipation about a tough boss "
+            "ahead",
+            "ask if everyone has food and flask buffs",
+            "joke about AFK raiders or slow pullers",
+            "share a rumor or gossip about this place",
+            "comment on the trash mobs they just "
+            "fought through",
+        ])
 
-    ctx += (
-        "You are chatting in RAID chat between "
-        "pulls. The mood is relaxed but focused "
-        "— a seasoned raider making conversation "
-        "or checking readiness. Not urgent "
-        "commander voice. Casual and "
-        "authoritative.\n"
-    )
-    ctx += f"Topic hint: {topics}\n"
-    ctx += (
-        "ONE short sentence in the configured chat mode. "
-        "No asterisks."
-    )
+        ctx += (
+            "You are chatting in RAID chat between "
+            "pulls. The mood is relaxed but focused "
+            "— a seasoned raider making conversation "
+            "or checking readiness. Not urgent "
+            "commander voice. Casual and "
+            "authoritative.\n"
+        )
+        ctx += f"Topic hint: {topics}\n"
+        ctx += (
+            "ONE short sentence in the configured chat mode. "
+            "No asterisks."
+        )
+    else:
+        ctx += (
+            'You are a player chatting in raid between pulls. A quick'
+            'readiness question, useful suggestion, encouragement, or ordinary'
+            "comment is appropriate when it fits the situation. Don't pretend"
+            'to be the raid leader, invent problems, or manufacture'
+            'motivational speeches. Speak casually and briefly. No asterisks.'
+        )
     return append_json_instruction(
         ctx, allow_action=False, skip_emote=True
     )

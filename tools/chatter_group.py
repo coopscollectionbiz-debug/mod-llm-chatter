@@ -87,6 +87,7 @@ from chatter_party_gate import should_defer_party_generation
 from chatter_mode import (
     build_player_chat_guidance,
     build_player_prompt_header_from_dict,
+    build_player_background_context,
 )
 from chatter_prompts import (
     pick_random_tone,
@@ -3267,6 +3268,129 @@ def build_idle_conversation_prompt(
     is_rp = (mode == 'roleplay')
     num_bots = len(bots)
     bot_names = [b['name'] for b in bots]
+
+    # NORMAL IDLE PLAYER CONVERSATION V1
+    # Keep the original Roleplay implementation unchanged.
+    if not is_rp:
+        parts = [
+            "You are different real people playing World of Warcraft "
+            "together. Chat naturally as yourselves, not as fictional "
+            "characters living in Azeroth. You don't have to entertain "
+            "anyone or respond to everything. Don't invent game events.",
+        ]
+
+        for bot in bots:
+            name = bot['name']
+            avatar = ' '.join(
+                str(bot.get(key) or '')
+                for key in ('level', 'race', 'class')
+            ).strip()
+            parts.append(
+                f"{name} plays a {avatar} character. "
+                + build_player_background_context(
+                    name, mode=mode, compact=True
+                )
+            )
+
+            traits = traits_map.get(bot['name'], [])
+            if traits:
+                parts.append(
+                    f"{bot['name']}'s usual temperament: "
+                    + ", ".join(str(t) for t in traits if t)
+                )
+
+            if bot.get('is_dead'):
+                parts.append(
+                    f"{bot['name']}'s character is currently dead."
+                )
+
+            if bot.get('travel_context'):
+                parts.append(
+                    f"{bot['name']}'s character travel state: "
+                    f"{bot['travel_context']}"
+                )
+
+        dungeon = get_dungeon_flavor(map_id)
+        battleground = BG_MAP_NAMES.get(map_id)
+
+        if dungeon:
+            parts.append(
+                "Current location: inside a dungeon, "
+                + dungeon.split(':')[0].strip()
+            )
+        elif battleground:
+            parts.append(f"Current battleground: {battleground}")
+        else:
+            zone = get_zone_name(zone_id)
+            if zone:
+                parts.append(f"Current zone: {zone}")
+            subzone = get_subzone_name(zone_id, area_id)
+            if subzone:
+                parts.append(f"Current subzone: {subzone}")
+
+        if player_name:
+            parts.append(
+                f"Also in the party: {player_name}, a human player."
+            )
+
+        if members:
+            others = [
+                m for m in members
+                if m not in bot_names and m != player_name
+            ]
+            if others:
+                parts.append(
+                    "Other party members: " + ", ".join(others)
+                )
+
+        if topic:
+            parts.append(
+                f"Possible conversation subject: {topic}. "
+                "Use only if it fits naturally."
+            )
+
+        if speaker_talent_context:
+            parts.append(speaker_talent_context)
+
+        if memories_map:
+            for bot in bots:
+                memories = memories_map.get(bot.get('guid'), [])
+                cleaned = [
+                    sanitize_memory_for_prompt(memory)
+                    for memory in memories
+                ]
+                cleaned = [memory for memory in cleaned if memory]
+                if cleaned:
+                    parts.append(
+                        f"Things {bot['name']} remembers from playing "
+                        f"with {player_name or 'the party'}:\n"
+                        + "\n".join(f"- {memory}" for memory in cleaned)
+                        + "\nOnly mention a memory if relevant."
+                    )
+
+        if chat_history:
+            parts.append("Recent party chat:\n" + chat_history)
+
+        anti_repeat = build_anti_repetition_context(recent_messages)
+        if anti_repeat:
+            parts.append(anti_repeat)
+
+        parts.append(
+            "Write 1 to 3 natural party chat messages, each under "
+            "120 characters. Only these bots can speak: "
+            + ", ".join(bot_names)
+            + ". Not everyone needs to speak. "
+            "Return only a JSON array with speaker, message, emote, "
+            "and action. Set emote and action to null."
+        )
+
+        return "\n".join(parts) + (
+            '\nExample JSON format:\n'
+            '[{"speaker": "' + bot_names[0] + '", '
+            '"message": "yeah im good", '
+            '"emote": null, "action": null}]'
+        )
+
     msg_count = select_conversation_message_count(
         num_bots, 4, 4
     )

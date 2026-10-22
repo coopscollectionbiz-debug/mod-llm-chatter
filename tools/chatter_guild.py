@@ -983,6 +983,48 @@ def _build_guild_conversation_prompt(
     history_context: str = "",
     mode: str = 'roleplay',
 ) -> str:
+    if not is_roleplay(mode):
+        from chatter_shared import PromptParts
+        bot_names = [p['name'] for p in participants]
+        lines = [
+            build_player_chat_guidance(mode, 'guild'),
+            f'Guild: {guild_name}.',
+        ]
+        for participant in participants:
+            lines.extend(
+                _participant_identity_lines(participant, mode)
+            )
+        if guildmates:
+            lines.append(f'Other guildmates online: {guildmates}.')
+        lines.extend(
+            _guild_location_lines(participants, name_zone, mode)
+        )
+        lines.append(f'Current topic: {topic}.')
+        lines.extend(
+            _guild_history_prompt_lines(history_context, mode)
+        )
+        lines.extend([
+            'Write a natural, brief guild chat exchange about the topic.',
+            'Only bots who have something to add should speak. '
+            'A bot may reply more than once; others may stay silent.',
+            f'Use 1 to {max(1, message_count)} messages total.',
+            'No forced speaker order, moods, jokes, callbacks, '
+            'questions, or name mentions.',
+            'Each message is ordinary player chat, max 150 characters.',
+            'Eligible speakers: ' + ', '.join(bot_names) + '.',
+            'No narrator actions.',
+        ])
+        return PromptParts(
+            "\n".join(lines),
+            "\n\nJSON output: Return only an array containing "
+            "1 to the requested maximum number of objects. "
+            'Each object has exactly "speaker" and "message". '
+            "Choose speakers only from the eligible bot names "
+            "listed in the prompt. Speakers may repeat and "
+            "not every bot needs to speak. "
+            "Use valid JSON with no markdown or other text."
+        )
+
     bot_names = [
         participant['name']
         for participant in participants
@@ -1295,7 +1337,15 @@ def _clean_guild_conversation(
 def _valid_guild_conversation(
     messages: List[Dict],
     bot_names: List[str],
+    mode: str = 'roleplay',
 ) -> bool:
+    if not is_roleplay(mode):
+        return bool(messages) and all(
+            message.get('name') in bot_names
+            and bool(message.get('message', '').strip())
+            for message in messages
+        )
+
     if len(messages) < 2:
         return False
     speakers = {
@@ -1467,7 +1517,7 @@ def _generate_guild_conversation(
     repair_used = False
 
     if not _valid_guild_conversation(
-        messages, bot_names
+        messages, bot_names, get_chatter_mode(config)
     ):
         repair_used = True
         repair_metadata = dict(metadata)
@@ -1504,7 +1554,7 @@ def _generate_guild_conversation(
         )[:message_count]
 
     if not _valid_guild_conversation(
-        messages, bot_names
+        messages, bot_names, get_chatter_mode(config)
     ):
         return False
 

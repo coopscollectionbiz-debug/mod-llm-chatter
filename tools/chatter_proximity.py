@@ -612,8 +612,13 @@ def _single_prompt(
             "Message must use 2-8 words and no more than 50 "
             "characters."
             if brief_casual
-            else "Message must be 8-15 words, natural, local, "
-            "and low-stakes."
+            else (
+                "Keep the message conversational and relevant. "
+                "A quick remark or a longer sentence is fine."
+                if not speaker_roleplay
+                else "Message must be 8-15 words, natural, local, "
+                     "and low-stakes."
+            )
         ),
         "No AI talk, markdown, or forced slang.",
         "",
@@ -706,9 +711,9 @@ def _conversation_prompt(
         topic = random.choice(PROXIMITY_CHAT_TOPICS)
     else:
         topic = (
-            "NPC angle: " + random.choice(PROXIMITY_CHAT_TOPICS)
-            + "; playerbot angle: "
-            + random.choice(PROXIMITY_PLAYER_CHAT_TOPICS)
+            "Something genuinely relevant to the current location, "
+            "nearby activity, or what these players might be doing. "
+            "Do not invent nearby events or require a conversation."
         )
     max_lines = max(
         2, min(
@@ -776,13 +781,26 @@ def _conversation_prompt(
         "You write short World of Warcraft ambient "
         "overheard /say conversations.",
         "Use only the provided speaker names.",
-        "Each message must be 6-14 words, natural, and relevant to the "
-        "nearby exchange.",
-        "Every listed speaker must speak at least once.",
+        (
+            "Each message must be 6-14 words, natural, and relevant to the "
+            "nearby exchange."
+            if is_roleplay(mode) or not has_playerbot
+            else "Use natural player-sized messages; short replies are fine."
+        ),
+        (
+            "Every listed speaker must speak at least once."
+            if is_roleplay(mode)
+            else "Other participants may remain silent."
+        ),
         "Keep the exchange brief.",
         "",
         f"Topic seed: {topic}",
-        f"Write EXACTLY {max_lines} messages.",
+        (
+            f"Write EXACTLY {max_lines} messages."
+            if is_roleplay(mode)
+            else f"Write 1 to {max_lines} messages. "
+                 "Only relevant speakers need to participate."
+        ),
         "Speakers may address each other by name.",
     ]
     lines.extend(_location_lines(
@@ -812,6 +830,7 @@ def _conversation_prompt(
         speaker_names,
         max_lines,
         allow_action=is_roleplay(mode) or has_npc,
+        flexible_count=not is_roleplay(mode),
     )
 
 
@@ -1320,7 +1339,11 @@ def _player_say_single_prompt(
             "Write an extremely short /say reply using 2-8 words "
             "and no more than 50 characters."
             if brief_casual
-            else "Write an extremely short /say reply of 8-15 words."
+            else (
+                "Reply naturally; a short answer is fine."
+                if not speaker_roleplay
+                else "Write an extremely short /say reply of 8-15 words."
+            )
         ),
         "Keep it natural and low-stakes. No AI talk or markdown.",
         "",
@@ -1411,8 +1434,12 @@ def _player_say_conversation_prompt(
             "Each message must use 2-8 words and no more than 50 "
             "characters."
             if brief_casual
-            else "Each message must be 6-14 words, natural, and "
-            "relevant to the nearby exchange."
+            else (
+                "Use natural player-sized replies, including short answers."
+                if not is_roleplay(mode)
+                else "Each message must be 6-14 words, natural, and "
+                     "relevant to the nearby exchange."
+            )
         ),
         "Keep the exchange brief.",
         "",
@@ -1454,7 +1481,12 @@ def _player_say_conversation_prompt(
             "the player's words."
         )
     lines.append(
-        f"Write EXACTLY {max_lines} messages."
+        (
+            f"Write EXACTLY {max_lines} messages."
+            if is_roleplay(mode)
+            else f"Write 1 to {max_lines} messages. "
+                 "Only relevant speakers need to participate."
+        )
     )
     if interaction_mode == 'npc_aside':
         lines.append(
@@ -1498,6 +1530,7 @@ def _player_say_conversation_prompt(
             else [player_name] + speaker_names
         ),
         allow_emote_only=brief_casual,
+        flexible_count=not is_roleplay(mode),
     )
 
 
@@ -1546,7 +1579,11 @@ def _player_emote_single_prompt(
                 mode,
                 channel='say',
             ),
-            "Write an extremely short /say reaction of 2-8 words.",
+            (
+                "Write an extremely short /say reaction of 2-8 words."
+                if is_roleplay(mode)
+                else "React naturally; even a one-word reply is fine."
+            ),
             "Keep it natural and low-stakes. No AI talk or markdown.",
         ]
     lines.extend(_location_lines(extra, mode, [speaker]))
@@ -1631,8 +1668,16 @@ def _player_emote_conversation_prompt(
     lines = [
         "You write short World of Warcraft overheard /say conversations.",
         "Use only the provided speaker names.",
-        "Each message must be 2-8 words, natural, and relevant.",
-        "Every listed speaker must speak at least once.",
+        (
+            "Each message must be 2-8 words, natural, and relevant."
+            if is_roleplay(mode)
+            else "Use brief, natural reactions; one-word replies are fine."
+        ),
+        (
+            "Every listed speaker must speak at least once."
+            if is_roleplay(mode)
+            else "Other participants may remain silent."
+        ),
         "Never invent dialogue, thoughts, or actions for the real player.",
         "",
     ]
@@ -1680,7 +1725,12 @@ def _player_emote_conversation_prompt(
     if history_block:
         lines.extend(["", history_block])
     lines.extend([
-        f"Write EXACTLY {max_lines} messages.",
+        (
+            f"Write EXACTLY {max_lines} messages."
+            if is_roleplay(mode)
+            else f"Write 1 to {max_lines} messages. "
+                 "Only relevant speakers need to participate."
+        ),
         "Speakers:",
         roster,
     ])
@@ -1706,6 +1756,7 @@ def _player_emote_conversation_prompt(
             )
         ),
         allow_emote_only=True,
+        flexible_count=not is_roleplay(mode),
     )
 
 
@@ -2008,7 +2059,10 @@ def handle_proximity_player_conversation(
     }
     if not parsed or (
         addressed and parsed[0].get('name') != addressed
-    ) or not set(names).issubset(parsed_speakers):
+    ) or (
+        is_roleplay(get_chatter_mode(config or {}))
+        and not set(names).issubset(parsed_speakers)
+    ):
         logger.warning(
             "proximity_player_conversation event %s "
             "fell back to its addressed speaker",

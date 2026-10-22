@@ -329,6 +329,14 @@ def _maybe_raid_battle_cry(
 
     Gated by config chance and per-group cooldown.
     """
+    # Normal mode should not generate automatic raid battle cries.
+    # Preserve the original behavior for Roleplay.
+    from chatter_mode import is_roleplay
+    from chatter_shared import get_chatter_mode
+
+    if not is_roleplay(get_chatter_mode(config)):
+        return
+
     group_id = int(
         extra_data.get('group_id', 0))
     if not group_id:

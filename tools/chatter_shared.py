@@ -1646,6 +1646,7 @@ def append_conversation_json_instruction(
     addressee_names: Optional[List[str]] = None,
     allow_emote_only: bool = False,
     allow_narrator_messages: bool = False,
+    flexible_count: bool = False,
 ) -> str:
     """Append conversation JSON array instruction.
 
@@ -1774,12 +1775,13 @@ def append_conversation_json_instruction(
         if allow_emote_only and emote_available
         else "..."
     )
+    example_names = bot_names[:1] if flexible_count else bot_names
     example_msgs = ',\n  '.join(
         [
             f'{{"speaker": "{name}", "message": "{message_example}", '
             f'{emote_ex}, '
             f'{action_ex}{addressee_example(name)}}}'
-            for name in bot_names
+            for name in example_names
         ]
     )
     emote_only_rule = (
@@ -1796,8 +1798,13 @@ def append_conversation_json_instruction(
         f"{emote_only_rule}"
         "JSON rules: Use double quotes, escape "
         "quotes/newlines, no trailing commas, no code fences.\n"
-        f"\nRespond with EXACTLY {msg_count} messages in JSON:\n"
-        "[\n"
+        + (
+            f"\nRespond with 1 to {msg_count} messages in JSON. "
+            "Use only listed speakers; others may remain silent.\n"
+            if flexible_count
+            else f"\nRespond with EXACTLY {msg_count} messages in JSON:\n"
+        )
+        +         "[\n"
         f"  {example_msgs}\n"
         "]\n"
         "ONLY the JSON array, nothing else.\n"

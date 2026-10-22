@@ -123,8 +123,15 @@ def init_general_config(config):
 
 
 
-def _pick_random_traits():
-    """Pick 3 random traits for a bot."""
+def _pick_random_traits(bot_name='', mode='normal'):
+    """Use stable player traits in normal mode; preserve RP behavior."""
+    if mode != 'roleplay':
+        from chatter_mode import resolve_player_personality
+        traits, _ = resolve_player_personality(
+            bot_name, mode=mode
+        )
+        return traits
+
     categories = random.sample(
         list(PERSONALITY_TRAITS.keys()), 3
     )
@@ -132,6 +139,7 @@ def _pick_random_traits():
         random.choice(PERSONALITY_TRAITS[cat])
         for cat in categories
     ]
+
 
 
 def _pick_length_hint(mode):
@@ -411,7 +419,7 @@ def _select_primary_bot(
         'bot1_class_id': bot1_info['class'],
         'bot1_level': bot1_info['level'],
         'bot1_gender': get_gender_label(bot1_info['gender']),
-        'bot1_traits': _pick_random_traits(),
+        'bot1_traits': _pick_random_traits(bot1_info['name'], mode),
         'is_conversation': is_conversation,
         'brief_casual': brief_casual,
         'reply_optional': reply_optional,
@@ -435,13 +443,67 @@ def _build_general_response_prompt(
     """Build prompt for a bot responding to a
     player's General channel message.
     """
+
+    if mode == 'normal':
+        identity = build_player_identity(
+            bot_name, bot_race, bot_class,
+            bot_level, bot_gender, mode,
+        )
+        lines = [
+            identity,
+            build_player_chat_guidance(mode, 'general'),
+        ]
+        if traits:
+            lines.append("Personality: " + ", ".join(traits))
+        if speaker_talent_context:
+            lines.append(str(speaker_talent_context))
+        if target_talent_context:
+            lines.append(str(target_talent_context))
+        lines.append(f"Your WoW character is in {zone_name}.")
+        if subzone_name:
+            lines.append(f"Subzone: {subzone_name}")
+        if chat_history:
+            lines.append(str(chat_history))
+        if link_context:
+            lines.append(str(link_context))
+
+        lines.append(
+            f"{player_name} said in General: {player_message}"
+        )
+        lines.append(
+            "Reply to their actual message like another player. "
+            "Don't force their name into the reply."
+        )
+
+        lines.append(
+            "Keep it brief, like real WoW General chat. "
+            "Short answers and fragments are fine. "
+            "Do not invent game events or repeat recent lines."
+        )
+        if brief_casual:
+            lines.append("Very brief reply, maximum 50 characters.")
+        anti_rep = build_anti_repetition_context(recent_messages)
+        if anti_rep:
+            lines.append(anti_rep)
+        return append_json_instruction(
+            "\n".join(lines),
+            allow_action,
+            skip_emote=True,
+            skip_action_rng=True,
+        )
+
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
-    tone = pick_random_tone(mode)
-    mood = pick_random_mood(mode)
+    if is_rp:
+        tone = pick_random_tone(mode)
+        mood = pick_random_mood(mode)
+    else:
+        from chatter_mode import resolve_player_personality
+        _, tone = resolve_player_personality(bot_name, mode=mode)
+        mood = 'react naturally to the conversation; do not force an emotion'
     twist = maybe_get_creative_twist(
         chance=1.0, mode=mode
-    ) if not brief_casual else None
+    ) if is_rp and not brief_casual else None
 
     rp_context = ""
     if is_rp:
@@ -594,10 +656,63 @@ def _build_general_followup_prompt(
     """Build prompt for a 2nd bot following up
     on the 1st bot's reaction in General channel.
     """
+
+    if mode == 'normal':
+        identity = build_player_identity(
+            bot_name, bot_race, bot_class,
+            bot_level, bot_gender, mode,
+        )
+        lines = [
+            identity,
+            build_player_chat_guidance(mode, 'general'),
+        ]
+        if traits:
+            lines.append("Personality: " + ", ".join(traits))
+        if speaker_talent_context:
+            lines.append(str(speaker_talent_context))
+        if target_talent_context:
+            lines.append(str(target_talent_context))
+        lines.append(f"Your WoW character is in {zone_name}.")
+        if subzone_name:
+            lines.append(f"Subzone: {subzone_name}")
+        if chat_history:
+            lines.append(str(chat_history))
+        if link_context:
+            lines.append(str(link_context))
+
+        lines.extend([
+            f"{player_name} said in General: {player_message}",
+            f"{first_bot_name} replied: {first_bot_response}",
+            "Add a relevant, natural reaction or another perspective. "
+            "Don't repeat either message or force name mentions.",
+        ])
+
+        lines.append(
+            "Keep it brief, like real WoW General chat. "
+            "Short answers and fragments are fine. "
+            "Do not invent game events or repeat recent lines."
+        )
+        if brief_casual:
+            lines.append("Very brief reply, maximum 50 characters.")
+        anti_rep = build_anti_repetition_context(recent_messages)
+        if anti_rep:
+            lines.append(anti_rep)
+        return append_json_instruction(
+            "\n".join(lines),
+            allow_action,
+            skip_emote=True,
+            skip_action_rng=True,
+        )
+
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
-    tone = pick_random_tone(mode)
-    mood = pick_random_mood(mode)
+    if is_rp:
+        tone = pick_random_tone(mode)
+        mood = pick_random_mood(mode)
+    else:
+        from chatter_mode import resolve_player_personality
+        _, tone = resolve_player_personality(bot_name, mode=mode)
+        mood = 'react naturally to the conversation; do not force an emotion'
 
     rp_context = ""
     if is_rp:
@@ -1149,7 +1264,7 @@ def _general_followup(
     bot2_class = get_class_name(bot2_info['class'])
     bot2_level = bot2_info['level']
     bot2_gender = get_gender_label(bot2_info['gender'])
-    bot2_traits = _pick_random_traits()
+    bot2_traits = _pick_random_traits(bot2_name, mode)
 
     # Recompute speaker talent for bot2
     bot2_speaker_talent = None
@@ -1322,10 +1437,67 @@ def _build_general_continuation_prompt(
     conversation_thread is a list of dicts:
       [{'name': str, 'message': str, 'is_bot': bool}]
     """
+
+    if mode == 'normal':
+        identity = build_player_identity(
+            bot_name, bot_race, bot_class,
+            bot_level, bot_gender, mode,
+        )
+        lines = [
+            identity,
+            build_player_chat_guidance(mode, 'general'),
+        ]
+        if traits:
+            lines.append("Personality: " + ", ".join(traits))
+        if speaker_talent_context:
+            lines.append(str(speaker_talent_context))
+        if target_talent_context:
+            lines.append(str(target_talent_context))
+        lines.append(f"Your WoW character is in {zone_name}.")
+        if subzone_name:
+            lines.append(f"Subzone: {subzone_name}")
+        if chat_history:
+            lines.append(str(chat_history))
+        if link_context:
+            lines.append(str(link_context))
+
+        thread_lines = [
+            f"{entry['name']}: {entry['message']}"
+            for entry in conversation_thread
+        ]
+        lines.append(
+            "Current General conversation:\n"
+            + "\n".join(thread_lines)
+        )
+        lines.append(
+            "Continue from the latest message naturally. "
+            "Don't manufacture a conclusion or force a name mention."
+        )
+
+        lines.append(
+            "Keep it brief, like real WoW General chat. "
+            "Short answers and fragments are fine. "
+            "Do not invent game events or repeat recent lines."
+        )
+        anti_rep = build_anti_repetition_context(recent_messages)
+        if anti_rep:
+            lines.append(anti_rep)
+        return append_json_instruction(
+            "\n".join(lines),
+            allow_action,
+            skip_emote=True,
+            skip_action_rng=True,
+        )
+
     is_rp = (mode == 'roleplay')
     trait_str = ', '.join(traits)
-    tone = pick_random_tone(mode)
-    mood = pick_random_mood(mode)
+    if is_rp:
+        tone = pick_random_tone(mode)
+        mood = pick_random_mood(mode)
+    else:
+        from chatter_mode import resolve_player_personality
+        _, tone = resolve_player_personality(bot_name, mode=mode)
+        mood = 'react naturally to the conversation; do not force an emotion'
 
     rp_context = ""
     if is_rp:
@@ -1536,7 +1708,7 @@ def _general_extended_conversation(
             participants.append({
                 'guid': bot3_guid,
                 'name': bot3_info['name'],
-                'traits': _pick_random_traits(),
+                'traits': _pick_random_traits(bot3_info['name'], mode),
             })
 
     # Track who spoke last to avoid repeats

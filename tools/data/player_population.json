@@ -1,0 +1,750 @@
+{
+  "version": "international-player-v1",
+  "metadata": {
+    "status": "synthetic-baseline",
+    "description": "Existing fictional player biography pools. Not yet calibrated to international census or consumer-survey distributions.",
+    "selection_weights": "uniform within each existing pool",
+    "age_distribution": {
+      "type": "truncated_normal",
+      "mean": 32,
+      "standard_deviation": 10,
+      "minimum": 18,
+      "maximum": 65,
+      "source": "original project modeling assumption"
+    }
+  },
+  "cultures": [
+    [
+      "Black American",
+      "Atlanta, Georgia"
+    ],
+    [
+      "White American",
+      "Pittsburgh, Pennsylvania"
+    ],
+    [
+      "Mexican American",
+      "San Antonio, Texas"
+    ],
+    [
+      "Filipino American",
+      "San Diego, California"
+    ],
+    [
+      "Puerto Rican American",
+      "Orlando, Florida"
+    ],
+    [
+      "Indian British",
+      "Leicester, England"
+    ],
+    [
+      "Black British",
+      "London, England"
+    ],
+    [
+      "Pakistani British",
+      "Bradford, England"
+    ],
+    [
+      "White Canadian",
+      "Halifax, Nova Scotia"
+    ],
+    [
+      "Korean Canadian",
+      "Vancouver, British Columbia"
+    ],
+    [
+      "White Australian",
+      "Adelaide, Australia"
+    ],
+    [
+      "Vietnamese Australian",
+      "Sydney, Australia"
+    ],
+    [
+      "Brazilian",
+      "Curitiba, Brazil"
+    ],
+    [
+      "Irish",
+      "Cork, Ireland"
+    ],
+    [
+      "Japanese",
+      "Osaka, Japan"
+    ],
+    [
+      "German",
+      "Hamburg, Germany"
+    ],
+    [
+      "French",
+      "Lyon, France"
+    ],
+    [
+      "Polish",
+      "Krakow, Poland"
+    ],
+    [
+      "Spanish",
+      "Valencia, Spain"
+    ],
+    [
+      "Italian",
+      "Bologna, Italy"
+    ],
+    [
+      "Nigerian",
+      "Lagos, Nigeria"
+    ],
+    [
+      "South African",
+      "Cape Town, South Africa"
+    ],
+    [
+      "Indian",
+      "Pune, India"
+    ],
+    [
+      "New Zealander",
+      "Wellington, New Zealand"
+    ]
+  ],
+  "careers": {
+    "young": [
+      [
+        "university student",
+        "currently attending university",
+        "classes and occasional part-time shifts"
+      ],
+      [
+        "community college student",
+        "currently attending community college",
+        "classes and part-time work"
+      ],
+      [
+        "apprentice electrician",
+        "trade school and apprenticeship",
+        "weekday apprenticeship hours"
+      ],
+      [
+        "retail associate",
+        "secondary school diploma",
+        "rotating retail shifts"
+      ],
+      [
+        "restaurant server",
+        "secondary school diploma",
+        "evening and weekend shifts"
+      ],
+      [
+        "apprentice mechanic",
+        "technical college",
+        "weekday garage hours"
+      ],
+      [
+        "warehouse associate",
+        "secondary school diploma",
+        "early or late warehouse shifts"
+      ],
+      [
+        "junior graphic designer",
+        "design diploma",
+        "weekday office hours"
+      ]
+    ],
+    "adult": [
+      [
+        "electrician",
+        "trade apprenticeship",
+        "early weekday shifts"
+      ],
+      [
+        "registered nurse",
+        "nursing degree",
+        "rotating hospital shifts"
+      ],
+      [
+        "software developer",
+        "computer science degree",
+        "weekday office hours"
+      ],
+      [
+        "teacher",
+        "education degree",
+        "school-day hours"
+      ],
+      [
+        "warehouse supervisor",
+        "workplace training",
+        "early weekday shifts"
+      ],
+      [
+        "restaurant manager",
+        "hospitality training",
+        "evenings and weekends"
+      ],
+      [
+        "accountant",
+        "accounting degree",
+        "weekday office hours"
+      ],
+      [
+        "graphic designer",
+        "design degree or diploma",
+        "weekday hours with occasional freelance work"
+      ],
+      [
+        "delivery driver",
+        "workplace training",
+        "variable weekday shifts"
+      ],
+      [
+        "paramedic",
+        "paramedicine qualification",
+        "rotating shifts"
+      ],
+      [
+        "construction worker",
+        "vocational training",
+        "early weekday shifts"
+      ],
+      [
+        "office administrator",
+        "business diploma",
+        "weekday office hours"
+      ],
+      [
+        "IT support technician",
+        "technical college diploma",
+        "weekday shifts"
+      ],
+      [
+        "small business owner",
+        "business training and experience",
+        "variable hours"
+      ],
+      [
+        "postal worker",
+        "workplace training",
+        "early weekday routes"
+      ],
+      [
+        "mechanic",
+        "technical apprenticeship",
+        "weekday garage hours"
+      ]
+    ],
+    "older": [
+      [
+        "experienced electrician",
+        "trade apprenticeship",
+        "weekday shifts"
+      ],
+      [
+        "senior accountant",
+        "accounting degree",
+        "weekday office hours"
+      ],
+      [
+        "school teacher",
+        "education degree",
+        "school-day hours"
+      ],
+      [
+        "warehouse operations manager",
+        "workplace training",
+        "weekday shifts"
+      ],
+      [
+        "small business owner",
+        "business experience",
+        "variable hours"
+      ],
+      [
+        "postal worker",
+        "workplace training",
+        "early weekday routes"
+      ],
+      [
+        "nurse",
+        "nursing qualification",
+        "rotating shifts"
+      ],
+      [
+        "mechanic",
+        "technical apprenticeship",
+        "weekday garage hours"
+      ],
+      [
+        "office manager",
+        "business diploma",
+        "weekday office hours"
+      ],
+      [
+        "construction supervisor",
+        "trade qualifications",
+        "early weekday shifts"
+      ]
+    ]
+  },
+  "hobbies": [
+    "football, cooking, and movies",
+    "basketball, music, and co-op games",
+    "hiking, photography, and science fiction",
+    "drawing, podcasts, and indie games",
+    "cycling, camping, and strategy games",
+    "baking, travel, and tabletop games",
+    "gardening, history, and classic rock",
+    "cars, sports, and racing games",
+    "reading fantasy novels and playing RPGs",
+    "fishing, cooking, and watching documentaries",
+    "fitness, live music, and action games",
+    "board games, technology, and photography",
+    "pets, home projects, and multiplayer games",
+    "running, films, and collecting things",
+    "art, music, and exploring new places",
+    "cooking, family activities, and old video games"
+  ],
+  "social_habits": [
+    "usually quiet until someone asks a question",
+    "friendly and chatty with familiar players",
+    "dry sense of humor and fairly direct",
+    "patient with beginners but dislikes drama",
+    "competitive without being personally hostile",
+    "likes friendly teasing between friends",
+    "practical and usually gets straight to the point",
+    "asks questions and enjoys learning",
+    "talks between pulls but focuses during fights",
+    "occasionally sarcastic when things go wrong",
+    "relaxed and rarely gets worked up",
+    "opinionated about mechanics but willing to listen"
+  ],
+  "wow_history": {
+    "new": [
+      "started playing WoW recently and is still learning",
+      "played other MMOs before trying WoW",
+      "returned to WoW after briefly trying it years ago"
+    ],
+    "intermediate": [
+      "has played WoW for several years and enjoys dungeons",
+      "enjoys questing, professions, and collecting",
+      "plays casually with friends and likes group content",
+      "likes experimenting with builds and learning mechanics"
+    ],
+    "veteran": [
+      "played WoW since vanilla and enjoys raiding",
+      "started during Burning Crusade and likes dungeons",
+      "started during Wrath and enjoys group content",
+      "has played on and off for many years",
+      "prefers relaxed leveling after years of raiding"
+    ]
+  },
+  "research": {
+    "gaming_age_distribution": {
+      "source": "ESA Global Power of Play 2025",
+      "url": "https://www.theesa.com/resources/the-global-power-of-play-report/",
+      "sample_size": 24216,
+      "population": "active weekly video gamers, ages 16+",
+      "age_bands_percent": {
+        "16-24": 14,
+        "25-34": 26,
+        "35-44": 23,
+        "45-54": 16,
+        "55-64": 12,
+        "65+": 10
+      },
+      "status": "published survey data",
+      "limitations": [
+        "Not specific to World of Warcraft",
+        "Includes mobile and console players",
+        "Does not directly provide an 18-65 distribution"
+      ]
+    }
+  },
+  "geography_v2": {
+    "status": "experimental",
+    "country_weight_source": "explicit modeling assumptions",
+    "country_weight_method": "provisional PC/MMO market model",
+    "countries": [
+      {
+        "code": "US",
+        "name": "United States",
+        "weight": 30,
+        "profile_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      {
+        "code": "GB",
+        "name": "United Kingdom",
+        "weight": 12,
+        "profile_indices": [
+          5,
+          6,
+          7
+        ]
+      },
+      {
+        "code": "CA",
+        "name": "Canada",
+        "weight": 8,
+        "profile_indices": [
+          8,
+          9
+        ]
+      },
+      {
+        "code": "AU",
+        "name": "Australia",
+        "weight": 5,
+        "profile_indices": [
+          10,
+          11
+        ]
+      },
+      {
+        "code": "BR",
+        "name": "Brazil",
+        "weight": 6,
+        "profile_indices": [
+          12
+        ]
+      },
+      {
+        "code": "IE",
+        "name": "Ireland",
+        "weight": 2,
+        "profile_indices": [
+          13
+        ]
+      },
+      {
+        "code": "JP",
+        "name": "Japan",
+        "weight": 3,
+        "profile_indices": [
+          14
+        ]
+      },
+      {
+        "code": "DE",
+        "name": "Germany",
+        "weight": 10,
+        "profile_indices": [
+          15
+        ]
+      },
+      {
+        "code": "FR",
+        "name": "France",
+        "weight": 7,
+        "profile_indices": [
+          16
+        ]
+      },
+      {
+        "code": "PL",
+        "name": "Poland",
+        "weight": 4,
+        "profile_indices": [
+          17
+        ]
+      },
+      {
+        "code": "ES",
+        "name": "Spain",
+        "weight": 3,
+        "profile_indices": [
+          18
+        ]
+      },
+      {
+        "code": "IT",
+        "name": "Italy",
+        "weight": 3,
+        "profile_indices": [
+          19
+        ]
+      },
+      {
+        "code": "NG",
+        "name": "Nigeria",
+        "weight": 1,
+        "profile_indices": [
+          20
+        ]
+      },
+      {
+        "code": "ZA",
+        "name": "South Africa",
+        "weight": 2,
+        "profile_indices": [
+          21
+        ]
+      },
+      {
+        "code": "IN",
+        "name": "India",
+        "weight": 3,
+        "profile_indices": [
+          22
+        ]
+      },
+      {
+        "code": "NZ",
+        "name": "New Zealand",
+        "weight": 1,
+        "profile_indices": [
+          23
+        ]
+      }
+    ],
+    "country_weight_limitations": [
+      "Not measured World of Warcraft player shares",
+      "Not calibrated to national census gaming participation",
+      "Weights are provisional and require independent validation"
+    ],
+    "hometowns": {
+      "US": [
+        "Atlanta, Georgia",
+        "Pittsburgh, Pennsylvania",
+        "San Antonio, Texas",
+        "San Diego, California",
+        "Orlando, Florida"
+      ],
+      "GB": [
+        "Leicester, England",
+        "London, England",
+        "Bradford, England",
+        "Manchester, England",
+        "Birmingham, England"
+      ],
+      "CA": [
+        "Halifax, Nova Scotia",
+        "Vancouver, British Columbia",
+        "Toronto, Ontario",
+        "Calgary, Alberta",
+        "Montreal, Quebec"
+      ],
+      "AU": [
+        "Adelaide, Australia",
+        "Sydney, Australia",
+        "Melbourne, Australia",
+        "Brisbane, Australia",
+        "Perth, Australia"
+      ],
+      "BR": [
+        "Curitiba, Brazil",
+        "Sao Paulo, Brazil",
+        "Rio de Janeiro, Brazil",
+        "Belo Horizonte, Brazil",
+        "Porto Alegre, Brazil"
+      ],
+      "IE": [
+        "Cork, Ireland",
+        "Dublin, Ireland",
+        "Galway, Ireland",
+        "Limerick, Ireland",
+        "Waterford, Ireland"
+      ],
+      "JP": [
+        "Osaka, Japan",
+        "Tokyo, Japan",
+        "Kyoto, Japan",
+        "Nagoya, Japan",
+        "Fukuoka, Japan"
+      ],
+      "DE": [
+        "Hamburg, Germany",
+        "Berlin, Germany",
+        "Munich, Germany",
+        "Cologne, Germany",
+        "Frankfurt, Germany"
+      ],
+      "FR": [
+        "Lyon, France",
+        "Paris, France",
+        "Marseille, France",
+        "Toulouse, France",
+        "Lille, France"
+      ],
+      "PL": [
+        "Krakow, Poland",
+        "Warsaw, Poland",
+        "Gdansk, Poland",
+        "Wroclaw, Poland",
+        "Poznan, Poland"
+      ],
+      "ES": [
+        "Valencia, Spain",
+        "Madrid, Spain",
+        "Barcelona, Spain",
+        "Seville, Spain",
+        "Bilbao, Spain"
+      ],
+      "IT": [
+        "Bologna, Italy",
+        "Rome, Italy",
+        "Milan, Italy",
+        "Florence, Italy",
+        "Naples, Italy"
+      ],
+      "NG": [
+        "Lagos, Nigeria",
+        "Abuja, Nigeria",
+        "Ibadan, Nigeria",
+        "Kano, Nigeria",
+        "Port Harcourt, Nigeria"
+      ],
+      "ZA": [
+        "Cape Town, South Africa",
+        "Johannesburg, South Africa",
+        "Pretoria, South Africa",
+        "Durban, South Africa",
+        "Gqeberha, South Africa"
+      ],
+      "IN": [
+        "Pune, India",
+        "Mumbai, India",
+        "Bengaluru, India",
+        "Hyderabad, India",
+        "Chennai, India"
+      ],
+      "NZ": [
+        "Wellington, New Zealand",
+        "Auckland, New Zealand",
+        "Christchurch, New Zealand",
+        "Hamilton, New Zealand",
+        "Dunedin, New Zealand"
+      ]
+    },
+    "hometown_selection_method": "uniform within selected country",
+    "hometown_selection_source": "curated plausible locations"
+  },
+  "households_v2": {
+    "status": "experimental",
+    "weight_source": "fictional modeling assumptions",
+    "age_groups": {
+      "18-24": [
+        {
+          "situation": "lives with parents or relatives",
+          "weight": 30
+        },
+        {
+          "situation": "shares an apartment with roommates",
+          "weight": 30
+        },
+        {
+          "situation": "lives alone",
+          "weight": 15
+        },
+        {
+          "situation": "lives with a partner",
+          "weight": 20
+        },
+        {
+          "situation": "married or partnered with a young child",
+          "weight": 5
+        }
+      ],
+      "25-34": [
+        {
+          "situation": "lives alone",
+          "weight": 25
+        },
+        {
+          "situation": "shares a home with roommates",
+          "weight": 15
+        },
+        {
+          "situation": "lives with a partner",
+          "weight": 30
+        },
+        {
+          "situation": "married or partnered with children",
+          "weight": 20
+        },
+        {
+          "situation": "single parent",
+          "weight": 5
+        },
+        {
+          "situation": "lives with relatives",
+          "weight": 5
+        }
+      ],
+      "35-44": [
+        {
+          "situation": "lives alone",
+          "weight": 20
+        },
+        {
+          "situation": "lives with a partner",
+          "weight": 20
+        },
+        {
+          "situation": "married or partnered with children",
+          "weight": 40
+        },
+        {
+          "situation": "single parent",
+          "weight": 10
+        },
+        {
+          "situation": "shares a home with relatives",
+          "weight": 10
+        }
+      ],
+      "45-54": [
+        {
+          "situation": "lives alone",
+          "weight": 20
+        },
+        {
+          "situation": "lives with a partner",
+          "weight": 25
+        },
+        {
+          "situation": "married or partnered with teenage children",
+          "weight": 25
+        },
+        {
+          "situation": "has adult children who live elsewhere",
+          "weight": 20
+        },
+        {
+          "situation": "shares a home with relatives",
+          "weight": 10
+        }
+      ],
+      "55-65": [
+        {
+          "situation": "lives alone",
+          "weight": 25
+        },
+        {
+          "situation": "lives with a spouse or partner",
+          "weight": 30
+        },
+        {
+          "situation": "has adult children who live elsewhere",
+          "weight": 30
+        },
+        {
+          "situation": "shares a home with relatives",
+          "weight": 10
+        },
+        {
+          "situation": "lives with a spouse and an adult child",
+          "weight": 5
+        }
+      ]
+    }
+  }
+}

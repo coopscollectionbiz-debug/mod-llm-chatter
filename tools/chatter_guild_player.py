@@ -588,6 +588,56 @@ def _build_multi_prompt(
     brief_casual: bool = False,
 ) -> Tuple[str, List[Dict], int]:
     mode = get_chatter_mode(config)
+    if not is_roleplay(mode):
+        from chatter_shared import PromptParts
+        names = [p['name'] for p in participants]
+        max_lines = min(
+            8,
+            max(
+                1,
+                int(config.get(
+                    'LLMChatter.GuildChatter.MaxConversationLines', 4
+                )),
+            ),
+        )
+        if topology == 'multi_reply':
+            max_lines = min(max_lines, len(participants))
+
+        lines = _shared_prompt_lines(
+            participants,
+            guild_name,
+            faction,
+            player_name,
+            player_message,
+            session_context,
+            callback_requested,
+            mode,
+            brief_casual,
+        )
+        lines.extend([
+            '',
+            'Reply naturally to the latest player message.',
+            'Only guildmates with a relevant response need to speak.',
+            'Others may stay silent; a speaker may respond again '
+            'if the conversation calls for it.',
+            f'Use 1 to {max_lines} messages.',
+            'Do not force jokes, questions, speaker rotation, '
+            'name mentions, or artificial moods.',
+            'Keep replies brief and conversational.',
+            'Each message must be 150 characters or fewer.',
+            'Eligible speakers: ' + ', '.join(names) + '.',
+        ])
+        return PromptParts(
+            "\n".join(lines),
+            "\n\nJSON output: Return only an array containing "
+            "1 to the requested maximum number of objects. "
+            'Each object has exactly "speaker" and "message". '
+            "Choose speakers only from the eligible bot names "
+            "listed in the prompt. Speakers may repeat and "
+            "not every bot needs to speak. "
+            "Use valid JSON with no markdown or other text."
+        ), [], max_lines
+
     names = [
         participant['name']
         for participant in participants
@@ -908,7 +958,7 @@ def _generate_multi_reply(
     )[:message_count]
 
     structure_valid = _valid_guild_conversation(
-        messages, names
+        messages, names, get_chatter_mode(config)
     )
     brief_valid = (
         not brief_casual
@@ -949,7 +999,7 @@ def _generate_multi_reply(
         )[:message_count]
 
     if (
-        not _valid_guild_conversation(messages, names)
+        not _valid_guild_conversation(messages, names, get_chatter_mode(config))
         or (
             brief_casual
             and not all(

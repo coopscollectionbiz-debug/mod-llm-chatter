@@ -548,7 +548,8 @@ def test_mixed_playerbot_emote_prompt_uses_distinct_voices():
     assert '[NPC] Deathstalker Adamant' in prompt
     assert 'Use casual player /say' in prompt
     assert 'Speakers may react to the player and to each other' in prompt
-    assert 'Every listed speaker must speak at least once' in prompt
+    assert 'Other participants may remain silent.' in prompt
+    assert 'Every listed speaker must speak at least once' not in prompt
 
 
 def test_silent_addressed_bot_emote_prompt_uses_witnesses():
@@ -1123,8 +1124,12 @@ def test_directed_validation_uses_only_insertable_lines():
         chatter_proximity.call_llm = original_call
         chatter_proximity.insert_chat_message = original_insert
 
-    assert len(captured) == 1
-    assert captured[0]['npc_spawn_id'] == 101
+    assert len(captured) == 2
+    assert all(line['npc_spawn_id'] == 101 for line in captured)
+    assert [line['message'] for line in captured] == [
+        'Long enough.',
+        'Still raining.',
+    ]
 
 
 def test_normal_playerbot_treats_lore_as_game_knowledge():
@@ -1916,3 +1921,29 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+def test_roleplay_mixed_emote_requires_all_speakers():
+    participants = [BOT, NPC]
+    config = {
+        **NORMAL_CONFIG,
+        'LLMChatter.ChatterMode': 'roleplay',
+    }
+    prompt = _player_emote_conversation_prompt(
+        _DB(),
+        {
+            **INSTANCE_EXTRA,
+            'participants': participants,
+            'addressed_name': BOT['name'],
+            'interaction_mode': 'player_inclusive',
+        },
+        participants,
+        'wave',
+        config,
+    )
+    assert (
+        'Every listed speaker must speak at least once'
+        in prompt.user_prompt
+    )
+    assert 'Respond with EXACTLY' in prompt.system_prompt
+    assert 'Other participants may remain silent' not in prompt.user_prompt

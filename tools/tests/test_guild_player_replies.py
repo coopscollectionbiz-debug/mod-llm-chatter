@@ -661,7 +661,7 @@ def test_repeated_speaker_is_in_json_contract():
                 False,
                 False,
                 False,
-                {},
+                {'LLMChatter.ChatterMode': 'roleplay'},
             )
         )
 
