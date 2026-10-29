@@ -7,6 +7,8 @@ exchange short, in-character lines in guild chat. Driven by
 raid idle-morale and proximity handlers.
 """
 
+from chatter_personality import willing_to_speak, flexible_conversation, profile_for
+
 import logging
 import random
 import re
@@ -458,6 +460,9 @@ def _process_guild_statement_event(
     # its _pick_length_hint(mode) and let the prompt enforce length. No
     # post-parse truncation — the model's full sentence is delivered intact.
     chatter_mode = get_chatter_mode(config)
+    if not willing_to_speak(speaker_name, speaker_guid, chatter_mode):
+        _mark_event(db, event_id, 'skipped')
+        return False
     length_hint = _pick_length_hint(chatter_mode)
     topic = (
         topic_override
@@ -860,6 +865,8 @@ def _participant_identity_lines(
 ) -> List[str]:
     speaker = participant['speaker']
     name = participant['name']
+    if not is_roleplay(mode):
+        profile_for(name, participant.get('guid'))
     if is_roleplay(mode):
         lines = [_guild_identity(name, speaker)]
     else:
@@ -1031,7 +1038,8 @@ def _build_guild_conversation_prompt(
     lines.extend([
         "Use that subject naturally and keep every line "
         "part of the same conversation.",
-        "Every selected speaker MUST speak at least once.",
+        ("Every selected speaker MUST speak at least once." if is_roleplay(mode) else
+         "Participation may be unequal; quiet speakers can stay silent; end naturally."),
         "Each line is spoken text only: no quotation "
         "marks, name prefixes, narrator text, roleplay "
         "asterisks, slash commands, or stage directions.",
@@ -1050,7 +1058,7 @@ def _build_guild_conversation_prompt(
         plan['message_index']: plan
         for plan in (reference_plans or [])
     }
-    for index in range(message_count):
+    for index in range(message_count if is_roleplay(mode) else 0):
         speaker = bot_names[index % len(bot_names)]
         instruction = (
             f"  Message {index + 1} ({speaker}): "
@@ -1058,7 +1066,7 @@ def _build_guild_conversation_prompt(
             f"length={lengths[index]}"
         )
         reference_plan = reference_by_index.get(index)
-        if reference_plan:
+        if reference_plan and is_roleplay(mode):
             candidates = ", ".join(
                 reference_plan['candidates']
             )
@@ -1081,13 +1089,14 @@ def _build_guild_conversation_prompt(
                 )
         lines.append(instruction)
 
-    return append_conversation_json_instruction(
+    prompt = append_conversation_json_instruction(
         "\n".join(lines),
         bot_names,
         message_count,
         allow_action=False,
         message_only=True,
     )
+    return prompt if is_roleplay(mode) else flexible_conversation(prompt)
 
 
 def _select_participant_references(
@@ -1295,7 +1304,10 @@ def _clean_guild_conversation(
 def _valid_guild_conversation(
     messages: List[Dict],
     bot_names: List[str],
+    mode: str = 'roleplay',
 ) -> bool:
+    if not is_roleplay(mode):
+        return bool(messages) and all(m.get('name') in bot_names for m in messages)
     if len(messages) < 2:
         return False
     speakers = {
@@ -1353,6 +1365,9 @@ def _generate_guild_conversation(
     history_context: str,
     history_metadata: Dict,
 ) -> bool:
+    first = participants[0]
+    if not willing_to_speak(first['name'], first['guid'], get_chatter_mode(config)):
+        return False
     participant_count = len(participants)
     max_lines = int(config.get(
         'LLMChatter.GuildChatter.'
@@ -1390,6 +1405,8 @@ def _generate_guild_conversation(
         multi_reference_chance,
         max_reference_lines,
     )
+    if not is_roleplay(get_chatter_mode(config)):
+        reference_plans = []
     prompt = _build_guild_conversation_prompt(
         participants,
         guild_name,
@@ -1467,7 +1484,7 @@ def _generate_guild_conversation(
     repair_used = False
 
     if not _valid_guild_conversation(
-        messages, bot_names
+        messages, bot_names, get_chatter_mode(config)
     ):
         repair_used = True
         repair_metadata = dict(metadata)
@@ -1504,7 +1521,7 @@ def _generate_guild_conversation(
         )[:message_count]
 
     if not _valid_guild_conversation(
-        messages, bot_names
+        messages, bot_names, get_chatter_mode(config)
     ):
         return False
 

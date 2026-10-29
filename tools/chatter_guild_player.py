@@ -4,6 +4,7 @@ import logging
 import random
 from typing import Dict, List, Optional, Tuple
 
+from chatter_personality import willing_to_speak
 from chatter_db import insert_chat_message
 from chatter_general import _pick_length_hint
 from chatter_guild import (
@@ -690,14 +691,14 @@ def _build_multi_prompt(
         for plan in reference_plans
     }
     lines.append("MESSAGE SEQUENCE:")
-    for index, speaker in enumerate(sequence_names):
+    for index, speaker in enumerate(sequence_names if is_roleplay(mode) else []):
         instruction = (
             f"  Message {index + 1} ({speaker}): "
             f"mood={moods[index]}, "
             f"length={lengths[index]}"
         )
         plan = reference_by_index.get(index)
-        if plan:
+        if plan and is_roleplay(mode):
             candidates = ", ".join(plan['candidates'])
             instruction += (
                 "; naturally address an earlier "
@@ -731,6 +732,10 @@ def _build_multi_prompt(
         message_only=True,
         allow_narrator_messages=False,
     )
+    if not is_roleplay(mode):
+        from chatter_personality import flexible_conversation
+        prompt = flexible_conversation(prompt)
+        reference_plans = []
     return prompt, reference_plans, message_count
 
 
@@ -908,7 +913,7 @@ def _generate_multi_reply(
     )[:message_count]
 
     structure_valid = _valid_guild_conversation(
-        messages, names
+        messages, names, get_chatter_mode(config)
     )
     brief_valid = (
         not brief_casual
@@ -949,7 +954,7 @@ def _generate_multi_reply(
         )[:message_count]
 
     if (
-        not _valid_guild_conversation(messages, names)
+        not _valid_guild_conversation(messages, names, get_chatter_mode(config))
         or (
             brief_casual
             and not all(
@@ -961,7 +966,7 @@ def _generate_multi_reply(
         )
     ):
         return []
-    if reference_plans:
+    if reference_plans and is_roleplay(get_chatter_mode(config)):
         _apply_participant_references(
             messages,
             reference_plans,
@@ -1312,6 +1317,13 @@ def process_guild_player_message_event(
             60,
         ),
     )
+    responders = [
+        responder for responder in responders
+        if willing_to_speak(
+            responder['name'], responder['guid'], get_chatter_mode(config),
+            directly_addressed=bool(addressed.get('bot') == responder['name'] or multi_addressed),
+        )
+    ]
     if not responders:
         _mark_event(db, event_id, 'skipped')
         return False
@@ -1329,7 +1341,8 @@ def process_guild_player_message_event(
         )
     )
     name_requested = (
-        not brief_casual
+        is_roleplay(get_chatter_mode(config))
+        and not brief_casual
         and random.randint(1, 100)
         <= _bounded_percent(
             config,
@@ -1339,7 +1352,8 @@ def process_guild_player_message_event(
         )
     )
     question_requested = (
-        not brief_casual
+        is_roleplay(get_chatter_mode(config))
+        and not brief_casual
         and random.randint(1, 100)
         <= _bounded_percent(
             config,

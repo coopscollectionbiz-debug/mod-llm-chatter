@@ -3175,3 +3175,16 @@ LLMChatter.Screenshot.BoundAccountId = 0
 #       Default: (uses LLMChatter.Database.Host)
 #
 # LLMChatter.Screenshot.DBHost = 127.0.0.1
+
+
+# [BRIDGE] Persistent normal-player personality sidecar. Never uses RP identity
+# or memory tables. Default path is tools/state/personalities.sqlite3 beside bridge.
+# Use an absolute path on a persistent volume when running in a container.
+# LLMChatter.Personality.Path = "/persistent/personalities.sqlite3"
+# Increment Version to lazily regenerate base profiles; explicit edits survive.
+LLMChatter.Personality.Version = 1
+LLMChatter.Personality.Seed = "azeroth"
+LLMChatter.Personality.CacheSize = 4096
+# Optional JSON object overriding archetype weights (unspecified weights retain defaults).
+# Stop bridge before changing weights, then bump Version to regenerate existing profiles.
+LLMChatter.Personality.Weights = "{}"

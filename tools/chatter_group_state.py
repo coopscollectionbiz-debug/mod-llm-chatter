@@ -73,7 +73,7 @@ def normalize_active_group_personalities(db, config) -> int:
     update_cursor = db.cursor()
     for row in rows:
         traits, tone = resolve_player_personality(
-            row.get('bot_name', ''), mode=mode
+            row.get('bot_name', ''), mode=mode, guid=row.get('bot_guid')
         )
         update_cursor.execute(
             "UPDATE llm_group_bot_traits "
@@ -1096,9 +1096,8 @@ def assign_bot_traits(
     the session-scoped llm_group_bot_traits table.
     """
     identity = None
-    if config and int(config.get(
-        'LLMChatter.Memory.Enable', 1
-    )):
+    if (config and is_roleplay(config.get('LLMChatter.ChatterMode', 'normal'))
+            and int(config.get('LLMChatter.Memory.Enable', 1))):
         identity = check_or_create_bot_identity(
             db, config, bot_guid, bot_name,
         )
@@ -1131,7 +1130,7 @@ def assign_bot_traits(
         (config or {}).get('LLMChatter.ChatterMode', 'normal')
     )
     traits, persistent_tone = resolve_player_personality(
-        bot_name, traits, persistent_tone, mode
+        bot_name, traits, persistent_tone, mode, guid=bot_guid
     )
     if not is_roleplay(mode):
         persistent_backstory = None

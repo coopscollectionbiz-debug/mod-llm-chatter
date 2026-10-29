@@ -26,6 +26,8 @@ Imports from chatter_constants, chatter_shared,
 and chatter_prompts.
 """
 
+from chatter_personality import willing_to_speak, player_prompt
+
 import logging
 import random
 import threading
@@ -1728,6 +1730,10 @@ def process_group_player_msg_event(
 
     bot_guid = bot_row['bot_guid']
     bot_name = bot_row['bot_name']
+    if not willing_to_speak(bot_name, bot_guid, get_chatter_mode(config), directly_addressed=bool(addressed)):
+        _mark_event(db, event_id, 'skipped')
+        return False
+
     traits = [
         bot_row['trait1'],
         bot_row['trait2'],
@@ -2857,6 +2863,7 @@ _idle_inflight = set()
 _last_idle_chatter_lock = threading.Lock()
 
 
+@player_prompt
 def build_idle_chatter_prompt(
     bot, traits, mode,
     chat_history="", members=None,
@@ -3230,6 +3237,7 @@ def build_idle_chatter_prompt(
     )
 
 
+@player_prompt
 def build_idle_conversation_prompt(
     bots, traits_map, mode, topic,
     chat_history="", members=None,
@@ -4114,6 +4122,9 @@ def _idle_single_statement(
     bot_row = all_bots[0]
     bot_guid = bot_row['bot_guid']
     bot_name = bot_row['bot_name']
+    if not willing_to_speak(bot_name, bot_guid, mode, directly_addressed=False):
+        return True
+
     traits = [
         bot_row['trait1'],
         bot_row['trait2'],
@@ -4393,6 +4404,10 @@ def _idle_conversation(
     selected_rows = random.sample(
         bot_rows, num_bots
     )
+
+    first = selected_rows[0]
+    if not willing_to_speak(first['bot_name'], first['bot_guid'], mode):
+        return True
 
     # Build bot dicts and traits map
     # zone_id and map_id are passed from the caller
@@ -4915,6 +4930,8 @@ def check_bot_questions(db, client, config):
         bot_row = all_bots[0]
         bot_guid = bot_row['bot_guid']
         bot_name = bot_row['bot_name']
+        if not willing_to_speak(bot_name, bot_guid, get_chatter_mode(config), question=True):
+            return False
         traits = [
             bot_row['trait1'],
             bot_row['trait2'],

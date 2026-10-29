@@ -1,5 +1,7 @@
 """Group prompt builders extracted from chatter_group (N5)."""
 
+from chatter_personality import player_prompt
+
 import logging
 import random
 
@@ -59,6 +61,8 @@ def _pick_length_hint(mode):
     The hint alone drives length — no competing
     'short/medium only' override that flattens variety.
     """
+    if mode != 'roleplay':
+        return 'Length: follow your persistent profile; stay under 150 characters.'
     is_rp = (mode == 'roleplay')
     pool = RP_LENGTH_HINTS if is_rp else LENGTH_HINTS
     hint = random.choice(pool)
@@ -72,6 +76,8 @@ def _pick_length_hint(mode):
 def _maybe_humor_hint(mode):
     """RNG-gated humor encouragement for group
     prompts. 40% normal, 35% roleplay."""
+    if mode != 'roleplay':
+        return None
     is_rp = (mode == 'roleplay')
     chance = 0.35 if is_rp else 0.40
     if random.random() < chance:
@@ -158,6 +164,7 @@ def _append_bots_with_rp(parts, bots, traits_map, is_rp):
                 seen_classes.add(cls_role_key)
 
 
+@player_prompt
 def build_bot_greeting_prompt(
     bot, traits, mode,
     chat_history="", members=None,
@@ -403,8 +410,7 @@ def build_bot_greeting_prompt(
             f"Length: {length_hint}\n"
             f"Length mode: short only "
             f"(keep it brief)\n\n"
-            f"Your greeting should feel warm and "
-            f"familiar — like seeing an old friend. "
+            f"Greet them in your usual style, without forced warmth. "
             f"You may use their name, but vary "
             f"where it appears: mid-sentence, at the "
             f"end, or omit it entirely. Never start "
@@ -473,6 +479,7 @@ def build_bot_greeting_prompt(
     )
 
 
+@player_prompt
 def build_bot_welcome_prompt(
     bot, traits, new_bot_name, mode,
     chat_history="", members=None,
@@ -601,6 +608,7 @@ def build_bot_welcome_prompt(
     )
 
 
+@player_prompt
 def build_batch_welcome_prompt(
     bot, traits, new_bot_names, mode,
     chat_history="", members=None,
@@ -745,6 +753,7 @@ def build_batch_welcome_prompt(
     )
 
 
+@player_prompt
 def build_kill_reaction_prompt(
     bot, traits, creature_name, is_boss, is_rare,
     mode, chat_history="", extra_data=None,
@@ -878,6 +887,7 @@ def build_kill_reaction_prompt(
     )
 
 
+@player_prompt
 def build_loot_reaction_prompt(
     bot, traits, item_name, item_quality, mode,
     chat_history="", looter_name=None,
@@ -1020,6 +1030,7 @@ def build_loot_reaction_prompt(
     )
 
 
+@player_prompt
 def build_combat_reaction_prompt(
     bot, traits, creature_name, is_boss, mode,
     chat_history="", is_elite=False,
@@ -1125,6 +1136,7 @@ def build_combat_reaction_prompt(
     )
 
 
+@player_prompt
 def build_death_reaction_prompt(
     reactor, reactor_traits, dead_name,
     killer_name, mode, chat_history="",
@@ -1246,6 +1258,7 @@ def build_death_reaction_prompt(
     )
 
 
+@player_prompt
 def build_levelup_reaction_prompt(
     bot, traits, leveler_name, new_level, is_bot,
     mode, chat_history="", allow_action=True,
@@ -1328,6 +1341,7 @@ def build_levelup_reaction_prompt(
     )
 
 
+@player_prompt
 def build_quest_complete_reaction_prompt(
     bot, traits, completer_name, quest_name,
     mode, chat_history="",
@@ -1437,6 +1451,7 @@ def build_quest_complete_reaction_prompt(
     )
 
 
+@player_prompt
 def build_quest_objectives_reaction_prompt(
     bot, traits, quest_name, completer_name,
     mode, chat_history="", allow_action=True,
@@ -1547,6 +1562,7 @@ def build_quest_objectives_reaction_prompt(
     )
 
 
+@player_prompt
 def build_achievement_reaction_prompt(
     bot, traits, achiever_name, achievement_name,
     is_bot, mode, chat_history="",
@@ -1672,6 +1688,7 @@ def build_achievement_reaction_prompt(
     )
 
 
+@player_prompt
 def build_group_achievement_reaction_prompt(
     bot, traits, achiever_names, achievement_name,
     mode, chat_history="",
@@ -1765,6 +1782,7 @@ def build_group_achievement_reaction_prompt(
     )
 
 
+@player_prompt
 def build_spell_cast_reaction_prompt(
     bot, traits, caster_name, spell_name,
     spell_category, target_name, mode,
@@ -1834,7 +1852,7 @@ def build_spell_cast_reaction_prompt(
             situation = (
                 f"You just healed {target_name} "
                 f"with {spell_name}. Say something "
-                f"brief and supportive to them."
+                f"brief and consistent with your attitude to them."
             )
         elif spell_category == 'resurrect':
             situation = (
@@ -1852,7 +1870,7 @@ def build_spell_cast_reaction_prompt(
             situation = (
                 f"You just cast {spell_name} on "
                 f"{target_name} to strengthen them. "
-                f"Say something brief and supportive."
+                f"React briefly in your own style."
             )
         elif spell_category == 'cc':
             situation = (
@@ -1882,7 +1900,7 @@ def build_spell_cast_reaction_prompt(
                 + (f" on {target_name}"
                    if target_name else "")
                 + ". Say something brief and "
-                f"supportive."
+                f"consistent with your personality."
             )
         else:
             situation = (
@@ -2084,6 +2102,7 @@ def build_spell_cast_reaction_prompt(
     )
 
 
+@player_prompt
 def build_player_response_prompt(
     bot, traits, player_name, player_message, mode,
     chat_history="", members=None, item_context="",
@@ -2316,6 +2335,7 @@ def build_player_response_prompt(
         allow_emote_only=brief_casual,
     )
 
+@player_prompt
 def build_resurrect_reaction_prompt(
     bot, traits, mode, chat_history="",
     allow_action=True,
@@ -2389,6 +2409,7 @@ def build_resurrect_reaction_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_zone_transition_prompt(
     bot, traits, zone_name, zone_id, mode,
     chat_history="", allow_action=True,
@@ -2540,6 +2561,7 @@ def build_zone_transition_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_quest_accept_reaction_prompt(
     bot, traits, acceptor_name, quest_name,
     quest_level, zone_name,
@@ -2668,6 +2690,7 @@ def build_quest_accept_reaction_prompt(
     )
 
 
+@player_prompt
 def build_quest_accept_batch_prompt(
     bot, traits, acceptor_name, quest_names,
     zone_name, mode, chat_history="",
@@ -2772,6 +2795,7 @@ def build_quest_accept_batch_prompt(
     )
 
 
+@player_prompt
 def build_dungeon_entry_prompt(
     db, bot, traits, map_name, is_raid, map_id,
     mode, chat_history="", allow_action=True,
@@ -2883,6 +2907,7 @@ def build_dungeon_entry_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_wipe_reaction_prompt(
     bot, traits, killer_name, mode,
     chat_history="", extra_data=None,
@@ -2992,6 +3017,7 @@ def build_wipe_reaction_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_corpse_run_reaction_prompt(
     bot, traits, zone_name, mode,
     chat_history="", dead_name="",
@@ -3123,6 +3149,7 @@ def build_corpse_run_reaction_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_low_health_callout_prompt(
     bot, traits, target_name, mode,
     chat_history="", extra_data=None,
@@ -3199,6 +3226,7 @@ def build_low_health_callout_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_oom_callout_prompt(
     bot, traits, target_name, mode,
     chat_history="", extra_data=None,
@@ -3276,6 +3304,7 @@ def build_oom_callout_prompt(
         prompt, allow_action
     )
 
+@player_prompt
 def build_aggro_loss_callout_prompt(
     bot, traits, target_name, aggro_target,
     mode, chat_history="", extra_data=None,
@@ -3345,6 +3374,7 @@ def build_aggro_loss_callout_prompt(
     )
 
 
+@player_prompt
 def build_precache_combat_pull_prompt(
     bot_name, race, class_name, level,
     traits, mood, stored_tone=None,
@@ -3403,6 +3433,7 @@ def build_precache_combat_pull_prompt(
     )
 
 
+@player_prompt
 def build_precache_state_prompt(
     state_type, bot_name, race, class_name, level,
     traits, mood, stored_tone=None,
@@ -3508,6 +3539,7 @@ def build_precache_state_prompt(
     )
 
 
+@player_prompt
 def build_precache_spell_support_prompt(
     bot_name, race, class_name, level,
     traits, mood, stored_tone=None,
@@ -3579,6 +3611,7 @@ def build_precache_spell_support_prompt(
     )
 
 
+@player_prompt
 def build_precache_spell_offensive_prompt(
     bot_name, race, class_name, level,
     traits, mood, stored_tone=None,
@@ -3753,6 +3786,7 @@ def _format_object_lines(objects, config):
     return "\n".join(lines)
 
 
+@player_prompt
 def build_nearby_object_reaction_prompt(
     bot_name, class_name, race_name, traits,
     objects, zone_name, subzone_name,
@@ -3852,6 +3886,7 @@ def build_nearby_object_reaction_prompt(
         prompt, allow_action=allow_action)
 
 
+@player_prompt
 def build_nearby_object_conversation_prompt(
     bots, traits_map, objects,
     zone_name, subzone_name,
@@ -4022,6 +4057,7 @@ def build_nearby_object_conversation_prompt(
     )
 
 
+@player_prompt
 def build_player_msg_conversation_prompt(
     bots, traits_map, player_name,
     player_message, mode,
@@ -4503,6 +4539,7 @@ BG_QUESTION_TOPICS = [
 ]
 
 
+@player_prompt
 def build_bot_question_prompt(
     bot, traits, mode,
     player_name, player_class, player_race,
@@ -4829,6 +4866,7 @@ def build_bot_question_prompt(
 # QUEST CONVERSATION PROMPT BUILDERS
 # ================================================================
 
+@player_prompt
 def build_quest_complete_conversation_prompt(
     bots, traits_map, completer_name,
     quest_name, mode, chat_history="",
@@ -4990,6 +5028,7 @@ def build_quest_complete_conversation_prompt(
     )
 
 
+@player_prompt
 def build_quest_objectives_conversation_prompt(
     bots, traits_map, quest_name,
     completer_name, mode, chat_history="",
@@ -5143,6 +5182,7 @@ def build_quest_objectives_conversation_prompt(
     )
 
 
+@player_prompt
 def build_quest_accept_conversation_prompt(
     bots, traits_map, acceptor_name,
     quest_name, quest_level, zone_name,

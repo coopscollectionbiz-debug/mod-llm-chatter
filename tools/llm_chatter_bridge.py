@@ -1248,6 +1248,8 @@ def main():
             "LLMChatter.Language configured=%s resolved=%s",
             language_code, get_language_label(),
         )
+    from chatter_personality import configure as configure_personalities
+    configure_personalities(config)
     init_group_config(config)
     init_general_config(config)
 

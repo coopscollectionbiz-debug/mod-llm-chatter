@@ -601,7 +601,7 @@ def test_invalid_conversation_repairs_once():
     responses = iter([
         json.dumps([
             {
-                'speaker': 'Aliss',
+                'speaker': 'Unselected',
                 'message': 'Only one selected speaker answers.',
             },
             {

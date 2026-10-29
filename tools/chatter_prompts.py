@@ -4,6 +4,8 @@ Chatter Prompts - Prompt builders and creative selection for LLM Chatter Bridge.
 Imports from chatter_constants and chatter_shared.
 """
 
+from chatter_personality import player_prompt
+
 import collections
 import logging
 import random
@@ -61,6 +63,8 @@ def pick_personality_spices(
     Returns:
         list of spice strings (may be empty)
     """
+    if mode != 'roleplay':
+        return []
     # Determine count
     if spice_count_override is not None:
         count = spice_count_override
@@ -104,13 +108,17 @@ def pick_personality_spices(
 # =============================================================================
 def pick_random_tone(mode: str = 'normal') -> str:
     """Pick a random tone for the message."""
-    pool = RP_TONES if mode == 'roleplay' else TONES
+    if mode != 'roleplay':
+        return "follow each speaker's persistent profile"
+    pool = RP_TONES
     return random.choice(pool)
 
 
 def pick_random_mood(mode: str = 'normal') -> str:
     """Pick a random mood/emotional angle for the message."""
-    pool = RP_MOODS if mode == 'roleplay' else MOODS
+    if mode != 'roleplay':
+        return 'react only to supplied gameplay events; otherwise neutral'
+    pool = RP_MOODS
     return random.choice(pool)
 
 
@@ -118,6 +126,8 @@ def maybe_get_creative_twist(
     chance: float = 0.3, mode: str = 'normal'
 ) -> str:
     """Maybe return a creative twist (30% chance by default)."""
+    if mode != 'roleplay':
+        return None
     if random.random() < chance:
         pool = (
             RP_CREATIVE_TWISTS if mode == 'roleplay'
@@ -131,6 +141,8 @@ def maybe_get_gossip_creative_twist(
     chance: float = 0.3, mode: str = 'normal'
 ) -> str:
     """Maybe return a gossip-specific creative twist."""
+    if mode != 'roleplay':
+        return None
     if random.random() < chance:
         pool = (
             RP_GOSSIP_CREATIVE_TWISTS
@@ -154,8 +166,9 @@ def generate_conversation_mood_sequence(
     message_count: int, mode: str = 'normal'
 ) -> List[str]:
     """Generate a mood sequence for a conversation."""
-    pool = RP_MOODS if mode == 'roleplay' else MOODS
-    return [random.choice(pool) for _ in range(message_count)]
+    if mode != 'roleplay':
+        return ['react to the actual exchange in your own style'] * message_count
+    return [random.choice(RP_MOODS) for _ in range(message_count)]
 
 
 # Conversation length labels â€” short descriptions
@@ -177,11 +190,8 @@ def generate_conversation_length_sequence(
     """Generate per-message length targets so
     conversations have varied message lengths
     instead of uniform output."""
-    return random.choices(
-        CONV_LENGTHS,
-        weights=CONV_LENGTH_WEIGHTS,
-        k=message_count,
-    )
+    return ['follow the current speaker profile, within 150 characters'] * message_count
+
 
 
 # =============================================================================
@@ -299,6 +309,13 @@ def build_dynamic_guidelines(
     length pool pick (caller pre-selected via RNG).
     """
     is_rp = (mode == 'roleplay')
+    if not is_rp:
+        return [
+            build_player_chat_guidance(mode, 'general'),
+            'Use your profile for length, humor and typing; no manufactured typos or slang.',
+            'HARD LIMIT: Never exceed 150 characters total.',
+            'Use only supplied concrete facts; say you do not know when unsure.',
+        ]
 
     if is_rp:
         guidelines = [
@@ -412,6 +429,7 @@ def build_dynamic_guidelines(
 # =============================================================================
 # PROMPT BUILDERS
 # =============================================================================
+@player_prompt
 def build_plain_statement_prompt(
     bot: dict,
     zone_id: int = 0,
@@ -545,8 +563,7 @@ def build_plain_statement_prompt(
             "your character roleplaying"
         )
     guidelines.append(
-        "Be ORIGINAL and UNPREDICTABLE - no common patterns, "
-        "surprise the reader"
+        "An ordinary observation is enough; no forced joke or novelty"
     )
     if zone_mobs:
         guidelines.append(
@@ -567,6 +584,7 @@ def build_plain_statement_prompt(
     )
 
 
+@player_prompt
 def build_quest_statement_prompt(
     bot: dict,
     quest: dict,
@@ -691,6 +709,7 @@ def build_quest_statement_prompt(
     )
 
 
+@player_prompt
 def build_loot_statement_prompt(
     bot: dict,
     item: dict,
@@ -830,6 +849,7 @@ def build_loot_statement_prompt(
     )
 
 
+@player_prompt
 def build_quest_reward_statement_prompt(
     bot: dict,
     quest: dict,
@@ -975,6 +995,7 @@ def build_quest_reward_statement_prompt(
     )
 
 
+@player_prompt
 def build_plain_conversation_prompt(
     bots: List[dict],
     zone_id: int = 0,
@@ -1303,6 +1324,7 @@ def _append_gossip_context(
     )
 
 
+@player_prompt
 def build_gossip_statement_prompt(
     bot: dict,
     target: dict,
@@ -1391,6 +1413,7 @@ def build_gossip_statement_prompt(
     )
 
 
+@player_prompt
 def build_gossip_conversation_prompt(
     bots: List[dict],
     target: dict,
@@ -1516,6 +1539,7 @@ def build_gossip_conversation_prompt(
     )
 
 
+@player_prompt
 def build_quest_conversation_prompt(
     bots: List[dict],
     quest: dict,
@@ -1663,6 +1687,7 @@ def build_quest_conversation_prompt(
     )
 
 
+@player_prompt
 def build_event_conversation_prompt(
     bots: List[dict],
     event_context: str,
@@ -1907,6 +1932,7 @@ def build_event_conversation_prompt(
     )
 
 
+@player_prompt
 def build_event_statement_prompt(
     bot: dict,
     event_context: str,
@@ -2062,6 +2088,7 @@ def build_event_statement_prompt(
 # =============================================================================
 # SPELL PROMPTS
 # =============================================================================
+@player_prompt
 def build_spell_statement_prompt(
     bot: dict,
     spell: dict,
@@ -2192,6 +2219,7 @@ def build_spell_statement_prompt(
     )
 
 
+@player_prompt
 def build_spell_conversation_prompt(
     bots: List[dict],
     spell: dict,
@@ -2425,6 +2453,7 @@ def build_spell_conversation_prompt(
 # =============================================================================
 # TRADE / SELL PROMPTS
 # =============================================================================
+@player_prompt
 def build_trade_statement_prompt(
     bot: dict,
     item: dict,
@@ -2574,6 +2603,7 @@ def build_trade_statement_prompt(
     )
 
 
+@player_prompt
 def build_trade_conversation_prompt(
     bots: List[dict],
     item: dict,

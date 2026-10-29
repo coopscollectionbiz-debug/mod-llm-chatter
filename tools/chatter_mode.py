@@ -4,54 +4,6 @@ Playerbots follow ``LLMChatter.ChatterMode``. Actual NPCs always remain
 in-world, including when they share a proximity scene with playerbots.
 """
 
-import hashlib
-
-
-_NORMAL_PLAYER_STYLE_PROFILES = [
-    (('friendly', 'easygoing'), 'casual and conversational'),
-    (('quiet', 'reserved'), 'short and low-key'),
-    (('helpful', 'practical'), 'straightforward and useful'),
-    (('relaxed', 'casual'), 'loose and unhurried'),
-    (('dry-humored', 'observant'), 'dry and concise'),
-    (('chatty', 'curious'), 'talkative and engaged'),
-    (('focused', 'no-nonsense'), 'brief and direct'),
-    (('experienced', 'laid-back'), 'confident and casual'),
-    (('playful', 'teasing'), 'lightly teasing'),
-    (('blunt', 'impatient'), 'direct and occasionally annoyed'),
-    (('competitive', 'intense'), 'competitive and energetic'),
-    (('sarcastic', 'dry'), 'sarcastic without constantly joking'),
-    (('newer', 'curious'), 'unsure sometimes and willing to ask'),
-    (('social', 'talkative'), 'sociable and informal'),
-    (('independent', 'matter-of-fact'), 'plain-spoken and self-contained'),
-    (('salty', 'competitive'), 'occasionally salty when things go badly'),
-    (('mature', 'calm'), 'steady without sounding formal'),
-    (('casual', 'adaptable'), 'natural and low-key'),
-    (('analytical', 'particular'), 'specific and opinionated'),
-    (('self-deprecating', 'dry'), 'self-deprecating and casual'),
-    (('impatient', 'blunt'), 'short when annoyed or waiting'),
-    (('goofy', 'friendly'), 'silly sometimes without forcing jokes'),
-    (('skeptical', 'opinionated'), 'willing to disagree'),
-    (('tired', 'low-key'), 'low-energy and terse'),
-]
-
-_NORMAL_PLAYER_EXTRA_TRAITS = [
-    'low-key',
-    'curious',
-    'straightforward',
-    'good-humored',
-    'game-focused',
-    'opinionated',
-    'laid-back',
-    'talkative',
-    'terse',
-    'competitive',
-    'sarcastic',
-    'helpful',
-    'impatient',
-    'easygoing',
-]
-
-
 def normalize_chatter_mode(mode: str) -> str:
     """Return a supported playerbot chatter mode."""
     value = str(mode or '').strip().lower()
@@ -68,31 +20,21 @@ def resolve_player_personality(
     traits=None,
     tone: str = '',
     mode: str = 'normal',
+    guid=None,
 ):
-    """Return RP identity metadata or a stable normal-player profile.
-
-    Persistent identities predate the mode boundary and may contain mystical
-    or in-world traits. Normal mode must never send that legacy metadata to
-    the model, so it derives a deterministic player-side style from the bot
-    name instead. Roleplay mode receives the stored values unchanged.
-    """
+    """Resolve the GUID profile in normal mode; preserve stored RP metadata."""
     if is_roleplay(mode):
         return [value for value in (traits or []) if value], tone or ''
 
-    seed = str(name or 'playerbot').strip().casefold().encode('utf-8')
-    digest = hashlib.sha256(seed).digest()
-    index = int.from_bytes(digest[:4], 'big') % len(
-        _NORMAL_PLAYER_STYLE_PROFILES
-    )
-    player_traits, player_tone = _NORMAL_PLAYER_STYLE_PROFILES[index]
-    extra_index = int.from_bytes(digest[4:8], 'big') % len(
-        _NORMAL_PLAYER_EXTRA_TRAITS
-    )
-    return (
-        list(player_traits)
-        + [_NORMAL_PLAYER_EXTRA_TRAITS[extra_index]],
-        player_tone,
-    )
+    from chatter_personality import profile_for
+    profile = profile_for(name, guid)
+    traits = [profile['archetype'],
+              'sarcastic' if profile['sarcasm'] > 65 else 'understated',
+              'talkative' if profile['talkativeness'] > 65 else 'reserved']
+    tone = '; '.join(profile[k] for k in (
+        'capitalization', 'punctuation', 'abbreviations', 'message_length', 'humor'))
+    return traits, tone
+
 
 
 def build_player_identity(
@@ -117,8 +59,10 @@ def build_player_identity(
 
     if is_roleplay(mode):
         return f"You are {name}, a {avatar} in World of Warcraft."
+    from chatter_personality import profile_instruction
     return (
-        f"You are {name}, a person playing a {avatar} "
+        profile_instruction(name) + "\n"
+        + f"You are {name}, a person playing a {avatar} "
         "character in World of Warcraft."
     )
 
@@ -240,6 +184,10 @@ def build_player_chat_guidance(
         "message or imitate a stereotype of internet speech. Minor informality "
         "is normal; perfect grammar is not required. Do not sound like an "
         "assistant, customer-service agent, narrator, or motivational coach. "
+        "You may disagree, decline, complain, ignore a question or end the exchange. "
+        "Do not add praise, advice, encouragement, a greeting or a question by default. "
+        "Use names only to disambiguate. Ordinary observations need no punchline. "
+        "If unsure about a gameplay fact, say you do not know; never invent an answer. "
         "Avoid slurs and personal abuse."
     )
 

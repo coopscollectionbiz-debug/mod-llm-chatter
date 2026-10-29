@@ -1,5 +1,7 @@
 """Proximity chatter event handlers."""
 
+from chatter_personality import profile_instruction, willing_to_speak, flexible_conversation
+
 import json
 import logging
 import random
@@ -751,6 +753,8 @@ def _conversation_prompt(
                 tone,
                 mode,
             )
+            if not is_roleplay(mode):
+                line += '; ' + profile_instruction(speaker.get('name', 'Bot'), speaker.get('bot_guid'))
             if traits:
                 line += (
                     "; personality: "
@@ -807,12 +811,15 @@ def _conversation_prompt(
         s.get('name', '') for s in participants
     ]
     # Use global EmoteChance / ActionChance gates
-    return append_conversation_json_instruction(
+    prompt = append_conversation_json_instruction(
         "\n".join(lines) + "\n",
         speaker_names,
         max_lines,
         allow_action=is_roleplay(mode) or has_npc,
     )
+    if is_roleplay(mode) or all(s.get('is_npc') for s in participants):
+        return prompt
+    return flexible_conversation(prompt)
 
 
 def _generate_single_line(
@@ -1069,6 +1076,12 @@ def handle_proximity_reply(db, client, config, event):
         not responder['bot_guid']
         and not responder['npc_spawn_id']
     ):
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+    if not responder.get('is_npc') and not willing_to_speak(
+            responder.get('name', 'Bot'), responder.get('bot_guid'),
+            get_chatter_mode(config), directly_addressed=True):
         _mark_event(db, event_id, 'skipped')
         return False
 
@@ -1484,7 +1497,7 @@ def _player_say_conversation_prompt(
     speaker_names = [
         s.get('name', '') for s in participants
     ]
-    return append_conversation_json_instruction(
+    prompt = append_conversation_json_instruction(
         "\n".join(lines) + "\n",
         speaker_names,
         max_lines,
@@ -1499,6 +1512,9 @@ def _player_say_conversation_prompt(
         ),
         allow_emote_only=brief_casual,
     )
+    if is_roleplay(mode) or all(s.get('is_npc') for s in participants):
+        return prompt
+    return flexible_conversation(prompt)
 
 
 def _player_emote_single_prompt(
@@ -1684,7 +1700,7 @@ def _player_emote_conversation_prompt(
         "Speakers:",
         roster,
     ])
-    return append_conversation_json_instruction(
+    prompt = append_conversation_json_instruction(
         "\n".join(lines) + "\n",
         [speaker.get('name', '') for speaker in participants],
         max_lines,
@@ -1707,6 +1723,9 @@ def _player_emote_conversation_prompt(
         ),
         allow_emote_only=True,
     )
+    if is_roleplay(mode) or all(s.get('is_npc') for s in participants):
+        return prompt
+    return flexible_conversation(prompt)
 
 
 def _generate_player_say_single(
@@ -2008,7 +2027,8 @@ def handle_proximity_player_conversation(
     }
     if not parsed or (
         addressed and parsed[0].get('name') != addressed
-    ) or not set(names).issubset(parsed_speakers):
+    ) or ((is_roleplay(get_chatter_mode(config)) or all(s.get('is_npc') for s in participants))
+        and not set(names).issubset(parsed_speakers)):
         logger.warning(
             "proximity_player_conversation event %s "
             "fell back to its addressed speaker",
@@ -2281,7 +2301,8 @@ def handle_proximity_player_emote(
         not parsed
         or parsed[0].get('name')
         != (addressed if addressed_speaks else names[0])
-        or not set(names).issubset(parsed_speakers)
+        or ((is_roleplay(get_chatter_mode(config)) or all(s.get('is_npc') for s in participants))
+        and not set(names).issubset(parsed_speakers))
     ):
         logger.warning(
             "proximity_player_emote event %s fell back "

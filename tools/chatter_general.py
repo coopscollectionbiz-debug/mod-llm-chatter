@@ -9,6 +9,8 @@ Zone-scoped: history per zone, cooldowns per zone,
 bot selection by zone.
 """
 
+from chatter_personality import willing_to_speak
+
 import logging
 import random
 
@@ -54,9 +56,9 @@ from chatter_prompts import (
 from chatter_mode import (
     build_player_chat_guidance,
     build_player_identity,
+    resolve_player_personality,
 )
 from chatter_constants import (
-    PERSONALITY_TRAITS,
     RACE_SPEECH_PROFILES,
     LENGTH_HINTS, RP_LENGTH_HINTS,
 )
@@ -123,19 +125,10 @@ def init_general_config(config):
 
 
 
-def _pick_random_traits():
-    """Pick 3 random traits for a bot."""
-    categories = random.sample(
-        list(PERSONALITY_TRAITS.keys()), 3
-    )
-    return [
-        random.choice(PERSONALITY_TRAITS[cat])
-        for cat in categories
-    ]
-
-
 def _pick_length_hint(mode):
     """Pick a random length hint."""
+    if mode != 'roleplay':
+        return 'Length: follow your persistent profile; stay under 150 characters.'
     is_rp = (mode == 'roleplay')
     pool = RP_LENGTH_HINTS if is_rp else LENGTH_HINTS
     hint = random.choice(pool)
@@ -411,7 +404,8 @@ def _select_primary_bot(
         'bot1_class_id': bot1_info['class'],
         'bot1_level': bot1_info['level'],
         'bot1_gender': get_gender_label(bot1_info['gender']),
-        'bot1_traits': _pick_random_traits(),
+        'bot1_traits': resolve_player_personality(
+            bot1_info['name'], mode=get_chatter_mode(config), guid=bot1_guid)[0],
         'is_conversation': is_conversation,
         'brief_casual': brief_casual,
         'reply_optional': reply_optional,
@@ -436,6 +430,8 @@ def _build_general_response_prompt(
     player's General channel message.
     """
     is_rp = (mode == 'roleplay')
+    if mode != 'roleplay':
+        traits, _ = resolve_player_personality(bot_name, mode=mode)
     trait_str = ', '.join(traits)
     tone = pick_random_tone(mode)
     mood = pick_random_mood(mode)
@@ -502,7 +498,7 @@ def _build_general_response_prompt(
         prompt += f"Creative twist: {twist}\n"
 
     address_hint = ""
-    if not brief_casual:
+    if is_rp and not brief_casual:
         address_hint = (
             f"- Address {player_name} by name "
             f"somewhere in your reply (not always "
@@ -595,6 +591,8 @@ def _build_general_followup_prompt(
     on the 1st bot's reaction in General channel.
     """
     is_rp = (mode == 'roleplay')
+    if mode != 'roleplay':
+        traits, _ = resolve_player_personality(bot_name, mode=mode)
     trait_str = ', '.join(traits)
     tone = pick_random_tone(mode)
     mood = pick_random_mood(mode)
@@ -828,6 +826,11 @@ def process_general_player_msg_event(
         bot1_guid = primary['bot1_guid']
         bot1_idx = primary['bot1_idx']
         bot1_name = primary['bot1_name']
+        if not willing_to_speak(
+                bot1_name, bot1_guid, mode,
+                directly_addressed=bot1_name.casefold() in player_message.casefold()):
+            mark_event(db, event_id, 'skipped')
+            return False
         bot1_race = primary['bot1_race']
         bot1_class = primary['bot1_class']
         bot1_class_id = primary['bot1_class_id']
@@ -1145,11 +1148,14 @@ def _general_followup(
         return
 
     bot2_name = bot2_info['name']
+    if not willing_to_speak(bot2_name, bot2_guid, mode):
+        return
     bot2_race = get_race_name(bot2_info['race'])
     bot2_class = get_class_name(bot2_info['class'])
     bot2_level = bot2_info['level']
     bot2_gender = get_gender_label(bot2_info['gender'])
-    bot2_traits = _pick_random_traits()
+    bot2_traits = resolve_player_personality(
+        bot2_name, mode=get_chatter_mode(config), guid=bot2_guid)[0]
 
     # Recompute speaker talent for bot2
     bot2_speaker_talent = None
@@ -1323,6 +1329,8 @@ def _build_general_continuation_prompt(
       [{'name': str, 'message': str, 'is_bot': bool}]
     """
     is_rp = (mode == 'roleplay')
+    if mode != 'roleplay':
+        traits, _ = resolve_player_personality(bot_name, mode=mode)
     trait_str = ', '.join(traits)
     tone = pick_random_tone(mode)
     mood = pick_random_mood(mode)
@@ -1536,7 +1544,8 @@ def _general_extended_conversation(
             participants.append({
                 'guid': bot3_guid,
                 'name': bot3_info['name'],
-                'traits': _pick_random_traits(),
+                'traits': resolve_player_personality(
+                    bot3_info['name'], mode=get_chatter_mode(config), guid=bot3_guid)[0],
             })
 
     # Track who spoke last to avoid repeats
@@ -1575,6 +1584,8 @@ def _general_extended_conversation(
         if not eligible:
             break
         speaker = random.choice(eligible)
+        if not willing_to_speak(speaker['name'], speaker['guid'], mode):
+            break
 
         # Fetch bot info for prompt
         sp_info = _get_bot_info(

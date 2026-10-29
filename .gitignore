@@ -7,3 +7,6 @@ dev-only
 .DS_Store
 Gemini.md
 logs/
+
+# Bridge-owned persistent normal profiles
+tools/state/

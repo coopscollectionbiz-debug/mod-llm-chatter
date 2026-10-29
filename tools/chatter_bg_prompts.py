@@ -44,7 +44,7 @@ OBSERVATION_CONSTRAINT = (
     "will do something \u2014 your actual behavior may "
     "contradict the message. No action declarations, "
     "no promises, no movement plans. Only reactive "
-    "observations and generic encouragement."
+    "observations consistent with your personality."
 )
 
 BREVITY_INSTRUCTION = (
@@ -91,6 +91,9 @@ def _bg_base_context(
         config = extra_data.get('_config')
     mode = get_chatter_mode(config or {})
     roleplay = is_roleplay(mode)
+    if not roleplay:
+        from chatter_personality import profile_for
+        profile_for(bot_data.get('bot_name', 'Unknown'), bot_data.get('bot_guid') or bot_data.get('guid'))
     bg_type_id = int(extra_data.get('bg_type_id', 0))
     lore = BG_LORE.get(bg_type_id, {})
     team = extra_data.get('team', 'Unknown')
@@ -187,6 +190,9 @@ def _bg_base_context(
     if roleplay and lore.get('landmarks'):
         ctx += f"{lore['landmarks']}\n"
 
+    if not roleplay:
+        from chatter_mode import resolve_player_personality
+        traits, _ = resolve_player_personality(bot_name, mode=mode)
     if traits:
         trait_str = ', '.join(
             str(t) for t in traits[:3])
@@ -252,7 +258,7 @@ def build_bg_match_start_prompt(
     else:
         ctx += (
             "\nThe match just started. Give a quick, natural team-chat "
-            "reaction, objective reminder, or bit of encouragement."
+            "reaction or objective reminder in your own style."
         )
     return append_json_instruction(
         ctx, allow_action=False, skip_emote=True
@@ -899,13 +905,13 @@ BG_IDLE_CATEGORIES_RP = [
 
 BG_IDLE_CATEGORIES = [
     "a useful tactical observation about the score or objectives",
-    "brief encouragement after a good play",
+    "plain reaction to the current match",
     "a mild complaint about the match without blaming a player",
     "a concise callout about team positioning or pressure",
     "a quick reaction to an enemy class or strategy",
     "friendly competitive banter",
     "a dry joke about dying, respawning, queues, or gear",
-    "a compliment or grateful reaction to a teammate",
+    "an opinion about the match pace",
     "calm optimism or realistic concern about the match",
     "a quick reminder to focus an objective",
     "a suggestion to regroup before the next push",

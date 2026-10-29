@@ -4,6 +4,8 @@ N9/N10 moved statement and conversation
 processing from the bridge.
 """
 
+from chatter_personality import willing_to_speak
+
 import json
 import logging
 import random
@@ -1966,6 +1968,9 @@ def process_statement(
     current_weather = request.get('weather') or None
     mode = get_chatter_mode(config)
 
+    if not willing_to_speak(bot['name'], bot['guid'], mode):
+        return True
+
     # ZERO-TOKEN CAPITAL TEMPLATE - STATEMENT
     is_capital = _is_capital_city_name(
         bot.get('zone', '')
@@ -2265,6 +2270,9 @@ def process_conversation(
     area_id = request.get('area_id', zone_id)
     current_weather = request.get('weather') or None
     mode = get_chatter_mode(config)
+
+    if bots and not willing_to_speak(bots[0]['name'], bots[0]['guid'], mode):
+        return True
 
     # ZERO-TOKEN CAPITAL TEMPLATE - CONVERSATION
     is_capital = (

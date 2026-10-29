@@ -4,6 +4,7 @@ import logging
 import random
 from typing import Dict, List, Tuple
 
+from chatter_personality import willing_to_speak
 from chatter_db import insert_chat_message
 from chatter_guild import (
     _clean_guild_conversation,
@@ -196,9 +197,8 @@ def _shared_prompt_lines(
         "logged in.",
         "Greet them as a familiar guildmate, not as a "
         "stranger or a newly recruited member.",
-        "Keep every greeting warm, casual, and brief. "
-        "It may acknowledge their return, ask what they "
-        "are doing, or offer a small friendly wish.",
+        "Keep greetings brief and consistent with each speaker profile. "
+        "A bare hi is enough; no obligatory questions, compliments or enthusiasm.",
         "Do not invent where they have been, how long "
         "they were absent, or what they intend to do.",
         "Guild Chat reaches across the game world. Never imply "
@@ -554,12 +554,20 @@ def process_guild_login_greeting_event(
         [],
         0,
     )
+    responders = [
+        responder for responder in responders
+        if willing_to_speak(
+            responder['name'], responder['guid'], get_chatter_mode(config),
+            directly_addressed=False,
+        )
+    ]
     if not responders:
         _mark_event(db, event_id, 'skipped')
         return False
 
     name_requested = (
-        random.randint(1, 100)
+        is_roleplay(get_chatter_mode(config))
+        and random.randint(1, 100)
         <= _bounded_percent(
             config,
             'LLMChatter.GuildChatter.'

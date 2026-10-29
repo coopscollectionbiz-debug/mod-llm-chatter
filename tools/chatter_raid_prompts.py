@@ -373,6 +373,9 @@ def _raid_base_context(extra_data, bot_data):
     config = extra_data.get('_config') or {}
     mode = get_chatter_mode(config)
     roleplay = is_roleplay(mode)
+    if not roleplay:
+        from chatter_personality import profile_for
+        profile_for(bot_data.get('bot_name', 'Unknown'), bot_data.get('bot_guid') or bot_data.get('guid'))
 
     # Race/class context
     rc_ctx = ''
@@ -432,6 +435,9 @@ def _raid_base_context(extra_data, bot_data):
     if roleplay and lore_entry.get('tone'):
         ctx += f"Tone: {lore_entry['tone']}\n"
 
+    if not roleplay:
+        from chatter_mode import resolve_player_personality
+        traits, _ = resolve_player_personality(bot_name, mode=mode)
     if traits:
         trait_str = ', '.join(
             str(t) for t in traits[:3])
@@ -701,26 +707,26 @@ def build_raid_morale_prompt(
     ctx = _raid_base_context(extra_data, bot_data)
 
     topics = random.choice([
-        "morale boost or encouragement",
+        "plain observation about the run",
         "tactical banter about the next pull",
         "readiness check or gear question",
-        "raid encouragement or hype",
+        "short status update",
         "idle commentary between pulls",
         "joke or light trash talk",
-        "compliment a recent play or save",
-        "reminisce about a past wipe or close call",
+        "opinion about a raid mechanic",
+        "react to a wipe only if supplied in context",
         "comment on the raid's architecture or "
         "atmosphere",
         "complain about repair bills or consumables",
         "speculation about what loot will drop",
-        "lore or history of this raid instance",
+        "opinion about raid pacing",
         "banter about who is pulling their weight",
         "comment on how the raid is progressing",
         "nervous anticipation about a tough boss "
         "ahead",
         "ask if everyone has food and flask buffs",
         "joke about AFK raiders or slow pullers",
-        "share a rumor or gossip about this place",
+        "an ordinary thought about raiding",
         "comment on the trash mobs they just "
         "fought through",
     ])

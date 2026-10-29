@@ -548,7 +548,7 @@ def test_mixed_playerbot_emote_prompt_uses_distinct_voices():
     assert '[NPC] Deathstalker Adamant' in prompt
     assert 'Use casual player /say' in prompt
     assert 'Speakers may react to the player and to each other' in prompt
-    assert 'Every listed speaker must speak at least once' in prompt
+    assert 'Participation may be unequal; early endings are allowed' in prompt
 
 
 def test_silent_addressed_bot_emote_prompt_uses_witnesses():
