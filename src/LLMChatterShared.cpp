@@ -19,6 +19,7 @@
 #include "Player.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
+#include "StringFormat.h"
 #include "Transport.h"
 #include "Util.h"
 #include "World.h"
@@ -2396,6 +2397,33 @@ void QueueChatterEvent(
         SanitizeUtf8(extraData),
         reactAfterSeconds,
         expiresAfterSeconds);
+}
+
+std::string BuildGroupExperienceFields(Group* group, Map const* map)
+{
+    // Snapshot only meaningful events, never a tick or proximity scan. The
+    // bridge must not infer historical participation from later membership.
+    std::string result = "\"experience_participants\":[";
+    uint32 count = 0;
+    if (group && map)
+    {
+        for (GroupReference* itr = group->GetFirstMember(); itr && count < 40; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member || !member->IsInWorld() || member->FindMap() != map)
+                continue;
+
+            if (count++)
+                result += ",";
+
+            // Player high GUID is zero, so the raw value is the character GUID.
+            result += Acore::StringFormat("{{\"guid\":{},\"name\":\"{}\",\"is_bot\":{}}}",
+                member->GetGUID().GetRawValue(), JsonEscape(member->GetName()),
+                IsPlayerBot(member) ? "true" : "false");
+        }
+    }
+    result += "]";
+    return result;
 }
 
 void AppendRaidContext(

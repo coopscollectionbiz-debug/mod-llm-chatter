@@ -345,7 +345,7 @@ def fetch_pending_events(db, config, max_count):
     # Single unified query — parallel processing
     # makes transport-specific priority redundant
     cursor.execute("""
-        SELECT e.*
+        SELECT e.*, TIMESTAMPDIFF(SECOND, e.created_at, NOW()) AS _age_seconds
         FROM llm_chatter_events e
         WHERE e.status = 'pending'
           AND (e.react_after IS NULL
@@ -842,7 +842,10 @@ def process_single_event(event, client, config):
                 _log_event_location(
                     db, event, config
                 )
-            return handler(db, client, config, event)
+            from chatter_relationships import event_context, poll_deliveries
+            poll_deliveries(db)
+            with event_context(db, config, event):
+                return handler(db, client, config, event)
 
         # Unknown event type — no handler registered.
         # Mark as skipped so it doesn't block the
@@ -907,6 +910,8 @@ def _run_in_worker(fn_name, fn, client, config):
     db = None
     try:
         db = get_db_connection(config)
+        from chatter_relationships import poll_deliveries
+        poll_deliveries(db)
         fn(db, client, config)
     except Exception:
         logger.error(
@@ -1250,6 +1255,8 @@ def main():
         )
     from chatter_personality import configure as configure_personalities
     configure_personalities(config)
+    from chatter_relationships import configure as configure_relationships
+    configure_relationships(config)
     init_group_config(config)
     init_general_config(config)
 

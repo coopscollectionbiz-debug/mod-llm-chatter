@@ -431,6 +431,8 @@ def call_llm(
 
     Supports Anthropic, OpenAI, Google, OpenRouter, and Ollama.
     """
+    from chatter_relationships import enrich_prompt
+    prompt = enrich_prompt(prompt, label)
     provider = config.get(
         'LLMChatter.Provider', 'anthropic'
     ).lower()

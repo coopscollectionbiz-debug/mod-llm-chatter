@@ -3188,3 +3188,21 @@ LLMChatter.Personality.CacheSize = 4096
 # Optional JSON object overriding archetype weights (unspecified weights retain defaults).
 # Stop bridge before changing weights, then bump Version to regenerate existing profiles.
 LLMChatter.Personality.Weights = "{}"
+
+
+# [BRIDGE] Normal-mode relationships and selective conversational memory.
+# Uses additional tables in the Personality.Path SQLite sidecar by default.
+# Existing MySQL memories are preserved and recalled only in a private original dyad.
+LLMChatter.Relationships.Enable = 1
+# Optional separate SQLite path; use a persistent writable volume.
+# LLMChatter.Relationships.Path = "/persistent/relationships.sqlite3"
+LLMChatter.Relationships.CacheSize = 4096
+LLMChatter.Relationships.MemoriesPerPair = 24
+LLMChatter.Relationships.MemoriesPerBot = 256
+LLMChatter.Relationships.PeersPerBot = 256
+LLMChatter.Relationships.CooldownSeconds = 900
+LLMChatter.Relationships.DailyKindLimit = 8
+LLMChatter.Relationships.RetentionDays = 90
+LLMChatter.Relationships.ContextChars = 1200
+LLMChatter.Relationships.RecallCooldownSeconds = 600
+LLMChatter.Relationships.RecallChance = 20

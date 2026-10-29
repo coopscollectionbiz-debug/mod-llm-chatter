@@ -709,6 +709,9 @@ public:
                 + std::to_string(
                     player->GetZoneId());
             // in_raid added by AppendRaidContext
+            if (eventType == "raid_boss_kill" || eventType == "raid_boss_wipe")
+                json += "," + BuildGroupExperienceFields(group, instance);
+
             json += "}";
 
             AppendRaidContext(player, json);

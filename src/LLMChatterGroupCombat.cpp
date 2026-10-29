@@ -251,7 +251,8 @@ void HandleGroupCreatureKillImpl(
                 isNormal ? "true" : "false") + ","
         "\"group_id\":" +
             std::to_string(groupId) + ","
-        + BuildBotStateJson(reactor) + "}";
+        + BuildBotStateJson(reactor)
+        + (isBoss ? "," + BuildGroupExperienceFields(group, killed->GetMap()) : "") + "}";
 
     extraData = EscapeString(extraData);
 
@@ -374,7 +375,7 @@ void HandleGroupPlayerKilledByCreatureImpl(
                     std::to_string(
                         kEntry) + ","
                 + BuildBotStateJson(wipeReactor)
-                + "}";
+                + "," + BuildGroupExperienceFields(group, killed->GetMap()) + "}";
 
             wipeData =
                 EscapeString(wipeData);

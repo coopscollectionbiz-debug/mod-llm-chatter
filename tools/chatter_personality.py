@@ -221,6 +221,8 @@ def profile_for(name, guid=None):
 
 def profile_instruction(name, guid=None):
     p = profile_for(name, guid)
+    from chatter_relationships import register_speaker
+    register_speaker(name, p['guid'])
     levels = lambda key: 'low' if p[key] < 35 else 'high' if p[key] > 65 else 'moderate'
     behavior = ', '.join(f'{key}={levels(key)}' for key in TRAITS)
     style = '; '.join(f'{k}={p[k]}' for k in STYLE_CHOICES)
@@ -232,12 +234,12 @@ def profile_instruction(name, guid=None):
     )
 
 
-def should_speak(profile, directly_addressed=False, important=False, rng=random.random):
+def should_speak(profile, directly_addressed=False, important=False, rng=random.random, familiarity_bonus=0):
     if important:
         return True
     chance = (0.65 + profile['talkativeness'] / 300 if directly_addressed
               else 0.05 + 0.9 * profile['talkativeness'] / 100 * profile['initiation'] / 100)
-    return rng() < min(0.98, chance)
+    return rng() < min(0.98, chance + max(0, min(0.12, familiarity_bonus)))
 
 
 def willing_to_speak(name, guid=None, mode='normal', directly_addressed=False, question=False):
@@ -245,7 +247,8 @@ def willing_to_speak(name, guid=None, mode='normal', directly_addressed=False, q
     if mode == 'roleplay' or _store is None:
         return True
     profile = profile_for(name, guid)
-    return (should_speak(profile, directly_addressed)
+    from chatter_relationships import speaking_bonus
+    return (should_speak(profile, directly_addressed, familiarity_bonus=speaking_bonus(profile['guid']))
             and (not question or random.random() * 100 < profile['question_frequency']))
 
 

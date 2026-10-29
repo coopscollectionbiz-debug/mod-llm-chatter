@@ -26,6 +26,7 @@ Imports from chatter_constants, chatter_shared,
 and chatter_prompts.
 """
 
+from chatter_relationships import ambient_context
 from chatter_personality import willing_to_speak, player_prompt
 
 import logging
@@ -4104,6 +4105,7 @@ def check_idle_group_chatter(
             _idle_inflight.discard(group_id)
 
 
+@ambient_context
 def _idle_single_statement(
     db, client, config, group_id,
     all_bots, mode, chat_hist, members, now,
@@ -4382,6 +4384,7 @@ def _idle_single_statement(
         return False
 
 
+@ambient_context
 def _idle_conversation(
     db, client, config, group_id,
     bot_rows, mode, chat_hist, members, now,

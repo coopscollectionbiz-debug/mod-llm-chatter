@@ -117,6 +117,7 @@ void QueueChatterEvent(
     uint32 expiresAfterSeconds,
     bool nullZeroNumeric);
 void AppendRaidContext(Player* player, std::string& json);
+std::string BuildGroupExperienceFields(Group* group, Map const* map);
 bool GroupHasBots(Group* group);
 Player* FindMentionedMember(
     Player* bot, Group* grp,
