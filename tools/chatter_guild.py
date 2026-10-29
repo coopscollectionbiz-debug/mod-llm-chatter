@@ -7,6 +7,7 @@ exchange short, in-character lines in guild chat. Driven by
 raid idle-morale and proximity handlers.
 """
 
+from chatter_rss import select_topic, attach_context, TOPIC_HINT
 from chatter_personality import willing_to_speak, flexible_conversation, profile_for
 
 import logging
@@ -472,6 +473,10 @@ def _process_guild_statement_event(
             else GUILD_CHAT_TOPICS
         )
     )
+    rss_selection = (select_topic(config, [{'name': speaker_name, 'guid': speaker_guid}],
+                                  'guild_idle_chatter') if not fallback else None)
+    if rss_selection:
+        topic = TOPIC_HINT
     # PR #30 follow-up #1: prefer the C++ GetTeamId() faction (extra_data
     # "team"); fall back to the Python race-derived faction.
     faction = extra.get('team') or _speaker_faction(speaker)
@@ -530,6 +535,7 @@ def _process_guild_statement_event(
         "guild_zone_flavor": get_zone_flavor(zone_id) or "",
     }
     metadata.update(history_metadata)
+    prompt = attach_context(prompt, rss_selection, metadata)
     response = call_llm(
         client, prompt, config,
         max_tokens_override=max_tokens,
@@ -1368,6 +1374,9 @@ def _generate_guild_conversation(
     first = participants[0]
     if not willing_to_speak(first['name'], first['guid'], get_chatter_mode(config)):
         return False
+    rss_selection = select_topic(config, participants, 'guild_idle_chatter')
+    if rss_selection:
+        topic = TOPIC_HINT
     participant_count = len(participants)
     max_lines = int(config.get(
         'LLMChatter.GuildChatter.'
@@ -1455,6 +1464,7 @@ def _generate_guild_conversation(
         for plan in reference_plans
     )
     metadata.update(history_metadata)
+    prompt = attach_context(prompt, rss_selection, metadata)
 
     base_tokens = int(config.get(
         'LLMChatter.GuildChatter.MaxTokens', 200

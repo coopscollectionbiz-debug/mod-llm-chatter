@@ -37,6 +37,8 @@ ARCHETYPES = {
 }
 INTERESTS = ('quests', 'dungeons', 'raids', 'pvp', 'professions', 'economy', 'alts')
 NEWS = ('none', 'none', 'none', 'gaming', 'technology', 'entertainment')
+# Extend editor options without altering the generator's established RNG pool.
+NEWS_OPTIONS = set(NEWS) | {'sports', 'science', 'general'}
 STYLE_CHOICES = {
     'capitalization': ('lowercase', 'sentence case', 'mixed casual case'),
     'punctuation': ('minimal', 'ordinary punctuation'),
@@ -80,7 +82,7 @@ def validate_overrides(values):
             if value not in STYLE_CHOICES[key]:
                 raise ValueError(f'{key} must be one of {STYLE_CHOICES[key]}')
         elif key in ('gameplay_interests', 'news_interests'):
-            choices = INTERESTS if key == 'gameplay_interests' else NEWS
+            choices = INTERESTS if key == 'gameplay_interests' else NEWS_OPTIONS
             if not isinstance(value, list) or not value or any(v not in choices for v in value):
                 raise ValueError(f'Invalid {key}')
         else:
