@@ -63,6 +63,13 @@ public:
 
     // Delivery settings
     uint32 _deliveryPollMs;
+    uint32 _deliveryBatchSize;
+    uint32 _deliveryMaxPerChannel;
+    uint32 _deliveryCandidateLimit;
+    uint32 _deliveryExpireSweepSeconds;
+    bool _deliveryAsyncEnable;
+    uint32 _deliveryDiagnosticsInterval;
+    bool _deliveryVerboseLog;
     uint32 _messageDelayMin;
     uint32 _messageDelayMax;
     bool _partyGateEnable;

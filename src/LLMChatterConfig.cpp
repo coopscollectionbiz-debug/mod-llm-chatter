@@ -347,6 +347,30 @@ void LLMChatterConfig::LoadConfig()
 
     // Delivery settings
     _deliveryPollMs = GetChatterOption<uint32>("LLMChatter.DeliveryPollMs", 1000);
+    _deliveryBatchSize = std::clamp<uint32>(
+        GetChatterOption<uint32>(
+            "LLMChatter.Delivery.BatchSize", 8),
+        1, 50);
+    _deliveryMaxPerChannel = std::min<uint32>(
+        GetChatterOption<uint32>(
+            "LLMChatter.Delivery.MaxPerChannelPerTick", 4),
+        50);
+    // The candidate window must cover the batch so lower-priority
+    // destinations are not starved by one busy destination.
+    _deliveryCandidateLimit = std::clamp<uint32>(
+        GetChatterOption<uint32>(
+            "LLMChatter.Delivery.CandidateLimit", 40),
+        _deliveryBatchSize, 200);
+    _deliveryExpireSweepSeconds = std::clamp<uint32>(
+        GetChatterOption<uint32>(
+            "LLMChatter.Delivery.ExpireSweepSeconds", 5),
+        1, 60);
+    _deliveryAsyncEnable = GetChatterOption<bool>(
+        "LLMChatter.Delivery.AsyncEnable", true);
+    _deliveryDiagnosticsInterval = GetChatterOption<uint32>(
+        "LLMChatter.Delivery.DiagnosticsIntervalSeconds", 0);
+    _deliveryVerboseLog = GetChatterOption<bool>(
+        "LLMChatter.Delivery.VerboseLog", false);
     _messageDelayMin = GetChatterOption<uint32>("LLMChatter.MessageDelayMin", 1000);
     _messageDelayMax = GetChatterOption<uint32>("LLMChatter.MessageDelayMax", 30000);
     _partyGateEnable =

@@ -1,6 +1,7 @@
 #ifndef MOD_LLM_CHATTER_SHARED_H
 #define MOD_LLM_CHATTER_SHARED_H
 
+#include "DatabaseEnvFwd.h"
 #include "Define.h"
 #include "SharedDefines.h"
 #include <ctime>
@@ -32,6 +33,21 @@ void RefreshGeneralAudienceSnapshot();
 bool HasCachedGeneralAudience(
     uint32 mapId, uint32 zoneId, TeamId teamId);
 std::vector<uint32> GetCachedGeneralAudienceZones();
+// Real-player faction counts for an overworld zone, taken from the
+// same snapshot pass as the General audience (no extra session scan).
+void GetCachedRealPlayerFactionCounts(
+    uint32 zoneId, uint32& allianceCount, uint32& hordeCount);
+
+// World-thread async database callbacks owned by this module. Callbacks
+// run only from ProcessLLMChatterAsyncCallbacks(), which the world
+// script calls from OnUpdate, so they may touch game objects.
+QueryCallbackProcessor& GetLLMChatterQueryProcessor();
+void ProcessLLMChatterAsyncCallbacks();
+// Fire-and-forget write: async when Delivery.AsyncEnable = 1,
+// otherwise the legacy blocking DirectExecute. Pass final SQL only.
+void ExecuteLLMChatterWrite(std::string const& sql);
+void SetLLMChatterAsyncShutdown();
+bool IsLLMChatterAsyncShutdown();
 std::string const& GetCreatureEntryColumn();
 Creature* FindCreatureBySpawnId(Map* map, uint32 spawnId);
 void LoadNamedBossCache();

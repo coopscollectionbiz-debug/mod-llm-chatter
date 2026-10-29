@@ -700,6 +700,8 @@ def insert_chat_message(
         addressee_npc_spawn_id,
     ))
     db.commit()
+    from chatter_metrics import record_generated
+    record_generated(channel)
     from chatter_relationships import note_output, safe
     safe(lambda: note_output(cursor.lastrowid, bot_guid, bot_name, message))
 

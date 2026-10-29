@@ -721,8 +721,10 @@ def test_delivery_records_drops_and_explicit_addressees():
     assert 'FinalizeDroppedMessage(' in delivery_source
     assert 'cancelled_after_directed_drop' in delivery_source
     assert 'drop_reason = NULL' in delivery_source
-    assert 'm.addressee_player_guid' in delivery_source
-    assert 'm.addressee_npc_spawn_id' in delivery_source
+    query = (MODULE_DIR / 'src' / 'LLMChatterDeliveryPolicy.h').read_text(encoding='utf-8')
+    assert 'm.addressee_player_guid' in query
+    assert 'm.addressee_npc_spawn_id' in query
+    assert 'BuildFetchSql(' in delivery_source
     assert '`drop_reason` VARCHAR(64)' in schema
     assert '`addressee_player_guid` INT UNSIGNED' in schema
     assert '`addressee_npc_spawn_id` INT UNSIGNED' in schema

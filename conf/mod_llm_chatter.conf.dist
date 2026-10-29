@@ -2505,6 +2505,33 @@ LLMChatter.ConversationMaxTokens = 700
 LLMChatter.Temperature = 0.8
 
 #
+#   LLMChatter.LLM.TimeoutSeconds [BRIDGE]
+#       Per-request provider timeout used by the main and quick-analyze
+#       clients. The SDK default (10 minutes) lets one stalled provider
+#       hold every bridge worker while queued lines expire.
+#       Default: 30 (120 for Ollama when unset)
+#
+LLMChatter.LLM.TimeoutSeconds = 30
+
+#
+#   LLMChatter.LLM.MaxRetries [BRIDGE]
+#       Automatic SDK retries for connection errors, 408/409/429 and 5xx
+#       responses. Lower values never add requests. Range 0-5.
+#       Default: 1 (the SDKs themselves default to 2)
+#
+LLMChatter.LLM.MaxRetries = 1
+
+#
+#   LLMChatter.Diagnostics.IntervalSeconds [BRIDGE]
+#       When above zero, the bridge logs one "[DIAG] bridge stats" line
+#       per interval: rows generated per channel, provider calls,
+#       failures and latency, backlog-probe timing and skipped optional
+#       generation. Nothing is logged per message.
+#       Default: 0 (disabled)
+#
+LLMChatter.Diagnostics.IntervalSeconds = 0
+
+#
 #   LLMChatter.MaxMessageLength
 #       Maximum character length for chat messages.
 #       Messages longer than this are truncated.
@@ -2521,6 +2548,93 @@ LLMChatter.MaxMessageLength = 250
 #       Default: 5
 #
 LLMChatter.MaxPendingRequests = 5
+
+#
+#   LLMChatter.Delivery.BatchSize
+#       Maximum chat lines spoken per delivery tick
+#       (LLMChatter.DeliveryPollMs, default 1000 ms). Each tick still
+#       delivers at most one line per conversation and one line per chat
+#       destination (party/raid group, guild, General channel per
+#       zone and faction, or local /say scene), so per-channel pacing is
+#       unchanged. Set to 1 for the legacy single-line behaviour.
+#       Range: 1-50
+#       Default: 8
+#
+LLMChatter.Delivery.BatchSize = 8
+
+#
+#   LLMChatter.Delivery.MaxPerChannelPerTick
+#       Maximum lines of one channel type (general, party, guild, say,
+#       ...) per tick, so one busy channel type cannot fill the batch.
+#       0 disables the cap.
+#       Default: 4
+#
+LLMChatter.Delivery.MaxPerChannelPerTick = 4
+
+#
+#   LLMChatter.Delivery.CandidateLimit
+#       Due rows examined per tick, in priority order. Larger values
+#       let lower-priority destinations progress while a few
+#       destinations hold many queued lines. Never below BatchSize.
+#       Range: BatchSize-200
+#       Default: 40
+#
+LLMChatter.Delivery.CandidateLimit = 40
+
+#
+#   LLMChatter.Delivery.ExpireSweepSeconds
+#       How often lines more than 60 seconds past their deliver_at are
+#       marked 'expired_before_delivery'. Expired rows are never
+#       delivered in between: the delivery query already excludes them.
+#       Range: 1-60
+#       Default: 5
+#
+LLMChatter.Delivery.ExpireSweepSeconds = 5
+
+#
+#   LLMChatter.Delivery.AsyncEnable
+#       1 = delivery fetches, delivery writes, the ambient queue count
+#           and party/guild delivery bookkeeping use asynchronous
+#           database calls; results are applied on the world thread.
+#       0 = rollback: the same batch logic on blocking calls, as before.
+#       Default: 1
+#
+LLMChatter.Delivery.AsyncEnable = 1
+
+#
+#   LLMChatter.Delivery.DiagnosticsIntervalSeconds
+#       When above zero, the worldserver logs one "delivery stats" line
+#       per interval (fetches, batch sizes, delivered, retried,
+#       deferred, drops by reason, fetch latency, processing time) and
+#       runs one optional async backlog/expiry count query.
+#       Default: 0 (disabled)
+#
+LLMChatter.Delivery.DiagnosticsIntervalSeconds = 0
+
+#
+#   LLMChatter.Delivery.VerboseLog
+#       Log one line per delivered or dropped message. Debug only.
+#       Default: 0
+#
+LLMChatter.Delivery.VerboseLog = 0
+
+#
+#   LLMChatter.Delivery.GenerationBacklogLimit [BRIDGE]
+#       When at least this many due lines are still waiting for
+#       delivery, the bridge postpones optional ambient General
+#       requests, party idle chatter and party bot questions until the
+#       backlog drains. Player replies and gameplay events are never
+#       postponed. 0 disables the guard.
+#       Default: 40
+#
+LLMChatter.Delivery.GenerationBacklogLimit = 40
+
+#
+#   LLMChatter.Delivery.BacklogCheckSeconds [BRIDGE]
+#       How long the bridge caches the backlog count between probes.
+#       Default: 5
+#
+LLMChatter.Delivery.BacklogCheckSeconds = 5
 
 #
 #   LLMChatter.MaxBotsPerZone

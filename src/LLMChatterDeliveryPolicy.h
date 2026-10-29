@@ -1,0 +1,83 @@
+/*
+ * mod-llm-chatter - delivery deadlines and indexed conversation dependencies.
+ * Shared by world-thread delivery and the standalone offline fixtures.
+ */
+#ifndef MOD_LLM_CHATTER_DELIVERY_POLICY_H
+#define MOD_LLM_CHATTER_DELIVERY_POLICY_H
+
+#include <cstdint>
+#include <string>
+
+namespace LLMChatterDeliveryPolicy
+{
+enum class DispatchDecision
+{
+    Send,
+    Expire,
+    Stop
+};
+
+// The database returns a signed lifetime at statement start, not an absolute
+// timestamp. Charge ALL monotonic time since submission against it, including
+// time waiting for a DB worker, executing SQL and waiting for the world tick.
+// This is conservative under DB backlog and independent of wall-clock skew.
+// The boundary itself remains valid, matching the existing strict '<' sweep.
+inline DispatchDecision CheckDispatch(
+    int64_t remainingUs, int64_t elapsedUs, bool running)
+{
+    if (!running)
+        return DispatchDecision::Stop;
+    if (remainingUs < 0 || elapsedUs < 0 || elapsedUs > remainingUs)
+        return DispatchDecision::Expire;
+    return DispatchDecision::Send;
+}
+
+inline std::string BuildFetchSql(bool priorityOrder, uint32_t limit, uint32_t expirySeconds = 60)
+{
+    std::string const expiry = std::to_string(expirySeconds);
+    return
+        "SELECT m.id, m.bot_guid, m.bot_name, m.message, "
+        "m.channel, m.emote, m.npc_spawn_id, m.player_guid, "
+        "m.sequence, m.event_id, e.zone_id, m.group_id, m.delivery_policy, "
+        "m.delivery_reason, m.owner_subsystem, m.addressee_player_guid, "
+        "m.addressee_bot_guid, m.addressee_npc_spawn_id, "
+        "e.map_id, e.extra_data, e.event_type, e.subject_guid, "
+        "m.queue_id, e.target_entry, e.target_guid, "
+        "(SELECT pv.bot_guid FROM llm_chatter_messages pv "
+        "WHERE m.event_id IS NOT NULL AND m.sequence > 0 "
+        "AND pv.event_id = m.event_id AND pv.sequence = m.sequence - 1 LIMIT 1) AS prev_bot_guid, "
+        "(SELECT pv.npc_spawn_id FROM llm_chatter_messages pv "
+        "WHERE m.event_id IS NOT NULL AND m.sequence > 0 "
+        "AND pv.event_id = m.event_id AND pv.sequence = m.sequence - 1 LIMIT 1) AS prev_npc_spawn_id, "
+        "(m.event_id IS NOT NULL AND EXISTS (SELECT 1 FROM llm_chatter_messages lt "
+        "WHERE lt.event_id = m.event_id AND lt.sequence > m.sequence "
+        "AND lt.delivered = 0)) AS has_later_line, "
+        "TIMESTAMPDIFF(MICROSECOND, NOW(6), DATE_ADD(m.deliver_at, INTERVAL " + expiry +
+        " SECOND)) AS remaining_us "
+        "FROM llm_chatter_messages m LEFT JOIN llm_chatter_events e ON m.event_id = e.id "
+        "WHERE m.delivered = 0 AND m.deliver_at <= NOW(6) "
+        "AND m.deliver_at >= DATE_SUB(NOW(6), INTERVAL " + expiry + " SECOND) "
+        // idx_event restricts this check to the current conversation. All lower
+        // pending sequences block, even if rescheduled or awaiting the sweep.
+        // Terminal predecessors release ordinary conversations; directed drops
+        // retain the existing cancellation cascade in FinalizeDroppedMessage.
+        "AND (m.event_id IS NULL OR NOT EXISTS ("
+        "SELECT 1 FROM llm_chatter_messages p WHERE p.event_id = m.event_id "
+        "AND p.sequence < m.sequence AND (p.delivered = 0 "
+        // Keep the additional actual-delivery spacing for local conversations.
+        "OR (m.channel IN ('say', 'msay') AND p.sequence = m.sequence - 1 "
+        "AND (p.delivered_at IS NULL OR TIMESTAMPDIFF(MICROSECOND, p.delivered_at, NOW(6)) < "
+        "TIMESTAMPDIFF(MICROSECOND, p.deliver_at, m.deliver_at)))))) "
+        // Rows with an event id use that identity even if queue_id is also set.
+        // idx_queue gives the same bounded check to legacy ambient scripts.
+        "AND (m.event_id IS NOT NULL OR m.queue_id IS NULL OR NOT EXISTS ("
+        "SELECT 1 FROM llm_chatter_messages qp WHERE qp.queue_id = m.queue_id "
+        "AND qp.event_id IS NULL AND qp.sequence < m.sequence AND (qp.delivered = 0 "
+        "OR (m.channel IN ('say', 'msay') AND qp.sequence = m.sequence - 1 "
+        "AND (qp.delivered_at IS NULL OR TIMESTAMPDIFF(MICROSECOND, qp.delivered_at, NOW(6)) < "
+        "TIMESTAMPDIFF(MICROSECOND, qp.deliver_at, m.deliver_at)))))) "
+        "ORDER BY " + (priorityOrder ? "COALESCE(e.priority, 0) DESC, " : "") +
+        "m.deliver_at ASC, m.id ASC LIMIT " + std::to_string(limit);
+}
+} // namespace LLMChatterDeliveryPolicy
+#endif

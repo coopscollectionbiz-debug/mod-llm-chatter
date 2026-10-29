@@ -19,6 +19,9 @@ void RecordDeliveredGuildLine(
     uint32 eventId,
     uint32 botGuid,
     std::string const& botName,
-    std::string const& message);
+    std::string const& message,
+    // Event type already known to the caller (delivery joins it);
+    // nullptr looks it up with a blocking query.
+    std::string const* knownEventType = nullptr);
 
 #endif

@@ -874,7 +874,8 @@ void RecordDeliveredGuildLine(
     uint32 eventId,
     uint32 botGuid,
     std::string const& botName,
-    std::string const& message)
+    std::string const& message,
+    std::string const* knownEventType)
 {
     if (!guildId || message.empty())
         return;
@@ -882,14 +883,20 @@ void RecordDeliveredGuildLine(
     std::string sourceKind = "ambient";
     if (eventId)
     {
-        QueryResult result = CharacterDatabase.Query(
-            "SELECT event_type "
-            "FROM llm_chatter_events "
-            "WHERE id = {} LIMIT 1",
-            eventId);
-        std::string eventType = result
-            ? result->Fetch()[0].Get<std::string>()
-            : "";
+        std::string eventType;
+        if (knownEventType)
+            eventType = *knownEventType;
+        else
+        {
+            QueryResult result = CharacterDatabase.Query(
+                "SELECT event_type "
+                "FROM llm_chatter_events "
+                "WHERE id = {} LIMIT 1",
+                eventId);
+            eventType = result
+                ? result->Fetch()[0].Get<std::string>()
+                : "";
+        }
         if (eventType == "guild_player_message"
             || eventType == "guild_login_greeting")
         {
@@ -898,7 +905,7 @@ void RecordDeliveredGuildLine(
         }
     }
 
-    CharacterDatabase.DirectExecute(
+    ExecuteLLMChatterWrite(Acore::StringFormat(
         "INSERT INTO llm_guild_session_history "
         "(session_id, guild_id, speaker_guid, "
         "speaker_name, is_bot, source_kind, "
@@ -912,13 +919,13 @@ void RecordDeliveredGuildLine(
         sourceKind,
         eventId,
         EscapeString(message),
-        guildId);
+        guildId));
 
-    CharacterDatabase.DirectExecute(
+    ExecuteLLMChatterWrite(Acore::StringFormat(
         "UPDATE llm_guild_chat_sessions "
         "SET last_activity_at = NOW() "
         "WHERE guild_id = {}",
-        guildId);
+        guildId));
 
 }
 

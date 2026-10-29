@@ -29,6 +29,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 static std::map<std::string, time_t> _ambientCooldownCache;
@@ -753,10 +754,17 @@ static uint32 GetFaction(Player* player)
     return player->GetTeamId();
 }
 
-static std::vector<Player*> GetBotsInZone(
-    uint32 zoneId, uint32 faction)
+// Collects eligible ungrouped random bots for every requested zone in a
+// single pass. RandomPlayerbotMgr::GetAllBots() returns its map by
+// value, so the copy is made once per trigger rather than once per zone,
+// and only when at least one zone actually rolled a trigger.
+static std::unordered_map<uint32, std::vector<Player*>> GetBotsInZones(
+    std::unordered_map<uint32, uint32> const& zoneFactions)
 {
-    std::vector<Player*> bots;
+    std::unordered_map<uint32, std::vector<Player*>> botsByZone;
+    if (zoneFactions.empty())
+        return botsByZone;
+
     PlayerBotMap allBots =
         sRandomPlayerbotMgr.GetAllBots();
 
@@ -770,53 +778,93 @@ static std::vector<Player*> GetBotsInZone(
         if (session && session->PlayerLoading())
             continue;
 
-        if (player->IsInWorld() && player->IsAlive())
-        {
-            if (player->GetZoneId() == zoneId
-                && GetFaction(player) == faction
-                && !IsGroupedWithRealPlayer(player))
-            {
-                bots.push_back(player);
-            }
-        }
+        if (!player->IsInWorld() || !player->IsAlive())
+            continue;
+
+        auto zone = zoneFactions.find(player->GetZoneId());
+        if (zone == zoneFactions.end()
+            || GetFaction(player) != zone->second
+            || IsGroupedWithRealPlayer(player))
+            continue;
+
+        botsByZone[zone->first].push_back(player);
     }
 
-    return bots;
+    return botsByZone;
 }
 
 static uint32 GetDominantFactionInZone(uint32 zoneId)
 {
+    // Counts come from the 1-second General audience snapshot pass,
+    // which already visits every session, instead of a fresh scan of
+    // all sessions per triggered zone.
     uint32 allianceCount = 0;
     uint32 hordeCount = 0;
-
-    WorldSessionMgr::SessionMap const& sessions =
-        sWorldSessionMgr->GetAllSessions();
-
-    for (auto const& pair : sessions)
-    {
-        WorldSession* session = pair.second;
-        if (!session || session->PlayerLoading())
-            continue;
-
-        Player* player = session->GetPlayer();
-        if (!player || !player->IsInWorld())
-            continue;
-
-        if (!IsPlayerBot(player)
-            && player->GetZoneId() == zoneId)
-        {
-            if (GetFaction(player) == TEAM_ALLIANCE)
-                allianceCount++;
-            else
-                hordeCount++;
-        }
-    }
+    GetCachedRealPlayerFactionCounts(
+        zoneId, allianceCount, hordeCount);
 
     if (allianceCount > hordeCount)
         return TEAM_ALLIANCE;
     if (hordeCount > allianceCount)
         return TEAM_HORDE;
     return urand(0, 1);
+}
+
+// Cached ambient queue depth for the MaxPendingRequests gate. The count
+// is refreshed asynchronously after each trigger instead of blocking
+// the world thread; requests queued since the refresh was issued are
+// added so the gate cannot be overrun between refreshes.
+static bool _ambientPendingKnown = false;
+static bool _ambientPendingInFlight = false;
+static uint32 _ambientPendingCount = 0;
+static uint64 _ambientQueuedTotal = 0;
+static uint64 _ambientQueuedAtRefresh = 0;
+static uint64 _ambientQueuedAtResult = 0;
+
+static void RefreshAmbientPendingCount()
+{
+    static char const* const sql =
+        "SELECT COUNT(*) FROM llm_chatter_queue "
+        "WHERE status IN ('pending', 'processing')";
+
+    if (!sLLMChatterConfig->_deliveryAsyncEnable)
+    {
+        QueryResult result = CharacterDatabase.Query(sql);
+        _ambientPendingCount = result
+            ? static_cast<uint32>(result->Fetch()[0].Get<uint64>())
+            : 0;
+        _ambientPendingKnown = true;
+        _ambientQueuedAtResult = _ambientQueuedTotal;
+        return;
+    }
+
+    if (_ambientPendingInFlight)
+        return;
+
+    _ambientPendingInFlight = true;
+    _ambientQueuedAtRefresh = _ambientQueuedTotal;
+    GetLLMChatterQueryProcessor().AddCallback(
+        CharacterDatabase.AsyncQuery(sql).WithCallback(
+            [](QueryResult result)
+            {
+                _ambientPendingInFlight = false;
+                // A failed count did not gate the legacy path either.
+                _ambientPendingCount = result
+                    ? static_cast<uint32>(
+                        result->Fetch()[0].Get<uint64>())
+                    : 0;
+                _ambientPendingKnown = true;
+                // Requests queued after the count was issued may or
+                // may not be included; assume not (conservative).
+                _ambientQueuedAtResult = _ambientQueuedAtRefresh;
+            }));
+}
+
+static uint32 GetAmbientPendingEstimate()
+{
+    return _ambientPendingCount
+        + static_cast<uint32>(
+            _ambientQueuedTotal - _ambientQueuedAtResult);
 }
 
 static std::string SelectAmbientMessageType(
@@ -1035,23 +1083,25 @@ void TryTriggerChatter(bool capitalsOnly)
     if (validZones.empty())
         return;
 
-    QueryResult countResult =
-        CharacterDatabase.Query(
-            "SELECT COUNT(*) FROM llm_chatter_queue "
-            "WHERE status IN ('pending', 'processing')");
-
-    if (countResult)
+    if (!_ambientPendingKnown)
     {
-        uint32 pending =
-            countResult->Fetch()[0].Get<uint32>();
-        if (pending >= sLLMChatterConfig
-                           ->_maxPendingRequests)
+        // First use: wait for one count rather than guessing.
+        RefreshAmbientPendingCount();
+        if (!_ambientPendingKnown)
             return;
     }
 
-    std::random_device rd;
-    std::mt19937 g(rd());
+    if (GetAmbientPendingEstimate()
+        >= sLLMChatterConfig->_maxPendingRequests)
+    {
+        RefreshAmbientPendingCount();
+        return;
+    }
 
+    // Roll every zone first so the bot population is only scanned when
+    // at least one zone triggers, and then only once for all of them.
+    std::vector<uint32> triggeredZones;
+    std::unordered_map<uint32, uint32> zoneFactions;
     for (uint32 selectedZone : validZones)
     {
         bool isCapitalCity =
@@ -1069,12 +1119,29 @@ void TryTriggerChatter(bool capitalsOnly)
         if (urand(1, 100) > triggerChance)
             continue;
 
+        triggeredZones.push_back(selectedZone);
+        zoneFactions[selectedZone] =
+            GetDominantFactionInZone(selectedZone);
+    }
+
+    if (triggeredZones.empty())
+        return;
+
+    std::unordered_map<uint32, std::vector<Player*>> botsByZone =
+        GetBotsInZones(zoneFactions);
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    for (uint32 selectedZone : triggeredZones)
+    {
+        bool isCapitalCity =
+            IsCapitalCity(selectedZone);
+
         std::string zoneName =
             GetZoneName(selectedZone);
-        uint32 faction =
-            GetDominantFactionInZone(selectedZone);
-        std::vector<Player*> bots =
-            GetBotsInZone(selectedZone, faction);
+        std::vector<Player*>& bots =
+            botsByZone[selectedZone];
 
         bots.erase(
             std::remove_if(
@@ -1136,5 +1203,8 @@ void TryTriggerChatter(bool capitalsOnly)
             botCount, isConversation,
             zoneName, selectedZone,
             messageType, tradeItem);
+        ++_ambientQueuedTotal;
     }
+
+    RefreshAmbientPendingCount();
 }

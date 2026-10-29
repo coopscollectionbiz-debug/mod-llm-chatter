@@ -5,6 +5,7 @@
 #include "LLMChatterShared.h"
 
 #include "LLMChatterConfig.h"
+#include "AsyncCallbackProcessor.h"
 #include "Channel.h"
 #include "ChannelMgr.h"
 #include "Chat.h"
@@ -82,9 +83,16 @@ std::unordered_set<uint32> _namedBossEntries;
 using GeneralAudienceSnapshot =
     std::unordered_map<uint64, uint8>;
 
+// zone id -> (alliance, horde) real-player counts.
+using RealPlayerFactionCounts =
+    std::unordered_map<uint32, std::pair<uint32, uint32>>;
+
 std::shared_mutex _generalAudienceSnapshotMutex;
 std::shared_ptr<GeneralAudienceSnapshot const>
     _generalAudienceSnapshot;
+std::shared_ptr<RealPlayerFactionCounts const>
+    _realPlayerFactionCounts;
+bool _llmChatterAsyncShutdown = false;
 
 constexpr uint8 GENERAL_AUDIENCE_ALLIANCE = 0x01;
 constexpr uint8 GENERAL_AUDIENCE_HORDE = 0x02;
@@ -1154,6 +1162,8 @@ void RefreshGeneralAudienceSnapshot()
 {
     auto snapshot =
         std::make_shared<GeneralAudienceSnapshot>();
+    auto factionCounts =
+        std::make_shared<RealPlayerFactionCounts>();
     WorldSessionMgr::SessionMap const& sessions =
         sWorldSessionMgr->GetAllSessions();
 
@@ -1177,13 +1187,78 @@ void RefreshGeneralAudienceSnapshot()
 
         (*snapshot)[MakeGeneralAudienceKey(
             player->GetMapId(), zoneId)] |= teamMask;
+
+        auto& counts = (*factionCounts)[zoneId];
+        if (teamMask == GENERAL_AUDIENCE_ALLIANCE)
+            ++counts.first;
+        else
+            ++counts.second;
     }
 
     std::shared_ptr<GeneralAudienceSnapshot const>
         published = snapshot;
+    std::shared_ptr<RealPlayerFactionCounts const>
+        publishedCounts = factionCounts;
     std::unique_lock<std::shared_mutex> lock(
         _generalAudienceSnapshotMutex);
     _generalAudienceSnapshot.swap(published);
+    _realPlayerFactionCounts.swap(publishedCounts);
+}
+
+void GetCachedRealPlayerFactionCounts(
+    uint32 zoneId, uint32& allianceCount, uint32& hordeCount)
+{
+    allianceCount = 0;
+    hordeCount = 0;
+
+    std::shared_ptr<RealPlayerFactionCounts const> counts;
+    {
+        std::shared_lock<std::shared_mutex> lock(
+            _generalAudienceSnapshotMutex);
+        counts = _realPlayerFactionCounts;
+    }
+
+    if (!counts)
+        return;
+
+    auto itr = counts->find(zoneId);
+    if (itr == counts->end())
+        return;
+
+    allianceCount = itr->second.first;
+    hordeCount = itr->second.second;
+}
+
+QueryCallbackProcessor& GetLLMChatterQueryProcessor()
+{
+    static QueryCallbackProcessor processor;
+    return processor;
+}
+
+void ProcessLLMChatterAsyncCallbacks()
+{
+    GetLLMChatterQueryProcessor().ProcessReadyCallbacks();
+}
+
+void ExecuteLLMChatterWrite(std::string const& sql)
+{
+    // The async queue is FIFO per worker; with
+    // LLMChatter.Delivery.AsyncEnable = 0 the legacy blocking write
+    // path is kept for rollback.
+    if (sLLMChatterConfig && sLLMChatterConfig->_deliveryAsyncEnable)
+        CharacterDatabase.Execute(sql);
+    else
+        CharacterDatabase.DirectExecute(sql);
+}
+
+void SetLLMChatterAsyncShutdown()
+{
+    _llmChatterAsyncShutdown = true;
+}
+
+bool IsLLMChatterAsyncShutdown()
+{
+    return _llmChatterAsyncShutdown || World::IsStopped();
 }
 
 bool HasCachedGeneralAudience(
@@ -2784,7 +2859,7 @@ void RecordPartyChatGateActivity(
         "DATE_ADD(NOW(), INTERVAL " +
         std::to_string(gap) + " SECOND)";
 
-    CharacterDatabase.DirectExecute(
+    ExecuteLLMChatterWrite(Acore::StringFormat(
         "INSERT INTO llm_party_chat_pacing "
         "(group_id, next_available_at, "
         "last_activity_at, last_policy) "
@@ -2801,7 +2876,7 @@ void RecordPartyChatGateActivity(
         EscapeString(policy),
         nextAt,
         nextAt,
-        EscapeString(policy));
+        EscapeString(policy)));
 
     if (sLLMChatterConfig->IsDebugLog())
     {

@@ -338,6 +338,40 @@ _main_client = None
 _main_client_provider = None
 _main_client_lock = threading.Lock()
 
+# The OpenAI and Anthropic SDKs default to a 10-minute timeout with
+# two retries. A stalled provider could then hold every bridge worker
+# for minutes while the lines it would produce expire undelivered.
+DEFAULT_LLM_TIMEOUT_SECONDS = 30
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 120
+DEFAULT_LLM_MAX_RETRIES = 1
+
+
+def llm_client_options(config, provider):
+    """Return SDK timeout/retry keyword arguments for a client."""
+    default_timeout = (
+        DEFAULT_OLLAMA_TIMEOUT_SECONDS
+        if provider == 'ollama'
+        else DEFAULT_LLM_TIMEOUT_SECONDS
+    )
+    try:
+        timeout = float(config.get(
+            'LLMChatter.LLM.TimeoutSeconds', default_timeout
+        ))
+    except (TypeError, ValueError):
+        timeout = float(default_timeout)
+    if timeout <= 0:
+        timeout = float(default_timeout)
+    try:
+        retries = int(config.get(
+            'LLMChatter.LLM.MaxRetries', DEFAULT_LLM_MAX_RETRIES
+        ))
+    except (TypeError, ValueError):
+        retries = DEFAULT_LLM_MAX_RETRIES
+    return {
+        'timeout': timeout,
+        'max_retries': max(0, min(retries, 5)),
+    }
+
 
 def get_llm_client(config):
     """Get or create the main LLM client.
@@ -359,6 +393,7 @@ def get_llm_client(config):
         ):
             return _main_client
 
+        options = llm_client_options(config, provider)
         if provider == 'ollama':
             import openai
             base_url = config.get(
@@ -370,6 +405,7 @@ def get_llm_client(config):
                     f"{base_url.rstrip('/')}/v1"
                 ),
                 api_key="ollama",
+                **options,
             )
         elif provider == 'openai':
             import openai
@@ -377,6 +413,7 @@ def get_llm_client(config):
                 api_key=config.get(
                     'LLMChatter.OpenAI.ApiKey', ''
                 ),
+                **options,
             )
         elif provider == 'google':
             import openai
@@ -388,6 +425,7 @@ def get_llm_client(config):
                     'LLMChatter.Google.BaseUrl',
                     GOOGLE_OPENAI_BASE_URL,
                 ),
+                **options,
             )
         elif provider == 'openrouter':
             import openai
@@ -399,6 +437,7 @@ def get_llm_client(config):
                     'LLMChatter.OpenRouter.BaseUrl',
                     OPENROUTER_BASE_URL,
                 ),
+                **options,
             }
             headers = _openrouter_headers(config)
             if headers:
@@ -411,6 +450,7 @@ def get_llm_client(config):
                     'LLMChatter.Anthropic.ApiKey',
                     '',
                 ),
+                **options,
             )
 
         _main_client_provider = provider
@@ -458,6 +498,8 @@ def call_llm(
     )
 
     t0 = time.monotonic()
+    metric_kind = 'generate'
+    failed = False
     result = None
     sys_msg, user_msg = _split_prompt(prompt)
     sent_user_msg = user_msg  # tracks actual payload
@@ -511,11 +553,19 @@ def call_llm(
         logger.error(
             "LLM call failed (%s): %s", label, exc
         )
+        failed = True
         result = None
     finally:
         duration_ms = int(
             (time.monotonic() - t0) * 1000
         )
+        try:
+            from chatter_metrics import record_provider_call
+            record_provider_call(
+                metric_kind, provider, duration_ms, not failed
+            )
+        except Exception:
+            pass
         try:
             from chatter_request_logger import (
                 log_request,
@@ -572,6 +622,7 @@ def _get_quick_analyze_client(config):
 
         # Create new client for the quick analyze
         # provider
+        options = llm_client_options(config, qa_provider)
         if qa_provider == 'ollama':
             import openai
             base_url = config.get(
@@ -583,7 +634,8 @@ def _get_quick_analyze_client(config):
             )
             _quick_analyze_client = openai.OpenAI(
                 base_url=ollama_api_url,
-                api_key="ollama"
+                api_key="ollama",
+                **options,
             )
         elif qa_provider == 'openai':
             import openai
@@ -593,7 +645,8 @@ def _get_quick_analyze_client(config):
             if not api_key:
                 return None, main_provider
             _quick_analyze_client = openai.OpenAI(
-                api_key=api_key
+                api_key=api_key,
+                **options,
             )
         elif qa_provider == 'google':
             import openai
@@ -608,6 +661,7 @@ def _get_quick_analyze_client(config):
                     'LLMChatter.Google.BaseUrl',
                     GOOGLE_OPENAI_BASE_URL,
                 ),
+                **options,
             )
         elif qa_provider == 'openrouter':
             import openai
@@ -622,6 +676,7 @@ def _get_quick_analyze_client(config):
                     'LLMChatter.OpenRouter.BaseUrl',
                     OPENROUTER_BASE_URL,
                 ),
+                **options,
             }
             headers = _openrouter_headers(config)
             if headers:
@@ -635,7 +690,8 @@ def _get_quick_analyze_client(config):
             if not api_key:
                 return None, main_provider
             _quick_analyze_client = anthropic.Anthropic(
-                api_key=api_key
+                api_key=api_key,
+                **options,
             )
         else:
             return None, main_provider
@@ -715,6 +771,8 @@ def quick_llm_analyze(
     model = resolve_model(model)
 
     t0 = time.monotonic()
+    metric_kind = 'analyze'
+    failed = False
     result = None
     sys_msg, user_msg = _split_prompt(prompt)
     sent_user_msg = user_msg
@@ -769,11 +827,19 @@ def quick_llm_analyze(
         logger.error(
             "LLM call failed (%s): %s", label, exc
         )
+        failed = True
         result = None
     finally:
         duration_ms = int(
             (time.monotonic() - t0) * 1000
         )
+        try:
+            from chatter_metrics import record_provider_call
+            record_provider_call(
+                metric_kind, provider, duration_ms, not failed
+            )
+        except Exception:
+            pass
         try:
             from chatter_request_logger import (
                 log_request,

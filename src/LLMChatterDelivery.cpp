@@ -6,6 +6,8 @@
 #include "Guild.h"
 #include "LLMChatterBossDialogue.h"
 #include "LLMChatterDelivery.h"
+#include "LLMChatterDeliveryBatch.h"
+#include "LLMChatterDeliveryPolicy.h"
 #include "LLMChatterGuild.h"
 #include "LLMChatterProximity.h"
 #include "LLMChatterShared.h"
@@ -17,19 +19,25 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Group.h"
+#include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "StringFormat.h"
+#include "Timer.h"
 #include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <limits>
 #include <map>
+#include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -197,6 +205,49 @@ bool IsFactionBoundReplyEvent(
         || eventType == "guild_login_greeting";
 }
 
+// Rows whose terminal write is queued but possibly not yet applied.
+// Delivered and dropped rows are held well past any async write lag;
+// retried rows only until their rescheduled deliver_at.
+constexpr int64 HANDLED_ROW_HOLD_SECONDS = 300;
+constexpr int64 RETRY_ROW_HOLD_SECONDS = 4;
+// A fetch that has not returned after this long is reported once.
+constexpr uint32 FETCH_STALL_WARN_MS = 15000;
+
+LLMChatterDeliveryBatch::HandledRowGuard _handledRows;
+LLMChatterDeliveryBatch::CancelledConversationGuard
+    _cancelledConversations;
+
+struct DeliveryDiagnostics
+{
+    uint64 fetches = 0;
+    uint64 rowsFetched = 0;
+    uint64 batches = 0;
+    uint64 selected = 0;
+    uint32 maxBatch = 0;
+    uint64 delivered = 0;
+    uint64 retried = 0;
+    uint64 deferred = 0;
+    uint64 guardSkipped = 0;
+    uint64 fetchLatencyTotalMs = 0;
+    uint32 fetchLatencyMaxMs = 0;
+    uint64 callbackTotalUs = 0;
+    uint32 callbackMaxUs = 0;
+    std::map<std::string, uint64> dropped;
+};
+
+DeliveryDiagnostics _diag;
+bool _fetchInFlight = false;
+uint32 _fetchIssuedMs = 0;
+bool _fetchStallWarned = false;
+time_t _lastExpireSweep = 0;
+time_t _lastDiagnosticsReport = 0;
+bool _diagnosticsQueryInFlight = false;
+
+void CountDrop(char const* reason)
+{
+    ++_diag.dropped[reason ? reason : "delivery_failed"];
+}
+
 void FinalizeDroppedMessage(
     uint32 messageId,
     uint32 eventId,
@@ -204,23 +255,33 @@ void FinalizeDroppedMessage(
     std::string const& eventType,
     char const* reason)
 {
-    CharacterDatabase.DirectExecute(
+    char const* finalReason =
+        reason ? reason : "delivery_failed";
+    CountDrop(finalReason);
+    _handledRows.Mark(
+        messageId, time(nullptr), HANDLED_ROW_HOLD_SECONDS);
+    ExecuteLLMChatterWrite(Acore::StringFormat(
         "UPDATE llm_chatter_messages "
         "SET delivered = 1, delivered_at = NOW(), "
         "drop_reason = '{}' WHERE id = {}",
-        EscapeString(reason ? reason : "delivery_failed"),
-        messageId);
+        EscapeString(finalReason),
+        messageId));
 
     if (!eventId || !IsDirectedProximityEvent(eventType))
         return;
 
-    CharacterDatabase.DirectExecute(
+    // The cancellation write may still be queued when the next fetch
+    // runs, so later lines are also blocked in memory.
+    _cancelledConversations.Cancel(
+        eventId, sequence,
+        time(nullptr) + HANDLED_ROW_HOLD_SECONDS);
+    ExecuteLLMChatterWrite(Acore::StringFormat(
         "UPDATE llm_chatter_messages "
         "SET delivered = 1, delivered_at = NOW(), "
         "drop_reason = 'cancelled_after_directed_drop' "
         "WHERE event_id = {} AND sequence > {} "
         "AND delivered = 0",
-        eventId, sequence);
+        eventId, sequence));
 
     ScheduleSceneFacingResets(
         eventId,
@@ -229,205 +290,103 @@ void FinalizeDroppedMessage(
                   ->_proxChatterFacingResetDelay
             : 0);
 }
+
+// One fetched llm_chatter_messages row plus the event and sequence
+// context that the legacy path looked up with extra blocking queries.
+struct DeliveryRow
+{
+    uint32 messageId = 0;
+    uint32 botGuid = 0;
+    std::string botName;
+    std::string message;
+    std::string channel;
+    std::string emoteName;
+    uint32 npcSpawnId = 0;
+    uint32 playerGuid = 0;
+    uint32 sequence = 0;
+    uint32 eventId = 0;
+    uint32 eventZoneId = 0;
+    uint32 groupId = 0;
+    std::string deliveryPolicy;
+    std::string deliveryReason;
+    std::string ownerSubsystem;
+    uint32 addresseePlayerGuid = 0;
+    uint32 addresseeBotGuid = 0;
+    uint32 addresseeNPCSpawnId = 0;
+    bool hasEventMapId = false;
+    uint32 eventMapId = 0;
+    std::string eventExtraData;
+    std::string eventType;
+    uint32 eventSubjectGuid = 0;
+    uint32 queueId = 0;
+    uint32 targetEntry = 0;
+    uint32 targetGuid = 0;
+    uint32 prevBotGuid = 0;
+    uint32 prevNpcSpawnId = 0;
+    bool hasLaterUndelivered = false;
+    int64 remainingUs = -1;
+};
+
+enum class DeliveryOutcome
+{
+    // Spoken; caller records delivered_at.
+    Sent,
+    // Lifetime elapsed while preparing the row; no speech/bookkeeping.
+    Expired,
+    // Not spoken and not retryable; caller records the drop reason.
+    Dropped,
+    // Transient failure; caller reschedules the row.
+    Retry,
+    // The row already wrote its own terminal state.
+    Handled,
+};
+
+template <typename T>
+T FieldOr(Field const& field, T def)
+{
+    return field.IsNull() ? def : field.Get<T>();
+}
 } // namespace
 
-void DeliverPendingMessagesImpl()
+// Speaks one fetched row on the world thread. Game objects are
+// resolved here, never in a database thread.
+static DeliveryOutcome DeliverRow(
+    DeliveryRow const& row, time_t now, std::string& dropReasonOut,
+    std::chrono::steady_clock::time_point issuedAt)
 {
-    time_t now = time(nullptr);
-    for (auto it = _sceneOriginalFacings.begin();
-         it != _sceneOriginalFacings.end();)
+    auto const withinDeadline = [&row, issuedAt]()
     {
-        if (now - it->second.updatedAt > 120)
-        {
-            uint32 staleEventId = it->first.first;
-            ScheduleSceneFacingResets(staleEventId, 0);
-            it = _sceneOriginalFacings.begin();
-        }
-        else
-            ++it;
-    }
-
-    CharacterDatabase.DirectExecute(
-        "UPDATE llm_chatter_messages "
-        "SET delivered = 1, delivered_at = NOW(), "
-        "drop_reason = 'expired_before_delivery' "
-        "WHERE delivered = 0 "
-        "AND deliver_at < DATE_SUB(NOW(), "
-        "INTERVAL 60 SECOND)");
-
-    QueryResult result;
-    // Proximity conversations are scheduled with
-    // cumulative deliver_at gaps. If one line is
-    // delivered late, gate the next line on the
-    // previous line's actual delivered_at so the
-    // conversation cannot bunch up afterward.
-    if (sLLMChatterConfig->_prioritySystemEnable
-        && sLLMChatterConfig
-               ->_priorityDeliveryOrderEnable)
-    {
-        // Ambient rows flow through llm_chatter_queue
-        // and therefore keep event_id = NULL.
-        // Treat them as lowest priority via COALESCE.
-        result = CharacterDatabase.Query(
-            "SELECT m.id, m.bot_guid, "
-            "m.bot_name, m.message, "
-            "m.channel, m.emote, "
-            "m.npc_spawn_id, m.player_guid, "
-            "m.sequence, m.event_id, e.zone_id, "
-            "m.group_id, m.delivery_policy, "
-            "m.delivery_reason, m.owner_subsystem, "
-            "m.addressee_player_guid, "
-            "m.addressee_bot_guid, "
-            "m.addressee_npc_spawn_id, "
-            "e.map_id, e.extra_data, e.event_type, "
-            "e.subject_guid "
-            "FROM llm_chatter_messages m "
-            "LEFT JOIN llm_chatter_events e "
-            "ON m.event_id = e.id "
-            "WHERE m.delivered = 0 "
-            "AND m.deliver_at <= NOW() "
-            "AND (m.channel NOT IN ('say', 'msay') "
-            "OR m.sequence = 0 "
-            "OR NOT EXISTS ("
-            "SELECT 1 FROM llm_chatter_messages p "
-            "WHERE p.event_id = m.event_id "
-            "AND p.sequence = m.sequence - 1 "
-            "AND (p.delivered = 0 "
-            "OR p.delivered_at IS NULL "
-            "OR TIMESTAMPDIFF(SECOND, "
-            "p.delivered_at, NOW()) < "
-            "TIMESTAMPDIFF(SECOND, "
-            "p.deliver_at, m.deliver_at)))) "
-            "ORDER BY COALESCE(e.priority, 0) "
-            "DESC, m.deliver_at ASC LIMIT 1");
-    }
-    else
-    {
-        result = CharacterDatabase.Query(
-            "SELECT m.id, m.bot_guid, m.bot_name, "
-            "m.message, m.channel, m.emote, "
-            "m.npc_spawn_id, m.player_guid, "
-            "m.sequence, m.event_id, e.zone_id, "
-            "m.group_id, m.delivery_policy, "
-            "m.delivery_reason, m.owner_subsystem, "
-            "m.addressee_player_guid, "
-            "m.addressee_bot_guid, "
-            "m.addressee_npc_spawn_id, "
-            "e.map_id, e.extra_data, e.event_type, "
-            "e.subject_guid "
-            "FROM llm_chatter_messages m "
-            "LEFT JOIN llm_chatter_events e "
-            "ON m.event_id = e.id "
-            "WHERE m.delivered = 0 "
-            "AND m.deliver_at <= NOW() "
-            "AND (m.channel NOT IN ('say', 'msay') "
-            "OR m.sequence = 0 "
-            "OR NOT EXISTS ("
-            "SELECT 1 FROM llm_chatter_messages p "
-            "WHERE p.event_id = m.event_id "
-            "AND p.sequence = m.sequence - 1 "
-            "AND (p.delivered = 0 "
-            "OR p.delivered_at IS NULL "
-            "OR TIMESTAMPDIFF(SECOND, "
-            "p.delivered_at, NOW()) < "
-            "TIMESTAMPDIFF(SECOND, "
-            "p.deliver_at, m.deliver_at)))) "
-            "ORDER BY m.deliver_at ASC LIMIT 1");
-    }
-
-    if (!result)
-        return;
-
-    Field* fields = result->Fetch();
-    uint32 messageId = fields[0].Get<uint32>();
-
-    // Claim the row immediately to prevent
-    // double-delivery on the next poll tick.
-    // Final delivered_at is set after send.
-    CharacterDatabase.DirectExecute(
-        "UPDATE llm_chatter_messages "
-        "SET delivered = 1, drop_reason = NULL "
-        "WHERE id = {} AND delivered = 0",
-        messageId);
-    uint32 botGuid = fields[1].Get<uint32>();
-    std::string botName =
-        fields[2].Get<std::string>();
-    std::string message =
-        fields[3].Get<std::string>();
-    std::string channel =
-        fields[4].Get<std::string>();
-    std::string emoteName =
-        fields[5].IsNull()
-            ? ""
-            : fields[5].Get<std::string>();
-    uint32 npcSpawnId =
-        fields[6].IsNull()
-            ? 0
-            : fields[6].Get<uint32>();
-    uint32 playerGuid =
-        fields[7].IsNull()
-            ? 0
-            : fields[7].Get<uint32>();
-    uint32 sequence =
-        fields[8].IsNull()
-            ? 0
-            : fields[8].Get<uint32>();
-    uint32 eventId =
-        fields[9].IsNull()
-            ? 0
-            : fields[9].Get<uint32>();
-    uint32 eventZoneId =
-        fields[10].IsNull()
-            ? 0
-            : fields[10].Get<uint32>();
-    uint32 groupId =
-        fields[11].IsNull()
-            ? 0
-            : fields[11].Get<uint32>();
-    std::string deliveryPolicy =
-        fields[12].IsNull()
-            ? ""
-            : fields[12].Get<std::string>();
-    std::string deliveryReason =
-        fields[13].IsNull()
-            ? ""
-            : fields[13].Get<std::string>();
-    std::string ownerSubsystem =
-        fields[14].IsNull()
-            ? ""
-            : fields[14].Get<std::string>();
-    uint32 addresseePlayerGuid =
-        fields[15].IsNull()
-            ? 0
-            : fields[15].Get<uint32>();
-    uint32 addresseeBotGuid =
-        fields[16].IsNull()
-            ? 0
-            : fields[16].Get<uint32>();
-    uint32 addresseeNPCSpawnId =
-        fields[17].IsNull()
-            ? 0
-            : fields[17].Get<uint32>();
-    bool hasEventMapId = !fields[18].IsNull();
-    uint32 eventMapId =
-        !hasEventMapId
-            ? 0
-            : fields[18].Get<uint32>();
-    std::string eventExtraData =
-        fields[19].IsNull()
-            ? ""
-            : fields[19].Get<std::string>();
+        int64 const elapsedUs = std::chrono::ceil<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - issuedAt).count();
+        return LLMChatterDeliveryPolicy::CheckDispatch(row.remainingUs, elapsedUs, true)
+            == LLMChatterDeliveryPolicy::DispatchDecision::Send;
+    };
+    uint32 const messageId = row.messageId;
+    uint32 const botGuid = row.botGuid;
+    std::string const& botName = row.botName;
+    std::string const& message = row.message;
+    std::string const& channel = row.channel;
+    std::string const& emoteName = row.emoteName;
+    uint32 const npcSpawnId = row.npcSpawnId;
+    uint32 const playerGuid = row.playerGuid;
+    uint32 const sequence = row.sequence;
+    uint32 const eventId = row.eventId;
+    uint32 const eventZoneId = row.eventZoneId;
+    uint32 const groupId = row.groupId;
+    std::string const& deliveryPolicy = row.deliveryPolicy;
+    std::string const& deliveryReason = row.deliveryReason;
+    std::string const& ownerSubsystem = row.ownerSubsystem;
+    uint32 const addresseePlayerGuid = row.addresseePlayerGuid;
+    uint32 const addresseeBotGuid = row.addresseeBotGuid;
+    uint32 const addresseeNPCSpawnId = row.addresseeNPCSpawnId;
+    bool const hasEventMapId = row.hasEventMapId;
+    uint32 const eventMapId = row.eventMapId;
+    std::string const& eventExtraData = row.eventExtraData;
     uint32 eventInstanceId =
         ExtractJsonUInt(
             eventExtraData, "instance_id");
-    std::string eventType =
-        fields[20].IsNull()
-            ? ""
-            : fields[20].Get<std::string>();
-    uint32 eventSubjectGuid =
-        fields[21].IsNull()
-            ? 0
-            : fields[21].Get<uint32>();
+    std::string const& eventType = row.eventType;
+    uint32 const eventSubjectGuid = row.eventSubjectGuid;
 
     // Master General-channel toggle. If General chatter is
     // disabled, deliberately consume any already-queued General
@@ -441,7 +400,7 @@ void DeliverPendingMessagesImpl()
         FinalizeDroppedMessage(
             messageId, eventId, sequence,
             eventType, "general_disabled");
-        return;
+        return DeliveryOutcome::Handled;
     }
 
     // Master GroupChatter toggle. Party/raid channels are
@@ -457,7 +416,7 @@ void DeliverPendingMessagesImpl()
         FinalizeDroppedMessage(
             messageId, eventId, sequence,
             eventType, "group_chatter_disabled");
-        return;
+        return DeliveryOutcome::Handled;
     }
 
     // Master ProximityChatter toggle. Consume already-queued
@@ -472,7 +431,7 @@ void DeliverPendingMessagesImpl()
         FinalizeDroppedMessage(
             messageId, eventId, sequence,
             eventType, "proximity_chatter_disabled");
-        return;
+        return DeliveryOutcome::Handled;
     }
     if (ownerSubsystem == "boss_dialogue"
         && !sLLMChatterConfig->_proxBossDialogueEnable)
@@ -480,7 +439,7 @@ void DeliverPendingMessagesImpl()
         FinalizeDroppedMessage(
             messageId, eventId, sequence,
             eventType, "boss_dialogue_disabled");
-        return;
+        return DeliveryOutcome::Handled;
     }
 
     // Master GuildChatter toggle. Consume already-queued
@@ -494,7 +453,7 @@ void DeliverPendingMessagesImpl()
         FinalizeDroppedMessage(
             messageId, eventId, sequence,
             eventType, "guild_chatter_disabled");
-        return;
+        return DeliveryOutcome::Handled;
     }
 
     ObjectGuid guid =
@@ -524,7 +483,7 @@ void DeliverPendingMessagesImpl()
             FinalizeDroppedMessage(
                 messageId, eventId, sequence,
                 eventType, "faction_mismatch");
-            return;
+            return DeliveryOutcome::Handled;
         }
     }
 
@@ -659,22 +618,11 @@ void DeliverPendingMessagesImpl()
 
                 if (!faced && eventId > 0)
                 {
-                    QueryResult evRes =
-                        CharacterDatabase.Query(
-                            "SELECT target_entry"
-                            ", target_guid "
-                            "FROM "
-                            "llm_chatter_events "
-                            "WHERE id = {}",
-                            eventId);
-                    if (evRes)
+                    // target_entry/target_guid arrive with the
+                    // batch fetch instead of a per-row query.
                     {
-                        Field* ef =
-                            evRes->Fetch();
-                        uint32 tEntry =
-                            ef[0].Get<uint32>();
-                        uint32 tGuid =
-                            ef[1].Get<uint32>();
+                        uint32 tEntry = row.targetEntry;
+                        uint32 tGuid = row.targetGuid;
                         if (tEntry > 0)
                         {
                             float range =
@@ -713,26 +661,12 @@ void DeliverPendingMessagesImpl()
                 {
                     if (sequence > 0 && eventId > 0)
                     {
-                        QueryResult prevRes =
-                            CharacterDatabase.Query(
-                                "SELECT bot_guid,"
-                                " npc_spawn_id"
-                                " FROM llm_chatter_messages"
-                                " WHERE event_id = {}"
-                                " AND sequence = {}"
-                                " LIMIT 1",
-                                eventId, sequence - 1);
-                        if (prevRes)
+                        // Previous speaker of this conversation,
+                        // prefetched by the batch query.
                         {
-                            Field* pf = prevRes->Fetch();
-                            uint32 prevBotGuid =
-                                pf[0].IsNull()
-                                    ? 0
-                                    : pf[0].Get<uint32>();
+                            uint32 prevBotGuid = row.prevBotGuid;
                             uint32 prevNpcSpawnId =
-                                pf[1].IsNull()
-                                    ? 0
-                                    : pf[1].Get<uint32>();
+                                row.prevNpcSpawnId;
                             if (prevNpcSpawnId)
                             {
                                 Creature* prevCreature =
@@ -868,11 +802,15 @@ void DeliverPendingMessagesImpl()
                         if (emoteName == "talk"
                             && emoteTargetName.empty())
                         {
+                            if (!withinDeadline())
+                                return DeliveryOutcome::Expired;
                             PlayUnitTextEmoteAnimation(
                                 bot, textEmoteId);
                         }
                         else
                         {
+                            if (!withinDeadline())
+                                return DeliveryOutcome::Expired;
                             SendBotTextEmote(
                                 bot, textEmoteId,
                                 emoteTargetName);
@@ -891,6 +829,8 @@ void DeliverPendingMessagesImpl()
                 Group* grp = bot->GetGroup();
                 if (grp && grp->isRaidGroup())
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     SendPartyMessageInstant(
                         bot, grp, processedMessage,
                         "");
@@ -898,6 +838,8 @@ void DeliverPendingMessagesImpl()
                 }
                 else
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     sent = ai->SayToParty(
                         processedMessage);
                 }
@@ -917,6 +859,8 @@ void DeliverPendingMessagesImpl()
                             : LANG_ORCISH,
                         bot, nullptr,
                         processedMessage);
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     grp->BroadcastPacket(
                         &data, false);
                     sent = true;
@@ -937,6 +881,8 @@ void DeliverPendingMessagesImpl()
                             : LANG_ORCISH,
                         bot, nullptr,
                         processedMessage);
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     grp->BroadcastPacket(
                         &data, false);
                     sent = true;
@@ -944,6 +890,8 @@ void DeliverPendingMessagesImpl()
             }
             else if (channel == "say")
             {
+                if (!withinDeadline())
+                    return DeliveryOutcome::Expired;
                 sent = ai->Say(processedMessage);
             }
             else if (channel == "guild")
@@ -957,6 +905,8 @@ void DeliverPendingMessagesImpl()
 
                 if (guild && session)
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     guild->BroadcastToGuild(
                         session, false,
                         processedMessage.c_str(),
@@ -982,6 +932,8 @@ void DeliverPendingMessagesImpl()
                 }
                 else
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     sent = ai->Yell(
                         processedMessage);
                 }
@@ -995,6 +947,8 @@ void DeliverPendingMessagesImpl()
 
                 if (ch)
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     ch->Say(
                         bot->GetGUID(),
                         processedMessage.c_str(),
@@ -1008,6 +962,8 @@ void DeliverPendingMessagesImpl()
                     bot,
                     ChatChannelId::LOOKING_FOR_GROUP);
 
+                if (!withinDeadline())
+                    return DeliveryOutcome::Expired;
                 sent = ai->SayToChannel(
                     processedMessage,
                     ChatChannelId::LOOKING_FOR_GROUP);
@@ -1021,6 +977,8 @@ void DeliverPendingMessagesImpl()
 
                 if (ch)
                 {
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     ch->Say(
                         bot->GetGUID(),
                         processedMessage.c_str(),
@@ -1090,6 +1048,8 @@ void DeliverPendingMessagesImpl()
                                         ch))
                                     continue;
 
+                                if (!withinDeadline())
+                                    return DeliveryOutcome::Expired;
                                 ch->Say(
                                     bot->GetGUID(),
                                     processedMessage
@@ -1195,26 +1155,10 @@ void DeliverPendingMessagesImpl()
                 }
                 if (!faced && sequence > 0 && eventId > 0)
                 {
-                    QueryResult prevRes =
-                        CharacterDatabase.Query(
-                            "SELECT bot_guid,"
-                            " npc_spawn_id"
-                            " FROM llm_chatter_messages"
-                            " WHERE event_id = {}"
-                            " AND sequence = {}"
-                            " LIMIT 1",
-                            eventId, sequence - 1);
-                    if (prevRes)
+                    // Previous speaker, prefetched by the batch query.
                     {
-                        Field* pf = prevRes->Fetch();
-                        uint32 prevBotGuid =
-                            pf[0].IsNull()
-                                ? 0
-                                : pf[0].Get<uint32>();
-                        uint32 prevNpcSpawnId =
-                            pf[1].IsNull()
-                                ? 0
-                                : pf[1].Get<uint32>();
+                        uint32 prevBotGuid = row.prevBotGuid;
+                        uint32 prevNpcSpawnId = row.prevNpcSpawnId;
                         if (prevNpcSpawnId)
                         {
                             Creature* prevCreature =
@@ -1265,6 +1209,8 @@ void DeliverPendingMessagesImpl()
                 && !emoteName.empty();
             if (!msayMessage.empty())
             {
+                if (!withinDeadline())
+                    return DeliveryOutcome::Expired;
                 speaker->Say(
                     msayMessage, LANG_UNIVERSAL);
                 sent = true;
@@ -1280,6 +1226,8 @@ void DeliverPendingMessagesImpl()
                         explicitAddressee
                             ? explicitAddressee->GetName()
                             : anchorPlayer->GetName();
+                    if (!withinDeadline())
+                        return DeliveryOutcome::Expired;
                     SendUnitTextEmote(
                         speaker, textEmoteId,
                         targetName);
@@ -1295,17 +1243,8 @@ void DeliverPendingMessagesImpl()
             if (sLLMChatterConfig
                     ->_proxChatterFacingResetDelay > 0)
             {
-                bool hasLaterLine = false;
-                if (eventId)
-                {
-                    QueryResult laterLine =
-                        CharacterDatabase.Query(
-                        "SELECT 1 FROM llm_chatter_messages "
-                        "WHERE event_id = {} AND sequence > {} "
-                        "AND delivered = 0 LIMIT 1",
-                        eventId, sequence);
-                    hasLaterLine = static_cast<bool>(laterLine);
-                }
+                bool hasLaterLine =
+                    eventId && row.hasLaterUndelivered;
                 if (!hasLaterLine && eventId)
                 {
                     ScheduleSceneFacingResets(
@@ -1361,6 +1300,8 @@ void DeliverPendingMessagesImpl()
         }
         else
         {
+            if (!withinDeadline())
+                return DeliveryOutcome::Expired;
             speaker->Yell(
                 ConvertAllLinks(message),
                 LANG_UNIVERSAL);
@@ -1372,16 +1313,7 @@ void DeliverPendingMessagesImpl()
         && playerGuid > 0
         && (channel == "say" || channel == "msay"))
     {
-        bool replyEligible = true;
-        QueryResult pendingRes =
-            CharacterDatabase.Query(
-                "SELECT 1 FROM llm_chatter_messages "
-                "WHERE event_id = {} "
-                "AND sequence > {} "
-                "AND delivered = 0 LIMIT 1",
-                eventId, sequence);
-        if (pendingRes)
-            replyEligible = false;
+        bool replyEligible = !row.hasLaterUndelivered;
 
         std::string deliveredContext = message;
         if (deliveredContext.empty()
@@ -1427,38 +1359,474 @@ void DeliverPendingMessagesImpl()
             eventId,
             botGuid,
             botName,
-            message);
+            message,
+            &eventType);
     }
 
     if (sent)
+        return DeliveryOutcome::Sent;
+
+    if (botUnavailable)
     {
-        CharacterDatabase.DirectExecute(
+        dropReasonOut = dropReason.empty()
+            ? "speaker_unavailable"
+            : dropReason;
+        return DeliveryOutcome::Dropped;
+    }
+
+    return DeliveryOutcome::Retry;
+}
+
+namespace
+{
+// Legacy behaviour expired rows 60 seconds past deliver_at; the
+// fetch excludes them directly so the expiry sweep can run less often
+// and asynchronously without ever delivering an expired row.
+constexpr uint32 DELIVERY_EXPIRY_SECONDS = 60;
+
+std::string BuildDeliveryFetchSql(bool priorityOrder, uint32 limit)
+{
+    return LLMChatterDeliveryPolicy::BuildFetchSql(
+        priorityOrder, limit, DELIVERY_EXPIRY_SECONDS);
+}
+
+std::vector<DeliveryRow> ParseDeliveryRows(QueryResult result)
+{
+    std::vector<DeliveryRow> rows;
+    if (!result)
+        return rows;
+
+    rows.reserve(result->GetRowCount());
+    do
+    {
+        Field* fields = result->Fetch();
+        DeliveryRow row;
+        row.messageId = fields[0].Get<uint32>();
+        row.botGuid = FieldOr<uint32>(fields[1], 0);
+        row.botName = FieldOr<std::string>(fields[2], "");
+        row.message = FieldOr<std::string>(fields[3], "");
+        row.channel = FieldOr<std::string>(fields[4], "");
+        row.emoteName = FieldOr<std::string>(fields[5], "");
+        row.npcSpawnId = FieldOr<uint32>(fields[6], 0);
+        row.playerGuid = FieldOr<uint32>(fields[7], 0);
+        row.sequence = FieldOr<uint32>(fields[8], 0);
+        row.eventId = FieldOr<uint32>(fields[9], 0);
+        row.eventZoneId = FieldOr<uint32>(fields[10], 0);
+        row.groupId = FieldOr<uint32>(fields[11], 0);
+        row.deliveryPolicy = FieldOr<std::string>(fields[12], "");
+        row.deliveryReason = FieldOr<std::string>(fields[13], "");
+        row.ownerSubsystem = FieldOr<std::string>(fields[14], "");
+        row.addresseePlayerGuid = FieldOr<uint32>(fields[15], 0);
+        row.addresseeBotGuid = FieldOr<uint32>(fields[16], 0);
+        row.addresseeNPCSpawnId = FieldOr<uint32>(fields[17], 0);
+        row.hasEventMapId = !fields[18].IsNull();
+        row.eventMapId = FieldOr<uint32>(fields[18], 0);
+        row.eventExtraData = FieldOr<std::string>(fields[19], "");
+        row.eventType = FieldOr<std::string>(fields[20], "");
+        row.eventSubjectGuid = FieldOr<uint32>(fields[21], 0);
+        row.queueId = FieldOr<uint32>(fields[22], 0);
+        row.targetEntry = FieldOr<uint32>(fields[23], 0);
+        row.targetGuid = FieldOr<uint32>(fields[24], 0);
+        row.prevBotGuid = FieldOr<uint32>(fields[25], 0);
+        row.prevNpcSpawnId = FieldOr<uint32>(fields[26], 0);
+        row.hasLaterUndelivered =
+            FieldOr<uint32>(fields[27], 0) != 0;
+        row.remainingUs = FieldOr<int64>(fields[28], -1);
+        rows.push_back(std::move(row));
+    } while (result->NextRow());
+
+    return rows;
+}
+
+// Chat destination used to pace delivery: at most one line per
+// destination per tick, as the legacy one-row loop guaranteed.
+std::string DeliveryDestinationKey(DeliveryRow const& row)
+{
+    std::string const& channel = row.channel;
+    if (channel == "say" || channel == "msay"
+        || channel == "myell")
+    {
+        // Local scenes are anchored to one real player.
+        return "local:" + std::to_string(row.playerGuid);
+    }
+
+    Player* bot = row.botGuid
+        ? ObjectAccessor::FindPlayer(
+            ObjectGuid::Create<HighGuid::Player>(row.botGuid))
+        : nullptr;
+
+    if (channel == "party" || channel == "raid"
+        || channel == "battleground")
+    {
+        if (row.groupId)
+            return "group:" + std::to_string(row.groupId);
+        if (bot && bot->GetGroup())
+            return "group:" + std::to_string(
+                bot->GetGroup()->GetGUID().GetCounter());
+    }
+    else if (channel == "guild")
+    {
+        if (bot && bot->GetGuildId())
+            return "guild:" + std::to_string(bot->GetGuildId());
+    }
+    else if (bot)
+    {
+        // General, trade, LFG, recruitment and yell are zone/team
+        // scoped broadcasts.
+        return channel + ":" + std::to_string(bot->GetTeamId())
+            + ":" + std::to_string(bot->GetZoneId());
+    }
+
+    // Unknown speaker: keep it from blocking anything else; delivery
+    // will drop it as unavailable.
+    return "msg:" + std::to_string(row.messageId);
+}
+
+std::string JoinIds(std::vector<uint32> const& ids)
+{
+    std::string joined;
+    for (uint32 id : ids)
+    {
+        if (!joined.empty())
+            joined += ',';
+        joined += std::to_string(id);
+    }
+    return joined;
+}
+
+void ProcessFetchedRows(QueryResult result, std::chrono::steady_clock::time_point issuedAt)
+{
+    auto const startedAt = std::chrono::steady_clock::now();
+    time_t const now = time(nullptr);
+    _handledRows.Prune(now);
+    _cancelledConversations.Prune(now);
+
+    std::vector<DeliveryRow> rows =
+        ParseDeliveryRows(std::move(result));
+    _diag.rowsFetched += rows.size();
+    if (rows.empty())
+        return;
+
+    std::vector<LLMChatterDeliveryBatch::Candidate> candidates;
+    candidates.reserve(rows.size());
+    for (DeliveryRow const& row : rows)
+    {
+        LLMChatterDeliveryBatch::Candidate candidate;
+        candidate.messageId = row.messageId;
+        if (row.eventId)
+            candidate.conversationKey =
+                "e" + std::to_string(row.eventId);
+        else if (row.queueId)
+            candidate.conversationKey =
+                "q" + std::to_string(row.queueId);
+        candidate.destinationKey = DeliveryDestinationKey(row);
+        candidate.channel = row.channel;
+        candidates.push_back(std::move(candidate));
+    }
+
+    std::unordered_set<uint32> guarded;
+    for (auto const& candidate : candidates)
+    {
+        if (_handledRows.Contains(candidate.messageId, now))
+            guarded.insert(candidate.messageId);
+    }
+
+    LLMChatterDeliveryBatch::Limits limits;
+    limits.maxBatch = sLLMChatterConfig->_deliveryBatchSize;
+    limits.maxPerChannel = sLLMChatterConfig->_deliveryMaxPerChannel;
+    LLMChatterDeliveryBatch::Selection selection =
+        LLMChatterDeliveryBatch::SelectBatch(
+            candidates, limits, guarded);
+
+    for (LLMChatterDeliveryBatch::SkipReason reason
+        : selection.reasons)
+    {
+        if (reason == LLMChatterDeliveryBatch::SkipReason
+                ::RecentlyHandled)
+            ++_diag.guardSkipped;
+        else if (reason != LLMChatterDeliveryBatch::SkipReason::None)
+            ++_diag.deferred;
+    }
+
+    std::vector<uint32> sentIds;
+    for (size_t index : selection.selected)
+    {
+        DeliveryRow const& row = rows[index];
+
+        if (_cancelledConversations.IsCancelled(
+                row.eventId, row.sequence, now))
+        {
+            // The DB cancellation is queued; record nothing more.
+            _handledRows.Mark(
+                row.messageId, now, HANDLED_ROW_HOLD_SECONDS);
+            ++_diag.guardSkipped;
+            continue;
+        }
+
+        // Recheck each row immediately before dispatch, including time spent
+        // processing earlier members of this batch. Round elapsed time up so
+        // sub-microsecond truncation cannot extend the database deadline.
+        int64 const elapsedUs = std::chrono::ceil<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - issuedAt).count();
+        auto const decision = LLMChatterDeliveryPolicy::CheckDispatch(
+            row.remainingUs, elapsedUs,
+            !IsLLMChatterAsyncShutdown() && sLLMChatterConfig
+                && sLLMChatterConfig->IsEnabled());
+        if (decision == LLMChatterDeliveryPolicy::DispatchDecision::Stop)
+            break;
+        std::string dropReason;
+        DeliveryOutcome outcome = decision == LLMChatterDeliveryPolicy::DispatchDecision::Expire
+            ? DeliveryOutcome::Expired : DeliverRow(row, now, dropReason, issuedAt);
+
+        if (sLLMChatterConfig->_deliveryVerboseLog)
+        {
+            LOG_INFO("module",
+                "[LLMChatter] delivery id={} channel={} event={} "
+                "seq={} outcome={}{}",
+                row.messageId, row.channel, row.eventId,
+                row.sequence, static_cast<uint32>(outcome),
+                dropReason.empty() ? "" : " reason=" + dropReason);
+        }
+
+        switch (outcome)
+        {
+            case DeliveryOutcome::Expired:
+                // Expiry terminates this line only, as the periodic sweep does.
+                // No successful Phase 2 confirmation for this terminal status.
+                _handledRows.Mark(row.messageId, now, HANDLED_ROW_HOLD_SECONDS);
+                ++_diag.dropped["expired_before_delivery"];
+                ExecuteLLMChatterWrite(Acore::StringFormat(
+                    "UPDATE llm_chatter_messages SET delivered = 1, "
+                    "delivered_at = NOW(), drop_reason = 'expired_before_delivery' "
+                    "WHERE id = {} AND delivered = 0", row.messageId));
+                break;
+            case DeliveryOutcome::Sent:
+                sentIds.push_back(row.messageId);
+                _handledRows.Mark(
+                    row.messageId, now, HANDLED_ROW_HOLD_SECONDS);
+                break;
+            case DeliveryOutcome::Dropped:
+                FinalizeDroppedMessage(
+                    row.messageId, row.eventId, row.sequence,
+                    row.eventType, dropReason.c_str());
+                break;
+            case DeliveryOutcome::Retry:
+                ++_diag.retried;
+                _handledRows.Mark(
+                    row.messageId, now, RETRY_ROW_HOLD_SECONDS);
+                // Reschedule for retry
+                ExecuteLLMChatterWrite(Acore::StringFormat(
+                    "UPDATE llm_chatter_messages "
+                    "SET delivered = 0, "
+                    "drop_reason = NULL, "
+                    "deliver_at = DATE_ADD("
+                    "NOW(), INTERVAL 5 SECOND) "
+                    "WHERE id = {}",
+                    row.messageId));
+                break;
+            case DeliveryOutcome::Handled:
+                _handledRows.Mark(
+                    row.messageId, now, HANDLED_ROW_HOLD_SECONDS);
+                break;
+        }
+    }
+
+    if (!sentIds.empty())
+    {
+        // One write for every line spoken this tick.
+        ExecuteLLMChatterWrite(Acore::StringFormat(
             "UPDATE llm_chatter_messages "
             "SET delivered = 1, "
             "delivered_at = NOW(), "
             "drop_reason = NULL "
-            "WHERE id = {}",
-            messageId);
+            "WHERE id IN ({})",
+            JoinIds(sentIds)));
     }
-    else if (botUnavailable)
+
+    _diag.delivered += sentIds.size();
+    ++_diag.batches;
+    _diag.selected += selection.selected.size();
+    _diag.maxBatch = std::max<uint32>(
+        _diag.maxBatch,
+        static_cast<uint32>(selection.selected.size()));
+    uint32 const elapsedUs = static_cast<uint32>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - startedAt).count());
+    _diag.callbackTotalUs += elapsedUs;
+    _diag.callbackMaxUs = std::max(_diag.callbackMaxUs, elapsedUs);
+}
+
+void SweepExpiredMessages(time_t now)
+{
+    if (now - _lastExpireSweep
+        < static_cast<time_t>(
+            sLLMChatterConfig->_deliveryExpireSweepSeconds))
+        return;
+    _lastExpireSweep = now;
+
+    ExecuteLLMChatterWrite(Acore::StringFormat(
+        "UPDATE llm_chatter_messages "
+        "SET delivered = 1, delivered_at = NOW(), "
+        "drop_reason = 'expired_before_delivery' "
+        "WHERE delivered = 0 "
+        "AND deliver_at < DATE_SUB(NOW(), "
+        "INTERVAL {} SECOND)",
+        DELIVERY_EXPIRY_SECONDS));
+}
+
+void ReportDiagnostics(time_t now)
+{
+    uint32 const interval =
+        sLLMChatterConfig->_deliveryDiagnosticsInterval;
+    if (!interval)
+        return;
+    if (!_lastDiagnosticsReport)
     {
-        FinalizeDroppedMessage(
-            messageId, eventId, sequence,
-            eventType,
-            dropReason.empty()
-                ? "speaker_unavailable"
-                : dropReason.c_str());
+        _lastDiagnosticsReport = now;
+        return;
     }
-    else
+    if (now - _lastDiagnosticsReport < static_cast<time_t>(interval))
+        return;
+    _lastDiagnosticsReport = now;
+
+    std::string drops;
+    for (auto const& [reason, total] : _diag.dropped)
     {
-        // Unclaim and reschedule for retry
-        CharacterDatabase.DirectExecute(
-            "UPDATE llm_chatter_messages "
-            "SET delivered = 0, "
-            "drop_reason = NULL, "
-            "deliver_at = DATE_ADD("
-            "NOW(), INTERVAL 5 SECOND) "
-            "WHERE id = {}",
-            messageId);
+        if (!drops.empty())
+            drops += ',';
+        drops += reason + "=" + std::to_string(total);
     }
+
+    LOG_INFO("module",
+        "[LLMChatter] delivery stats {}s: fetches={} rows={} "
+        "batches={} selected={} max_batch={} delivered={} "
+        "retried={} deferred={} guard_skipped={} "
+        "fetch_ms_avg={} fetch_ms_max={} process_us_avg={} "
+        "process_us_max={} dropped=[{}]",
+        interval, _diag.fetches, _diag.rowsFetched,
+        _diag.batches, _diag.selected, _diag.maxBatch,
+        _diag.delivered, _diag.retried, _diag.deferred,
+        _diag.guardSkipped,
+        _diag.fetches
+            ? _diag.fetchLatencyTotalMs / _diag.fetches : 0,
+        _diag.fetchLatencyMaxMs,
+        _diag.batches ? _diag.callbackTotalUs / _diag.batches : 0,
+        _diag.callbackMaxUs, drops);
+
+    _diag = DeliveryDiagnostics();
+
+    // Backlog and expiry totals come from one optional async query so
+    // the per-tick path stays unchanged when diagnostics are enabled.
+    if (_diagnosticsQueryInFlight
+        || !sLLMChatterConfig->_deliveryAsyncEnable)
+        return;
+    _diagnosticsQueryInFlight = true;
+    GetLLMChatterQueryProcessor().AddCallback(
+        CharacterDatabase.AsyncQuery(Acore::StringFormat(
+            "SELECT "
+            "SUM(delivered = 0 AND deliver_at <= NOW()) AS due_rows, "
+            "SUM(delivered = 0 AND deliver_at < DATE_SUB(NOW(), "
+            "INTERVAL {} SECOND)) AS overdue_rows, "
+            "SUM(drop_reason = 'expired_before_delivery' "
+            "AND delivered_at >= DATE_SUB(NOW(), "
+            "INTERVAL {} SECOND)) AS expired_rows "
+            "FROM llm_chatter_messages "
+            "WHERE delivered = 0 "
+            "OR delivered_at >= DATE_SUB(NOW(), INTERVAL {} SECOND)",
+            DELIVERY_EXPIRY_SECONDS, interval, interval))
+            .WithCallback([interval](QueryResult result)
+            {
+                _diagnosticsQueryInFlight = false;
+                if (!result || IsLLMChatterAsyncShutdown())
+                    return;
+                Field* fields = result->Fetch();
+                LOG_INFO("module",
+                    "[LLMChatter] delivery backlog: due={} "
+                    "overdue={} expired_last_{}s={}",
+                    FieldOr<std::string>(fields[0], "0"),
+                    FieldOr<std::string>(fields[1], "0"),
+                    interval,
+                    FieldOr<std::string>(fields[2], "0"));
+            }));
+}
+} // namespace
+
+void DeliverPendingMessagesImpl()
+{
+    time_t now = time(nullptr);
+    for (auto it = _sceneOriginalFacings.begin();
+         it != _sceneOriginalFacings.end();)
+    {
+        if (now - it->second.updatedAt > 120)
+        {
+            uint32 staleEventId = it->first.first;
+            ScheduleSceneFacingResets(staleEventId, 0);
+            it = _sceneOriginalFacings.begin();
+        }
+        else
+            ++it;
+    }
+
+    if (IsLLMChatterAsyncShutdown())
+        return;
+
+    ReportDiagnostics(now);
+    SweepExpiredMessages(now);
+
+    if (_fetchInFlight)
+    {
+        // Never stack fetches behind a slow database; report once.
+        if (!_fetchStallWarned
+            && GetMSTimeDiffToNow(_fetchIssuedMs) > FETCH_STALL_WARN_MS)
+        {
+            _fetchStallWarned = true;
+            LOG_WARN("module",
+                "[LLMChatter] delivery fetch still pending after {} ms",
+                GetMSTimeDiffToNow(_fetchIssuedMs));
+        }
+        return;
+    }
+
+    bool const priorityOrder =
+        sLLMChatterConfig->_prioritySystemEnable
+        && sLLMChatterConfig->_priorityDeliveryOrderEnable;
+    std::string sql = BuildDeliveryFetchSql(
+        priorityOrder, sLLMChatterConfig->_deliveryCandidateLimit);
+
+    ++_diag.fetches;
+    _fetchIssuedMs = getMSTime();
+    auto const issuedAt = std::chrono::steady_clock::now();
+
+    if (!sLLMChatterConfig->_deliveryAsyncEnable)
+    {
+        // Rollback path: the same batch logic on a blocking query.
+        QueryResult result = CharacterDatabase.Query(sql);
+        _diag.fetchLatencyTotalMs += GetMSTimeDiffToNow(_fetchIssuedMs);
+        ProcessFetchedRows(std::move(result), issuedAt);
+        return;
+    }
+
+    _fetchInFlight = true;
+    _fetchStallWarned = false;
+    GetLLMChatterQueryProcessor().AddCallback(
+        CharacterDatabase.AsyncQuery(sql).WithCallback(
+            [issuedAt](QueryResult result)
+            {
+                // Runs on the world thread from
+                // ProcessLLMChatterAsyncCallbacks(); only plain row
+                // data crosses from the database thread.
+                _fetchInFlight = false;
+                uint32 const latency =
+                    GetMSTimeDiffToNow(_fetchIssuedMs);
+                _diag.fetchLatencyTotalMs += latency;
+                _diag.fetchLatencyMaxMs =
+                    std::max(_diag.fetchLatencyMaxMs, latency);
+
+                if (IsLLMChatterAsyncShutdown()
+                    || !sLLMChatterConfig
+                    || !sLLMChatterConfig->IsEnabled())
+                    return;
+
+                ProcessFetchedRows(std::move(result), issuedAt);
+            }));
 }

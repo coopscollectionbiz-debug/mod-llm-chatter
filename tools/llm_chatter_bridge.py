@@ -87,6 +87,8 @@ from chatter_event_registry import (
 )
 from llm_compat import describe_model_compatibility
 from chatter_llm import compatible_reasoning_effort
+from chatter_delivery_pressure import optional_generation_blocked
+from chatter_metrics import maybe_report, record_skip
 
 # Configure logging
 logging.basicConfig(
@@ -134,29 +136,39 @@ def process_conversation(
     )
 
 
+STALE_SWEEP_INTERVAL_SECONDS = 30
+_last_stale_sweep = 0.0
+
+
 def process_pending_requests(
     db, client: anthropic.Anthropic, config: dict
 ):
     """Process all pending chatter requests."""
+    global _last_stale_sweep
     cursor = db.cursor(dictionary=True)
 
-    # Cancel stale pending requests (older than 5 minutes)
-    cursor.execute("""
-        UPDATE llm_chatter_queue
-        SET status = 'cancelled'
-        WHERE status = 'pending'
-          AND created_at < NOW() - INTERVAL 5 MINUTE
-    """)
-    # Mark stale undelivered messages as delivered so
-    # C++ never picks them up (e.g. from a previous
-    # session before the player logged out).
-    cursor.execute("""
-        UPDATE llm_chatter_messages
-        SET delivered = 1
-        WHERE delivered = 0
-          AND deliver_at < NOW() - INTERVAL 5 MINUTE
-    """)
-    db.commit()
+    # This job is resubmitted every bridge poll (~5x per second); the
+    # five-minute staleness sweeps only need to run occasionally.
+    now = time.monotonic()
+    if now - _last_stale_sweep >= STALE_SWEEP_INTERVAL_SECONDS:
+        _last_stale_sweep = now
+        # Cancel stale pending requests (older than 5 minutes)
+        cursor.execute("""
+            UPDATE llm_chatter_queue
+            SET status = 'cancelled'
+            WHERE status = 'pending'
+              AND created_at < NOW() - INTERVAL 5 MINUTE
+        """)
+        # Mark stale undelivered messages as delivered so
+        # C++ never picks them up (e.g. from a previous
+        # session before the player logged out).
+        cursor.execute("""
+            UPDATE llm_chatter_messages
+            SET delivered = 1
+            WHERE delivered = 0
+              AND deliver_at < NOW() - INTERVAL 5 MINUTE
+        """)
+        db.commit()
 
     # Get pending requests
     cursor.execute("""
@@ -2097,6 +2109,20 @@ def main():
                     cleanup_stale_groups(db)
                     last_cleanup = current_time
 
+                # Optional ambient/idle generation waits while the
+                # worldserver is behind on delivery; player replies
+                # and gameplay events are dispatched regardless.
+                delivery_pressure = (
+                    players_online
+                    and optional_generation_blocked(db, config)
+                )
+                if delivery_pressure:
+                    record_skip('delivery_backlog_polls')
+                maybe_report(config, {
+                    'active_event_workers': len(active_futures),
+                    'delivery_pressure': bool(delivery_pressure),
+                })
+
                 # DB state snapshot for log viewer
                 if (
                     snapshot_dir
@@ -2113,14 +2139,16 @@ def main():
                 # Legacy requests (General ambient chatter)
                 # Runs freely every cycle — no deferral
                 if players_online and not legacy_future:
-                    legacy_future = (
-                        executor.submit(
-                            _run_in_worker,
-                            "legacy-requests",
-                            process_pending_requests,
-                            client, config
+                    # ...except while delivery is behind.
+                    if not delivery_pressure:
+                        legacy_future = (
+                            executor.submit(
+                                _run_in_worker,
+                                "legacy-requests",
+                                process_pending_requests,
+                                client, config
+                            )
                         )
-                    )
 
                 if (
                     players_online
@@ -2205,6 +2233,7 @@ def main():
                     and use_event_system
                     and group_chatter_enabled
                     and not idle_chatter_future
+                    and not delivery_pressure
                     and current_time
                     - last_idle_check
                     >= idle_check_interval
@@ -2225,6 +2254,7 @@ def main():
                     and use_event_system
                     and group_chatter_enabled
                     and not bot_question_future
+                    and not delivery_pressure
                     and current_time
                     - last_question_check
                     >= question_check_interval

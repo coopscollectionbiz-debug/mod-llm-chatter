@@ -289,7 +289,15 @@ public:
               "LLMChatterWorldScript",
               {WORLDHOOK_ON_AFTER_CONFIG_LOAD,
                   WORLDHOOK_ON_STARTUP,
-                  WORLDHOOK_ON_UPDATE}) {}
+                  WORLDHOOK_ON_UPDATE,
+                  WORLDHOOK_ON_SHUTDOWN}) {}
+
+    void OnShutdown() override
+    {
+        // Pending async callbacks may still complete during shutdown;
+        // they must not deliver chat or touch game objects.
+        SetLLMChatterAsyncShutdown();
+    }
 
     void OnAfterConfigLoad(bool reload) override
     {
@@ -353,6 +361,10 @@ public:
 
     void OnUpdate(uint32 /*diff*/) override
     {
+        // Completed module queries run here, on the world thread.
+        // Drained even when disabled so in-flight state resets.
+        ProcessLLMChatterAsyncCallbacks();
+
         UpdatePendingGuildLoginGreetings();
 
         if (!sLLMChatterConfig->IsEnabled())

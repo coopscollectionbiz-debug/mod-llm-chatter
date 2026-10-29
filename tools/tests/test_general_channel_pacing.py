@@ -361,7 +361,9 @@ def test_cpp_player_reply_delivery_rechecks_faction():
     ):
         assert f'eventType == "{event_type}"' in source
     assert 'eventType == "bot_group_general_reaction"' not in source
-    assert 'e.subject_guid' in source
+    query = (TOOLS_DIR.parent / 'src' / 'LLMChatterDeliveryPolicy.h').read_text(encoding='utf-8')
+    assert 'e.subject_guid' in query
+    assert 'BuildFetchSql(' in source
     assert 'subject->GetTeamId()' in source
     assert '!= bot->GetTeamId()' in source
     assert '"faction_mismatch"' in source
