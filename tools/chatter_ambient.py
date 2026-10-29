@@ -4,6 +4,7 @@ N9/N10 moved statement and conversation
 processing from the bridge.
 """
 
+from chatter_rss import select_topic, attach_context, TOPIC_HINT
 from chatter_relationships import ambient_context
 from chatter_personality import willing_to_speak
 
@@ -2080,6 +2081,7 @@ def process_statement(
 
     # Build appropriate prompt
     chosen_topic = ""
+    rss_selection = None
     if msg_type == "plain":
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
@@ -2087,6 +2089,10 @@ def process_statement(
             else GENERAL_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
+        if request.get('message_type', 'plain') == 'plain':
+            rss_selection = select_topic(config, [bot], 'ambient_statement')
+        if rss_selection:
+            topic = TOPIC_HINT
         chosen_topic = topic
 
         # Creature names are strong prompt context, so only provide them
@@ -2184,6 +2190,8 @@ def process_statement(
             area_id=area_id,
             length_hint=rng_length,
         )
+
+    prompt = attach_context(prompt, rss_selection, zone_meta)
 
     # Call LLM
     if speaker_talent:
@@ -2389,6 +2397,7 @@ def process_conversation(
 
     # Build prompt
     chosen_topic = ""
+    rss_selection = None
     if msg_type == "plain":
         topic_pool = (
             AMBIENT_CHAT_TOPICS_RP
@@ -2396,6 +2405,10 @@ def process_conversation(
             else GENERAL_CHAT_TOPICS
         )
         topic = random.choice(topic_pool)
+        if request.get('message_type', 'plain') == 'plain':
+            rss_selection = select_topic(config, bots, 'ambient_conv')
+        if rss_selection:
+            topic = TOPIC_HINT
         chosen_topic = topic
 
         # As with statements, ordinary Normal-mode General conversations
@@ -2461,6 +2474,8 @@ def process_conversation(
         raise ValueError(
             f"Unsupported ambient conversation type: {msg_type}"
         )
+
+    prompt = attach_context(prompt, rss_selection, zone_meta)
 
     # Call LLM
     conversation_max_tokens = int(

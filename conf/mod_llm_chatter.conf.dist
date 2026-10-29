@@ -3206,3 +3206,31 @@ LLMChatter.Relationships.RetentionDays = 90
 LLMChatter.Relationships.ContextChars = 1200
 LLMChatter.Relationships.RecallCooldownSeconds = 600
 LLMChatter.Relationships.RecallChance = 20
+
+
+# [BRIDGE] Optional RSS topics, NORMAL mode only. Disabled by default.
+# No new chatter triggers or LLM calls. Only plain General ambience and guild idle
+# requests can select one relevant entry after existing participation/pacing gates.
+LLMChatter.RSS.Enable = 0
+# Explicit category::URL entries, separated by |, maximum 8 feeds.
+# Categories: gaming, technology, sports, entertainment, science, general.
+# Example syntax only; replace example.org with verified public feeds:
+# LLMChatter.RSS.Feeds = gaming::https://news.example.org/gaming.xml|science::https://news.example.org/science.xml
+LLMChatter.RSS.Feeds =
+# Separate optional bridge-owned SQLite cache; no profile/relationship reset.
+# Default: tools/state/rss.sqlite3 beside the bridge. Use a persistent volume.
+# LLMChatter.RSS.Path = "/persistent/rss.sqlite3"
+LLMChatter.RSS.RefreshMinutes = 180
+LLMChatter.RSS.TimeoutSeconds = 5
+LLMChatter.RSS.MaxResponseKB = 256
+LLMChatter.RSS.MaxArticles = 64
+LLMChatter.RSS.MaxAgeHours = 72
+# Maximum selection chance, further reduced by stable GUID-based news appetite.
+LLMChatter.RSS.TopicChance = 5
+# Realm-wide cooldowns; reservations also count when a model ignores the article.
+LLMChatter.RSS.TopicCooldownMinutes = 60
+LLMChatter.RSS.ArticleCooldownMinutes = 360
+LLMChatter.RSS.ArticleDailyLimit = 2
+LLMChatter.RSS.BotArticleCooldownHours = 24
+# Total added RSS system + data characters, not a per-article token budget.
+LLMChatter.RSS.ContextChars = 1100

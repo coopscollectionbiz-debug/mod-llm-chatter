@@ -1257,6 +1257,8 @@ def main():
     configure_personalities(config)
     from chatter_relationships import configure as configure_relationships
     configure_relationships(config)
+    from chatter_rss import configure as configure_rss, schedule_refresh
+    configure_rss(config)
     init_group_config(config)
     init_general_config(config)
 
@@ -2109,6 +2111,9 @@ def main():
                         db, snapshot_dir
                     )
                     last_db_snapshot = current_time
+
+                # RSS only refreshes shared data in an existing background worker.
+                schedule_refresh(executor, active=players_online)
 
                 # Legacy requests (General ambient chatter)
                 # Runs freely every cycle — no deferral
