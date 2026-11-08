@@ -650,6 +650,18 @@ def call_llm(
             )
         except Exception:
             pass
+    if result:
+        # Grounding guards on every surface (invented own stats, guessed drop
+        # sources). A discarded reply behaves like a failed request: silence,
+        # or the reactive path's evidence-only fallback.
+        from chatter_surfaces import check_reply
+        rejected = check_reply(result, prompt, label)
+        if rejected:
+            logger.info("LLM reply discarded (%s): %s", label, rejected)
+            _note_skip(f'reply.{rejected}')
+            if metadata is not None:
+                metadata['rejected'] = rejected
+            result = None
     return result
 
 

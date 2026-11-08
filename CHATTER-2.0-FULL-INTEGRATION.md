@@ -129,13 +129,15 @@ Patch 1's scoped delivery calls `Channel::CanSpeak`. That member exists only in 
 - **Unsupported live claims.** A reply asserting low mana or a sighting without the speaker's own matching evidence went out with only an `alive` claim, so delivery could not catch it. `chatter_dialogue.unsupported_claim` now silences such replies; the `rejected` reason appears in the trace.
 - **`@BotName …` conversation was silenced** by 2.0's social layer. Fixed.
 
+- **Grounding guards (real-model findings).** `chatter_surfaces.SOURCE_RULE` and `check_reply` cover every surface. They block health/mana numbers or wording the prompt never gave, and drop sources named without a verified `loot` record. A discarded reply behaves like a failed request.
+
 ## 9. Results
 
 Full numbers are in `CHATTER-2.0-TEST-RESULTS.md` (the "Full integration" sections). In brief:
 
-- **Unit tests.** 567 passed offline (571 with the disposable MySQL), 0 failed.
+- **Unit tests.** 589 passed offline (593 with the disposable MySQL), 0 failed.
 - **C++ policy tests.** Green on MSVC and on GCC 15.2 `-Werror`.
 - **Builds.** Windows staging and Linux/GCC (`source-next` copy) both exit 0.
 - **Real-client end-to-end runs.** A headless 3.3.5a client on an isolated realm passed 12/12 with a Human companion and 12/12 with a Worgen companion. The Patch 1 rollback on the migrated schema passed 6/6.
 - **Benchmarks.** The bridge engine handles 1.5k–4k simulated bots at about 60 µs per event and ≤ 0.6% of one core. A provider outage is capped at 20 requests per 120 s.
-- **Real-model evaluation (42 gpt-4o-mini requests).** Persona, format and grounding with DATA are good. Without DATA the model guessed drop sources 6/6 times, and it invented mana percentages in 2/27 event lines (see TEST-RESULTS).
+- **Real-model evaluation.** 42 plus 15 gpt-4o-mini requests. Persona, format and DATA grounding are good. The guessed drop sources and invented health/mana it found are now blocked on every surface by `SOURCE_RULE` and `check_reply`. Replayed through the final code, the re-run sends 0 such lines.

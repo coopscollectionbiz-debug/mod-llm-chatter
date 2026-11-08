@@ -54,7 +54,7 @@ Take these before deploying:
 
 ## 5. Compatibility checks before rollout
 
-1. **Test suite.** Run `python -m pytest tools/tests -q` on the target host. Expected: **567 passed, 4 skipped**, or 571 passed with a disposable MySQL on 3337.
+1. **Test suite.** Run `python -m pytest tools/tests -q` on the target host. Expected: **589 passed, 4 skipped**, or 593 passed with a disposable MySQL on 3337.
 2. **Schema.** After the migration, confirm the `claim_json` column and the `bot_player_whisper` ENUM value exist.
 3. **Legacy dry run.** With `Dialogue.Pipeline=1` and `Whisper.Enable=0`, behaviour must match Patch 1.
 4. **Playerbots commands** (with the Playerbots branch):
@@ -93,6 +93,7 @@ Take these before deploying:
   - Decision reasons: `not_addressed_to_bots`, `already_answered`, `conversation_moved_on`, `playerbot_command`, `not_admitted`.
   - Rejection rates: `rejected=unsupported_power_claim` and `unsupported_sighting_claim`.
 - **`chatter_surfaces.stats()` counters.** Per surface: `player_precedence`, `conversation_active`, `initiation_gap`, `chain_limit`, `repeat_dropped`, `knowledge`, `rss`. If ambient volume drops too far, lower `Lifecycle.PlayerQuietSeconds` or `InitiationGapSeconds`.
+- **Grounding guards.** `skipped.llm.reply.invented_self_stat` and `skipped.llm.reply.ungrounded_source`, plus the `*.source_unknown` counter in `chatter_surfaces.stats()`.
 - **`[DIAG]`.** `llm.circuit_open`, `llm.deadline`, provider latency and failures.
 - **Delivery `fetch_ms_avg/max`.** A multi-second max was seen once while a bridge was restarting.
 
@@ -116,10 +117,7 @@ Personalities, relationships and memories are untouched in both cases.
 
 ## 9. Known limitations and remaining blockers
 
-- **Real-model evaluation (gpt-4o-mini, 42 requests).** Tone, persona and format are good, and linked-quest answers with DATA are correct. Two problems remain:
-  - **Drop-source guesses without DATA.** 6/6 replies named a drop source, some wrong (wool from sheep).
-  - **Invented mana percentages.** 2/27 event lines stated a number the prompt never gave.
-  - **Recommended before production:** extend the claim guard to numeric self-state on all surfaces, and make uncertain item questions defer instead of guessing. See TEST-RESULTS, "Real-model evaluation".
+- **Real-model evaluation.** 42 plus 15 gpt-4o-mini requests. Tone, persona and format are good, and answers are correct when DATA is present. Without DATA the model guessed drop sources and invented its own health/mana. The new grounding guards (`SOURCE_RULE` and `check_reply`) now stop both on every surface. Replayed through the final code, the re-run sends 0 such lines. **Trade-off:** a direct "where does X drop?" with no data gets an honest "not sure" or no reply. Watch the `skipped.llm.reply.*` metrics after rollout.
 - **Reactive General end to end.** Not exercised on staging, because it needs random bots in the speaker's zone. It is covered by mocked tests and the Patch 1 smoke.
 - **World-thread cost at 3–4k bots.** Not profiled on a populated server. The bridge engine itself was benchmarked to 4k bots at under 0.6% of one core.
 - **Quest eligibility.** Never asserted, including Individual Progression.

@@ -32,6 +32,7 @@ from functools import wraps
 import inspect
 import json
 import logging
+import re
 import time
 
 import chatter_lifecycle
@@ -437,6 +438,89 @@ def _rss(policy, label, config, metadata):
     return select_topic(config, speakers[:policy.max_speakers], label)
 
 
+# -- grounding guards (real-model evaluation findings) -----------------------
+#
+# gpt-4o-mini named drop sources it had no data for (6/6, some wrong) and
+# invented its own mana percentage on event surfaces (2/27). Prompt rules
+# alone did not stop either, so call_llm also checks the reply.
+
+SOURCE_RULE = ('SOURCE RULE: DATA has no verified source for what the player is asking about. Do not name '
+               'mobs, creature types, zones, NPCs or vendors as where it drops, comes from or is sold. Say you '
+               'are not sure, or suggest checking, in your own voice.')
+_SOURCE_QUESTION = re.compile(
+    r"\b(where|who|what)\b[^?.!]{0,60}\b(drops?|dropped|loot(?:s|ed)?|farm|get|find|buy|sells?|comes? from|"
+    r"obtain)\b|\bwhat drops\b", re.I)
+_SOURCE_CLAIM = re.compile(
+    r"\b(drops? (?:from|off)|dropped by|drop from|loot(?:s|ed)? (?:from|off)|comes? from|sold by|sells? (?:it|them)|"
+    r"farm (?:it|them) (?:from|in|at|off)|you can (?:get|find|buy|farm) [^.!?]{0,50}\b(?:from|at|in|off)\b|"
+    r"from (?:killing )?[a-z' -]{0,30}\b(?:mobs?|humanoids?|sheep|gnolls?|murlocs?|kobolds?|wolves|wolf|"
+    r"spiders?|boars?|bandits?|defias|trolls?|ogres?|vendors?))", re.I)
+_SOURCE_LINE = re.compile(r'"kind":"loot","source":"server_data","status":"(verified|incomplete search)')
+_SELF_STAT = re.compile(
+    r"\b(\d{1,3})\s*%\s*(?:mana|health|hp)\b|\b(?:mana|health|hp)\s*(?:is\s*)?(?:at\s*)?(\d{1,3})\s*%", re.I)
+
+
+# Word-form own-state claims ("i'm at half health", "full mana", "low on hp").
+# Allowed only when the prompt carries the speaker's health/mana state at all.
+_SELF_STATE_WORDS = re.compile(
+    r"\b(?:i'?m|i am|im|me|my)\b[^.!?]{0,20}\b(?:at |on )?(?:half|full|low|quarter|no)\s+(?:on\s+)?"
+    r"(?:health|hp|mana)\b|\blow on (?:health|hp)\b|\bnearly dead\b", re.I)
+_STATE_IN_PROMPT = re.compile(r"\d{1,3}\s*%\s*(?:health|mana|hp)|_pct\"?\s*[:=]|"
+                              r"\b(?:critically wounded|low on (?:health|mana))\b", re.I)
+
+
+def _player_text(current):
+    return str((current.extra.get('player_message') if current is not None else '') or '')
+
+
+def source_question(text):
+    return bool(text and _SOURCE_QUESTION.search(text))
+
+
+def has_source_data(prompt_text):
+    """DATA carries a found/partial loot-source record (the only verified 'where it drops')."""
+    return bool(_SOURCE_LINE.search(prompt_text or ''))
+
+
+def _stat_supported(number, prompt_text):
+    n = re.escape(str(int(number)))
+    return bool(re.search(rf'(?<!\d){n}\s*%|_pct"?\s*[:=]\s*{n}(?!\d)', prompt_text or ''))
+
+
+def check_reply(response, prompt, label):
+    """Reason to discard a model reply, or ''. Never raises.
+
+    - ``invented_self_stat``: a concrete health/mana percentage the prompt never gave.
+    - ``ungrounded_source``: the player asked where something comes from, DATA
+      has no verified source, and the reply names one anyway.
+    """
+    if not _enabled or not response:
+        return ''
+    try:
+        current = _dispatch.get()
+        policy = surface_for(label, current.event_type if current else '')
+        if policy.exempt:
+            return ''
+        # Models often emit typographic apostrophes ("i’m"); compare on ASCII.
+        text = str(response).replace('’', "'").replace('‘', "'")
+        prompt_text = str(prompt)
+        for match in _SELF_STAT.finditer(text):
+            number = match.group(1) or match.group(2)
+            if not _stat_supported(number, prompt_text):
+                _count(f'{policy.name}.invented_self_stat')
+                return 'invented_self_stat'
+        if _SELF_STATE_WORDS.search(text) and not _STATE_IN_PROMPT.search(prompt_text):
+            _count(f'{policy.name}.invented_self_stat')
+            return 'invented_self_stat'
+        if (source_question(_player_text(current)) and not has_source_data(prompt_text)
+                and _SOURCE_CLAIM.search(text)):
+            _count(f'{policy.name}.ungrounded_source')
+            return 'ungrounded_source'
+    except Exception:
+        LOG.debug('surface reply check skipped for %s', label, exc_info=True)
+    return ''
+
+
 def apply(prompt, label, config, metadata=None):
     """Add the surface's shared context to ``prompt``. Never raises."""
     if not _enabled:
@@ -453,11 +537,22 @@ def _apply(prompt, label, config, metadata):
     current = _dispatch.get()
     policy = surface_for(label, current.event_type if current else '')
     _count(f'apply.{policy.name}')
-    if policy.exempt or policy.handled:
+    if policy.exempt:
         return prompt
     from chatter_shared import PromptParts
     system_add = []
     user_add = ''
+    # Every surface, including the 2.0 reactive ones: a "where does X drop?"
+    # question with no verified source in DATA must not get a guessed source.
+    if source_question(_player_text(current)) and not has_source_data(str(prompt)):
+        system_add.append(SOURCE_RULE)
+        _count(f'{policy.name}.source_unknown')
+    if policy.handled:
+        if not system_add:
+            return prompt
+        if hasattr(prompt, 'system_prompt'):
+            return PromptParts(prompt.user_prompt, (prompt.system_prompt + '\n' + SOURCE_RULE).strip())
+        return PromptParts(str(prompt), SOURCE_RULE)
     if policy.rules:
         system_add.append(f'SURFACE ({policy.name}, heard by: {policy.channel}): {policy.rules}')
     evidence = _knowledge(policy, current, config)

@@ -139,7 +139,7 @@ python tools/tests/integration/real_model_eval.py --out eval_out     # dry run: 
 
 | Check | Result |
 |---|---|
-| Offline suite | **567 passed**, 4 skipped (the real-MySQL tests, run below), 3 subtests, 0 failed |
+| Offline suite | **589 passed**, 4 skipped (the real-MySQL tests), 3 subtests, 0 failed (567 before the grounding guards) |
 | Offline suite with the disposable MySQL on 3337 | **571 passed, 0 skipped**, 0 failed |
 | New tests | `test_who_routing.py` (23; an 18-case table run against 3 implementations), `test_chatter2_surfaces.py` (24), `test_chatter2_privacy.py` (13), `test_headless_client.py` (4) |
 | Standalone C++, MSVC `/W4 /WX` | claim/route policy, delivery batch, and who routing (both the chatter and the Playerbots header): all pass |
@@ -245,7 +245,7 @@ Logs from these runs are kept in `C:\WHE-Staging\Chatter2\logs\e2e*\`: `e2e_resu
 
 - **Run.** 42 paid requests: 14 scenarios × 3 runs, OpenAI `gpt-4o-mini` (the production model), using the key from the installed config. The key was passed only to the eval process, never printed, and does not appear in any output file.
 - **Prompts.** Reactive scenarios use the candidate's `build_reply_prompt`. The other surfaces go through `call_llm` with the shared surface engine. Knowledge lookups were off, so only the evidence placed in each scenario was available.
-- **Outputs.** In `C:\WHE-Staging\Chatter2\eval_out\`: `prompts.json`, `replies.json` and `report.json`.
+- **Outputs.** In `C:\WHE-Staging\Chatter2\eval_out_run1\`: `prompts.json`, `replies.json` and `report.json`.
 
 | Measure (42 replies) | Result |
 |---|---|
@@ -268,3 +268,40 @@ Logs from these runs are kept in `C:\WHE-Staging\Chatter2\logs\e2e*\`: `e2e_resu
 - **Self-stat claims.** The existing `unsupported_claim` guard only covers reactive replies and low-power wording. It does not catch "70% mana" on event surfaces. A guard for numeric self-state on all surfaces is recommended before production (§9 of the deployment plan).
 
 The scorer was tightened after a first pass undercounted: it now catches numeric self-stats and hedged drop claims. The saved replies were rescored offline with `--rescore`, with no extra requests.
+
+
+### Grounding guards and focused re-run (after the first evaluation)
+
+**Guards added to the shared engine.** They apply on every surface, reactive and event, and are inert under `Pipeline=1`.
+
+- **`SOURCE_RULE`.**
+  - **When it applies.** The player asks where something drops, comes from, or is sold, and DATA has no found or partial `loot` record.
+  - **What it does.** It adds a system rule that forbids naming mobs, creature types, zones, NPCs or vendors. The model is told to say it is not sure, in its own voice.
+- **`check_reply` in `call_llm`.** It discards a reply that falls into either case below. A discarded reply behaves like a failed request: silence, or the reactive path's evidence-only fallback.
+  - **`invented_self_stat`.**
+    - A health or mana percentage the prompt never gave.
+    - A word-form own state such as "i'm at half health", "low on hp" or "full mana" when the prompt has no health or mana state.
+    - Typographic apostrophes are normalised before this check.
+  - **`ungrounded_source`.** The player asked where something comes from, DATA has no verified source, and the reply names one anyway.
+- **Visibility.** The reason is recorded in `metadata['rejected']`, in the reactive trace as `rejected`, and as `skipped.llm.reply.<reason>` metrics.
+- **Tests.** `tools/tests/test_chatter2_grounding.py` (22 tests) uses the exact failing replies from the evaluation, plus legitimate ones that must still pass:
+  - evidence-backed "22% mana";
+  - "45% health" when the prompt gives it;
+  - "boss is at 20%";
+  - "that dropped from vancleef" without a source question;
+  - honest "not sure".
+
+**Focused re-run.** 15 paid requests, authorised: the five previously failing scenarios × 3, same model and key handling. Outputs are in `C:\WHE-Staging\Chatter2\eval_out_run2\`, where `replies.json` records both what the model said and what would be sent.
+
+| Scenario | Before guards (run 1) | Model output with `SOURCE_RULE` (run 2) | Sent with the final guards (replayed offline) |
+|---|---|---|---|
+| "where does linen cloth drop" (no DATA) | 3/3 named a source | 1/3 "not sure, might wanna check a resource"; 2/3 "not sure, maybe from humanoids…" | 1 honest "not sure"; **2 discarded (`ungrounded_source`)** |
+| "anyone know where the wool drops?" (no DATA) | 3/3 named a source (sheep) | **3/3 "not sure", suggests the AH or a guide** | 3 sent, all honest |
+| Combat (no state in prompt) | 1/3 "i'm at 70% mana" | 0/3 claims | 3 sent |
+| Raid pull (no state in prompt) | 1/3 "i'm at 60% mana" | 2/3 "i'm at half health" | **2 discarded (`invented_self_stat`)**, 1 sent |
+| "heals ready?" (low-mana evidence, 22%) | 1/3 mentioned low mana | 3/3 used it ("got 22% mana", "need some mana back") | 3 sent (evidence-backed) |
+
+- **Run 2 as sent live.** It was sent before the word-form check existed, and delivered the two "half health" lines.
+- **Replay with the final code.** Replaying run 2 through the final code sends **0 guessed sources and 0 invented stats.**
+- **Latency.** p50 861 ms, max 4,326 ms (one slow provider response).
+- **Trade-off.** Guarded turns become silence. A player asking a direct "where does X drop?" with no data now gets either an honest "not sure" or no reply.

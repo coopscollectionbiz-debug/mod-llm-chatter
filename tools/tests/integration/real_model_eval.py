@@ -37,8 +37,9 @@ UNGROUNDED = re.compile(r"(drops? from|starts? (at|from|with)|you can (find|get)
 # Own-state claims: low power or any concrete health/mana number. Allowed only
 # when the scenario's evidence supplies it.
 LIVE = re.compile(r"(oom|out of mana|low on mana|i see (it|the rare)|it'?s up|he'?s dead|"
-                  r"\d{1,3}\s*%\s*(mana|health|hp))", re.I)
-LIVE_ALLOWED = {'heals ready?'}  # scenario carries low-mana evidence
+                  r"\d{1,3}\s*%\s*(mana|health|hp)|\b(at |on )?(half|full|low|quarter) (health|hp|mana))", re.I)
+# Scenario input -> the live facts its evidence supplies (low power at 22%).
+LIVE_ALLOWED = {'heals ready?': {'22'}}
 
 SCENARIOS = [
     # (surface label, prompt builder key, player text or event, data expected?)
@@ -76,6 +77,12 @@ EVENT_TEXT = {
     'bg_score_milestone': 'Warsong Gulch: your team now leads 2-1 in flag captures.',
     'raid_boss_pull': 'Your raid is pulling Onyxia now.',
 }
+
+
+CHAT_KINDS = {'party', 'whisper', 'general', 'guild', 'say'}
+EVENT_TYPE = {'party': 'bot_group_player_msg', 'whisper': 'bot_player_whisper', 'general': 'player_general_msg',
+              'guild': 'guild_player_message', 'say': 'proximity_player_conversation', 'idle': 'group_idle_conv',
+              'ambient': 'ambient_conv'}
 
 
 def build_prompt(item):
@@ -116,10 +123,11 @@ def build_prompt(item):
 
 
 def score(reply, expects_data, scenario_input=''):
-    text = (reply or '').strip()
+    text = (reply or '').strip().replace('’', "'")
     live = bool(LIVE.search(text))
-    if live and scenario_input in LIVE_ALLOWED and not re.search(r'\d{1,3}\s*%', text):
-        live = False  # "low on mana" backed by the scenario's low-mana evidence
+    if live and scenario_input in LIVE_ALLOWED:
+        numbers = set(re.findall(r'(\d{1,3})\s*%', text))
+        live = not numbers <= LIVE_ALLOWED[scenario_input]  # evidence-backed numbers/wording are fine
     return {
         'empty': not text,
         'assistant_voice': bool(ASSISTANT.search(text)),
@@ -154,6 +162,7 @@ def main():
     parser.add_argument('--model', default='gpt-4o-mini')
     parser.add_argument('--authorize-paid-requests', action='store_true')
     parser.add_argument('--max-requests', type=int, default=42, help='hard cap on paid requests')
+    parser.add_argument('--only', default='', help='comma list: scenario labels or input substrings')
     parser.add_argument('--rescore', action='store_true', help='rescore an existing replies.json (no requests)')
     args = parser.parse_args()
     out = Path(args.out)
@@ -174,6 +183,9 @@ def main():
     key = os.environ.get('CHATTER_EVAL_API_KEY', '')
     live = bool(args.authorize_paid_requests and key)
     plan = [{'label': l, 'kind': k, 'input': t, 'expects_data': d} for l, k, t, d in SCENARIOS]
+    if args.only:
+        wanted = [w.strip().casefold() for w in args.only.split(',') if w.strip()]
+        plan = [p for p in plan if any(w in p['input'].casefold() or w == p['label'] for w in wanted)]
     (out / 'scenarios.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
     import chatter_surfaces
     chatter_surfaces.configure(BASE_CONFIG)
@@ -201,6 +213,16 @@ def main():
     import chatter_surfaces
     chatter_surfaces.configure(config)
     client = get_llm_client(config)
+    # Record what the model said even when a grounding guard discards it, so
+    # the report separates "model behaviour" from "what players would see".
+    seen = {}
+    original_check = chatter_surfaces.check_reply
+
+    def recording_check(response, prompt, label):
+        reason = original_check(response, prompt, label)
+        seen.update(raw=response, reason=reason)
+        return reason
+    chatter_surfaces.check_reply = recording_check
     rows = []
     budget = min(args.max_requests, len(plan) * args.runs)
     for run in range(args.runs):
@@ -208,13 +230,22 @@ def main():
             if len(rows) >= budget:
                 break
             prompt, _ = build_prompt(item)
+            event = {'event_type': EVENT_TYPE.get(item['kind'], item['input']),
+                     'extra_data': {'player_message': item['input'] if item['kind'] in CHAT_KINDS else '',
+                                    'group_id': 1, 'guild_id': 1, 'zone_id': 12}}
+            seen.clear()
             start = time.monotonic()
-            reply = call_llm(client, prompt, config, label=item['label'],
-                             max_tokens_override=int(config.get('LLMChatter.Dialogue.MaxTokens', 160)))
+            with chatter_surfaces.dispatch_context(None, event):
+                reply = call_llm(client, prompt, config, label=item['label'],
+                                 max_tokens_override=int(config.get('LLMChatter.Dialogue.MaxTokens', 160)))
             ms = round((time.monotonic() - start) * 1000)
             text = parse_reply(reply, SPEAKER['name']) if reply else ''
+            model_text = parse_reply(seen.get('raw'), SPEAKER['name']) if seen.get('raw') else text
             rows.append({'run': run, 'label': item['label'], 'input': item['input'], 'reply': text,
-                         'raw_ok': reply is not None, 'ms': ms, 'score': score(text, item['expects_data'], item['input'])})
+                         'model_reply': model_text, 'guard': seen.get('reason') or '',
+                         'raw_ok': seen.get('raw') is not None or reply is not None, 'ms': ms,
+                         'score': score(text, item['expects_data'], item['input']),
+                         'model_score': score(model_text, item['expects_data'], item['input'])})
     (out / 'replies.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
     report = {'status': 'COMPLETED', 'paid_requests': len(rows), 'summary': summarize(rows)}
     (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

@@ -138,12 +138,15 @@ def generate_reactive_reply(*, client, config, speaker, channel, asker, message,
     stats['fresh'] = all(e.is_fresh() for e in used)
 
     model_started = time.monotonic()
+    metadata = metadata if metadata is not None else {}
     response = call_llm(client, prompt, config,
                         max_tokens_override=int(config.get('LLMChatter.Dialogue.MaxTokens', 160)),
                         context=f'{channel}:{speaker["name"]}', label=label, metadata=metadata,
                         deadline=deadline)
     stats['model_ms'] = int((time.monotonic() - model_started) * 1000)
     result = ReplyResult(used=used, stats=stats)
+    if metadata.get('rejected'):
+        stats['rejected'] = metadata['rejected']  # call_llm grounding guard
     if response is None:
         # Provider down, circuit open or no time left: only deterministic,
         # evidence-backed lines are allowed, and only for a direct question.
