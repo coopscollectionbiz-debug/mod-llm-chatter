@@ -138,4 +138,4 @@ Full numbers are in `CHATTER-2.0-TEST-RESULTS.md` (the "Full integration" sectio
 - **Builds.** Windows staging and Linux/GCC (`source-next` copy) both exit 0.
 - **Real-client end-to-end runs.** A headless 3.3.5a client on an isolated realm passed 12/12 with a Human companion and 12/12 with a Worgen companion. The Patch 1 rollback on the migrated schema passed 6/6.
 - **Benchmarks.** The bridge engine handles 1.5k–4k simulated bots at about 60 µs per event and ≤ 0.6% of one core. A provider outage is capped at 20 requests per 120 s.
-- **Real-model evaluation.** Pending authorisation.
+- **Real-model evaluation (42 gpt-4o-mini requests).** Persona, format and grounding with DATA are good. Without DATA the model guessed drop sources 6/6 times, and it invented mana percentages in 2/27 event lines (see TEST-RESULTS).

@@ -241,4 +241,30 @@ Logs from these runs are kept in `C:\WHE-Staging\Chatter2\logs\e2e*\`: `e2e_resu
 - repetition;
 - latency p50/p95.
 
-**Status: PENDING AUTHORIZATION.** The dry run wrote `scenarios.json` and `report.json` and made 0 paid requests. A real run needs `--authorize-paid-requests` plus `CHATTER_EVAL_API_KEY` in the environment.
+**Status: COMPLETED (authorised by the user, 2026-11-08).**
+
+- **Run.** 42 paid requests: 14 scenarios × 3 runs, OpenAI `gpt-4o-mini` (the production model), using the key from the installed config. The key was passed only to the eval process, never printed, and does not appear in any output file.
+- **Prompts.** Reactive scenarios use the candidate's `build_reply_prompt`. The other surfaces go through `call_llm` with the shared surface engine. Knowledge lookups were off, so only the evidence placed in each scenario was available.
+- **Outputs.** In `C:\WHE-Staging\Chatter2\eval_out\`: `prompts.json`, `replies.json` and `report.json`.
+
+| Measure (42 replies) | Result |
+|---|---|
+| Empty or invalid replies | 0 |
+| Assistant voice ("as an AI", "happy to help", …) | 0 |
+| Markdown or lists | 0 |
+| Linked quest with DATA ("who starts [A Threat Within]?") | 3/3 correct: "deputy willem in elwynn forest." |
+| Readiness with low-mana evidence ("heals ready?") | 1/3 mentioned low mana. 2/3 said "got some heals", which is not false but ignores the evidence |
+| **Ungrounded drop sources (no DATA)** | **6/6.** Linen cloth: "humanoids … westfall or the barrens", "gnolls or murlocs". Wool: "from sheep in westfall / the wetland area / hillsbrad". Wool does not drop from sheep. Some replies hedge ("i think", "might"), but all state a source. |
+| **Invented own stats** | **2/27** non-reactive replies stated a mana percentage the prompt never gave: combat "i'm at 70% mana", raid pull "i'm at 60% mana" |
+| Lore/geography slips (manual review) | 1/3 ambient lines: "the worgen near amberstill ranch" (Amberstill Ranch is in Dun Morogh; the prompt was Elwynn) |
+| Repetition | Whisper "hey you free later?" got the identical reply 3/3. Other surfaces 0–33% |
+| Latency, all 42 | p50 677 ms, p95 989 ms, max 1,956 ms |
+
+**Interpretation**
+
+- **Tone and format.** Register, persona, length and channel fit are good on every surface.
+- **Grounding with DATA.** It works when DATA is present.
+- **Grounding without DATA.** The model does not follow the "no specific drop sources without DATA" rule. This affects reactive Party and General in this run. In production, an item link or a recognised item name would trigger a knowledge lookup and supply DATA; plain-text names that are not recognised fall back to the model's guesses.
+- **Self-stat claims.** The existing `unsupported_claim` guard only covers reactive replies and low-power wording. It does not catch "70% mana" on event surfaces. A guard for numeric self-state on all surfaces is recommended before production (§9 of the deployment plan).
+
+The scorer was tightened after a first pass undercounted: it now catches numeric self-stats and hedged drop claims. The saved replies were rescored offline with `--rescore`, with no extra requests.

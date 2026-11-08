@@ -32,8 +32,13 @@ TOOLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TOOLS))
 
 ASSISTANT = re.compile(r'\b(as an ai|language model|how can i (help|assist)|certainly!|i\'d be happy to)\b', re.I)
-UNGROUNDED = re.compile(r'\b(drops? from|starts? (at|from|with)|you can find .* (at|in)|located (at|in))\b', re.I)
-LIVE = re.compile(r'\b(oom|out of mana|i see (it|the rare)|it\'s up|he\'s dead)\b', re.I)
+UNGROUNDED = re.compile(r"(drops? from|starts? (at|from|with)|you can (find|get) .* (at|in|from)|located (at|in)|"
+                        r"from (killing )?[a-z -]*(mobs|humanoids|sheep|gnolls|murlocs))", re.I)
+# Own-state claims: low power or any concrete health/mana number. Allowed only
+# when the scenario's evidence supplies it.
+LIVE = re.compile(r"(oom|out of mana|low on mana|i see (it|the rare)|it'?s up|he'?s dead|"
+                  r"\d{1,3}\s*%\s*(mana|health|hp))", re.I)
+LIVE_ALLOWED = {'heals ready?'}  # scenario carries low-mana evidence
 
 SCENARIOS = [
     # (surface label, prompt builder key, player text or event, data expected?)
@@ -110,13 +115,16 @@ def build_prompt(item):
     return PromptParts(user, system), []
 
 
-def score(reply, expects_data):
+def score(reply, expects_data, scenario_input=''):
     text = (reply or '').strip()
+    live = bool(LIVE.search(text))
+    if live and scenario_input in LIVE_ALLOWED and not re.search(r'\d{1,3}\s*%', text):
+        live = False  # "low on mana" backed by the scenario's low-mana evidence
     return {
         'empty': not text,
         'assistant_voice': bool(ASSISTANT.search(text)),
         'ungrounded_fact': bool(UNGROUNDED.search(text)) and not expects_data,
-        'unsupported_live_claim': bool(LIVE.search(text)),
+        'unsupported_live_claim': live,
         'markdown_or_list': bool(re.search(r'(^|\n)\s*([-*]|\d+\.)\s|\*\*', text)),
         'chars': len(text),
     }
@@ -146,8 +154,22 @@ def main():
     parser.add_argument('--model', default='gpt-4o-mini')
     parser.add_argument('--authorize-paid-requests', action='store_true')
     parser.add_argument('--max-requests', type=int, default=42, help='hard cap on paid requests')
+    parser.add_argument('--rescore', action='store_true', help='rescore an existing replies.json (no requests)')
     args = parser.parse_args()
     out = Path(args.out)
+    if args.rescore:
+        rows = json.loads((out / 'replies.json').read_text(encoding='utf-8'))
+        expects = {s[2]: s[3] for s in SCENARIOS}
+        for row in rows:
+            row['score'] = score(row['reply'], expects.get(row['input'], False), row['input'])
+        (out / 'replies.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
+        report = json.loads((out / 'report.json').read_text(encoding='utf-8'))
+        report['summary'] = summarize(rows)
+        report['rescored'] = True
+        (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+        print(json.dumps({k: sum(v[k] for v in report['summary'].values()) for k in
+                          ('empty', 'assistant_voice', 'ungrounded_fact', 'unsupported_live_claim', 'markdown_or_list')}))
+        return
     out.mkdir(parents=True, exist_ok=True)
     key = os.environ.get('CHATTER_EVAL_API_KEY', '')
     live = bool(args.authorize_paid_requests and key)
@@ -192,7 +214,7 @@ def main():
             ms = round((time.monotonic() - start) * 1000)
             text = parse_reply(reply, SPEAKER['name']) if reply else ''
             rows.append({'run': run, 'label': item['label'], 'input': item['input'], 'reply': text,
-                         'raw_ok': reply is not None, 'ms': ms, 'score': score(text, item['expects_data'])})
+                         'raw_ok': reply is not None, 'ms': ms, 'score': score(text, item['expects_data'], item['input'])})
     (out / 'replies.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
     report = {'status': 'COMPLETED', 'paid_requests': len(rows), 'summary': summarize(rows)}
     (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

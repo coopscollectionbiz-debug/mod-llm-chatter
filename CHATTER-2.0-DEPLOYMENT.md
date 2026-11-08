@@ -116,7 +116,10 @@ Personalities, relationships and memories are untouched in both cases.
 
 ## 9. Known limitations and remaining blockers
 
-- **Real-model evaluation.** The harness is ready (`real_model_eval.py`), but the run is pending authorisation of paid requests. The fake provider validates plumbing only, not reply quality.
+- **Real-model evaluation (gpt-4o-mini, 42 requests).** Tone, persona and format are good, and linked-quest answers with DATA are correct. Two problems remain:
+  - **Drop-source guesses without DATA.** 6/6 replies named a drop source, some wrong (wool from sheep).
+  - **Invented mana percentages.** 2/27 event lines stated a number the prompt never gave.
+  - **Recommended before production:** extend the claim guard to numeric self-state on all surfaces, and make uncertain item questions defer instead of guessing. See TEST-RESULTS, "Real-model evaluation".
 - **Reactive General end to end.** Not exercised on staging, because it needs random bots in the speaker's zone. It is covered by mocked tests and the Patch 1 smoke.
 - **World-thread cost at 3–4k bots.** Not profiled on a populated server. The bridge engine itself was benchmarked to 4k bots at under 0.6% of one core.
 - **Quest eligibility.** Never asserted, including Individual Progression.
