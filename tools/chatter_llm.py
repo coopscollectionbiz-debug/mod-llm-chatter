@@ -538,6 +538,10 @@ def call_llm(
         if deadline - time.monotonic() < budget:
             _note_skip('deadline')
             return None
+    from chatter_surfaces import apply as apply_surface
+    if metadata is None:
+        metadata = {}
+    prompt = apply_surface(prompt, label, config, metadata)
     from chatter_relationships import enrich_prompt
     prompt = enrich_prompt(prompt, label)
     provider = config.get(

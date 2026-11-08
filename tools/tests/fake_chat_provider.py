@@ -30,16 +30,21 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         request = json.loads(self.rfile.read(length))
         text = " ".join(str(message.get("content", "")) for message in request["messages"]).casefold()
-        if "stagegen" in text:
-            label, line = "general", "patrol turns at the bridge"
-        elif "stageparty" in text:
-            label, line = "party", "mana sec"
-        elif "stagefollow" in text or "@follow" in text:
-            label, line = "unexpected-control", ""
-        else:
-            label, line = "other", ""
-        # Only fixture classes, never prompt bodies.
-        print(label, flush=True)
+        # Prompts quote earlier turns, so the fixture keys off the keyword that
+        # appears LAST (the current turn), not the first one in the transcript.
+        fixtures = {
+            "who starts this quest": ("who_conversation", "no idea, check the board by the gate"),
+            "stagehello": ("hello", "hey, whats up"),
+            "stagegen": ("general", "patrol turns at the bridge"),
+            "stageparty": ("party", "mana sec"),
+            "stagefollow": ("unexpected-control", ""),
+            "@follow": ("unexpected-control", ""),
+        }
+        found = max(((text.rfind(key), key) for key in fixtures if key in text), default=None)
+        label, line = fixtures[found[1]] if found else ("other", "")
+        # Only fixture classes and engine markers, never prompt bodies.
+        surface = "surface" if "surface (" in text else "-"
+        print(label, surface, flush=True)
         self.send_json(200, {
             "id": "chatcmpl-staging", "object": "chat.completion",
             "created": int(time.time()), "model": "staging-fixture",

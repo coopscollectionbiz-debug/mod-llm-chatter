@@ -863,8 +863,19 @@ def process_single_event(event, client, config):
                     db, event, config
                 )
             from chatter_relationships import event_context, poll_deliveries
+            from chatter_surfaces import admit_event, dispatch_context
+            admitted, reason = admit_event(event)
+            if not admitted:
+                # Lifecycle: a player owns this scope, a conversation is still
+                # running, or a bot reply chain ended. Quiet, no model call.
+                cursor.execute(
+                    "UPDATE llm_chatter_events SET status = 'skipped'"
+                    " WHERE id = %s", (event_id,))
+                db.commit()
+                logger.debug("event %s %s quiet: %s", event_id, event_type, reason)
+                return False
             poll_deliveries(db)
-            with event_context(db, config, event):
+            with dispatch_context(db, event), event_context(db, config, event):
                 return handler(db, client, config, event)
 
         # Unknown event type — no handler registered.
@@ -1285,6 +1296,8 @@ def main():
     configure_knowledge(config)
     from chatter_trace import configure as configure_trace
     configure_trace(config)
+    from chatter_surfaces import configure as configure_surfaces
+    configure_surfaces(config)
     init_group_config(config)
     init_general_config(config)
 

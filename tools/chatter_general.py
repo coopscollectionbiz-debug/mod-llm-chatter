@@ -162,12 +162,8 @@ def _get_general_chat_history(
     if limit is None:
         limit = _chat_history_limit
     cursor = db.cursor(dictionary=True)
-    if faction == 'Alliance':
-        race_filter = 'AND c.race IN (1, 3, 4, 7, 11)'
-    elif faction == 'Horde':
-        race_filter = 'AND c.race IN (2, 5, 6, 8, 10)'
-    else:
-        race_filter = ''
+    from chatter_constants import race_sql_filter
+    race_filter = race_sql_filter(faction)
     # Faction-scoped history fails closed: a speaker whose
     # character row cannot establish a faction is not prompt context.
     character_join = (
@@ -790,6 +786,16 @@ def process_general_player_msg_event(
         mode = get_chatter_mode(config)
 
         history = recent_transcript(db, audience)
+        if str(config.get('LLMChatter.Dialogue.Pipeline', '2')) == '2':
+            # Chatter 2.0 social layer, before any addressed-bot model call.
+            from chatter_social import decide_general
+            social = decide_general(raw_player_message, history,
+                                    int(event.get('subject_guid') or 0))
+            if not social.respond:
+                logger.info("[GEN-FLOW] player-react quiet: %s | player=%s",
+                            social.reason, player_name)
+                mark_event(db, event_id, 'skipped')
+                return False
         recent_msgs = [row['message'] for row in history if row['is_bot']]
         chat_hist = _format_general_history(history)
 

@@ -375,9 +375,10 @@ def get_race_faction(race_id) -> str:
         race_id = int(race_id)
     except (TypeError, ValueError):
         return ""
-    if race_id in (1, 3, 4, 7, 11):
+    from chatter_constants import ALLIANCE_RACE_IDS, HORDE_RACE_IDS
+    if race_id in ALLIANCE_RACE_IDS:
         return "Alliance"
-    if race_id in (2, 5, 6, 8, 10):
+    if race_id in HORDE_RACE_IDS:
         return "Horde"
     return ""
 

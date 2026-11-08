@@ -58,3 +58,11 @@ Recognition is by intent, not exact wording.
 - **Party phrasing that starts with "who".** It is the Playerbots `who` command, which Playerbots answers natively, so Chatter correctly stays out. "anyone know who starts …" works.
 - **General.** Receives only linked quest/item `server_data`. Service and boss questions need a speaker position and stay unanswered there by design.
 - **Rares.** Observed only around the asking player's party, within 80 yards (scan) and 100 yards (visibility), at ingress. A rare outside that radius is "not seen", never "down".
+
+## Knowledge on every surface (full integration)
+
+- **Player-text surfaces.** Guild player messages, /say player conversations and legacy Party conversation variants run `detect_intents` on the player's own words through the shared engine.
+- **Quest events.** Quest accept, complete and objectives use the exact `quest_id` carried by the C++ payload (`quest_info`), so nothing is guessed from text.
+- **Audience filtering.** Public surfaces (General, /say, guild) only accept `quest_*`, `item_info` and `item_source`. Position-dependent kinds (`boss_drop`, `boss_list`, `npc_service`) are party/raid only. Evidence is rendered with `render_block` and the unchanged `EVIDENCE_RULES`, so `partial`, `ambiguous`, `not_found` and `unavailable` keep their wording constraints.
+- **Bounds.** Lookups run on bridge worker threads under `LLMChatter.Surfaces.KnowledgeSeconds` (1.2 s), with the existing read-only pool, `MAX_EXECUTION_TIME` and revision-keyed cache. No intent means no lookup.
+- **Reactive Party, whisper and General** keep their 2.0 knowledge paths. The engine marks them `handled` and adds nothing.

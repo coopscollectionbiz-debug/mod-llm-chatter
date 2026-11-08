@@ -200,8 +200,25 @@ CLASS_IDS = {v: k for k, v in CLASS_NAMES.items()}
 
 RACE_NAMES = {
     1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead",
-    6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Blood Elf", 11: "Draenei"
+    6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Blood Elf", 11: "Draenei",
+    # mod-worgoblin playable races (see its playercreateinfo rows).
+    9: "Goblin", 12: "Worgen",
 }
+
+# Playable faction by race ID, including mod-worgoblin's Goblin (9, Horde) and
+# Worgen (12, Alliance). Every faction filter (Python sets and SQL IN lists)
+# must use these so custom-race bots are not silently excluded.
+ALLIANCE_RACE_IDS = (1, 3, 4, 7, 11, 12)
+HORDE_RACE_IDS = (2, 5, 6, 8, 10, 9)
+ALLIANCE_RACE_NAMES = frozenset(RACE_NAMES[r] for r in ALLIANCE_RACE_IDS)
+HORDE_RACE_NAMES = frozenset({RACE_NAMES[r] for r in HORDE_RACE_IDS} | {"Scourge"})
+
+
+def race_sql_filter(faction, column='c.race'):
+    """'AND <column> IN (...)' for a faction, '' when unknown."""
+    ids = ALLIANCE_RACE_IDS if faction == 'Alliance' else HORDE_RACE_IDS if faction == 'Horde' else ()
+    return f"AND {column} IN ({', '.join(map(str, ids))})" if ids else ''
+
 
 # =============================================================================
 # ROLEPLAY PERSONALITY DATA

@@ -5,6 +5,7 @@
 #include "LLMChatterConfig.h"
 #include "Guild.h"
 #include "LLMChatterBossDialogue.h"
+#include "LLMChatterChannelCompat.h"
 #include "LLMChatterDelivery.h"
 #include "LLMChatterDeliveryBatch.h"
 #include "LLMChatterDeliveryPolicy.h"
@@ -590,7 +591,7 @@ static DeliveryOutcome DeliverRow(
                 return DeliveryOutcome::Expired;
             if (!bot->IsInChannel(destination))
                 destination->JoinChannel(bot, "");
-            if (!destination->CanSpeak(bot->GetGUID()))
+            if (!LLMChatterChannelCompat::CanSpeakOrUnknown(destination, bot->GetGUID()))
             {
                 dropReasonOut = "reactive_speaker_cannot_use_channel";
                 return DeliveryOutcome::Dropped;

@@ -132,3 +132,23 @@ It always returns at most one bot, preserving Patch 1's one-reply invariant. `de
 - All Patch 1 gates.
 - The General Phase 1 selection and builder.
 - Ambient, idle, guild, proximity, boss, raid and BG producers. These are unchanged; they do not use the new reply contract yet.
+
+## Full-system integration additions (`codex/chatter-2.0-full`)
+
+| File | Change |
+|---|---|
+| `tools/chatter_surfaces.py` (new) | Surface registry, dispatch scope, `apply` (rules, audience-filtered knowledge, RSS), `admit_event`, `initiation_gate`, `admit_line`, stats |
+| `tools/chatter_lifecycle.py` (new) | Per-scope lifecycle: player precedence, conversation window, personality-scaled initiation gap, reply-chain cap, repeat fingerprints, LRU bound |
+| `tools/chatter_llm.py` | `call_llm` applies the surface engine before `enrich_prompt`; `metadata` is always a dict |
+| `tools/llm_chatter_bridge.py` | `configure_surfaces` at startup; lifecycle gate and `dispatch_context` around every registered handler |
+| `tools/chatter_ambient.py`, `tools/chatter_group.py` | `@initiation_gate` on ambient statement/conversation and party idle statement/conversation |
+| `tools/chatter_db.py` | `insert_chat_message` drops a repeated opener (whole dispatch) before any party slot reservation |
+| `tools/chatter_rss.py` | `SOCIAL_LABELS` (party idle conversation, /say small talk) under the same RSS gates |
+| `tools/chatter_personality.py`, `tools/chatter_dialogue.py` | Shared voice line on every `profile_instruction` (2.0 only); no duplicate in reactive prompts |
+| `tools/chatter_social.py`, `tools/chatter_general.py` | `decide_general` (superseded / already answered) before any General addressed-bot model call; `@Name` conversation regression fixed |
+| `tools/chatter_group.py` | `is_conversational_who_question` + `LLMChatter.PlayerChat.ConversationalWho` |
+| `src/LLMChatterCommandPolicy.h` (new), `src/LLMChatterGroup.cpp`, `src/LLMChatterConfig.*` | C++ ingress mirror of the who rule + config switch |
+| `src/LLMChatterChannelCompat.h` (new), `src/LLMChatterDelivery.cpp`, `src/LLMChatterPlayer.cpp` | Compile-time detection of `Channel::CanSpeak` (core patch `43e2449cf`) so the module builds on unpatched cores (GCC finding) |
+| `mod-playerbots`: `src/Ai/Base/Actions/WhoConversation.h` (new), `WhoAction.cpp` | `WhoAction` declines sentence-form parameters before any whisper |
+| `conf/mod_llm_chatter.conf.dist` | `PlayerChat.ConversationalWho`, `Surfaces.*`, `Lifecycle.*` |
+| Tests | `test_who_routing.py` (+ `cpp/test_who_routing.cpp`, `data/who_routing_cases.json`), `test_chatter2_surfaces.py`, `test_chatter2_privacy.py`, `test_headless_client.py`, `bench_chatter2_full.py`, `integration/staging_e2e.py`, `integration/wow_headless_client.py`, `integration/real_model_eval.py`; fake provider fixtures extended |

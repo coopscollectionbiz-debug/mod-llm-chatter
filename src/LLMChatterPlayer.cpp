@@ -3,6 +3,7 @@
  */
 
 #include "LLMChatterConfig.h"
+#include "LLMChatterChannelCompat.h"
 #include "LLMChatterAmbient.h"
 #include "LLMChatterBG.h"
 #include "LLMChatterGroup.h"
@@ -948,7 +949,7 @@ public:
                 return true;
         }
 
-        if (!player || IsPlayerBot(player) || !channel->CanSpeak(player->GetGUID()))
+        if (!player || IsPlayerBot(player) || !LLMChatterChannelCompat::CanSpeakOrUnknown(channel, player->GetGUID()))
             return true;
 
         // Ignore hidden addon traffic (DBM, Questie, ElvUI, ...);

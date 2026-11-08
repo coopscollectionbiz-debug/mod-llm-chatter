@@ -216,14 +216,10 @@ def _try_carrier_self_message(
     event_team = extra_data.get('team', '')
     if event_team:
         race = bot_data.get('race', '')
-        ALLIANCE_RACES = {
-            'Human', 'Dwarf', 'Night Elf',
-            'Gnome', 'Draenei',
-        }
-        HORDE_RACES = {
-            'Orc', 'Undead', 'Tauren',
-            'Troll', 'Blood Elf',
-        }
+        from chatter_constants import (
+            ALLIANCE_RACE_NAMES as ALLIANCE_RACES,
+            HORDE_RACE_NAMES as HORDE_RACES,
+        )
         if (event_team == 'Alliance'
                 and race not in ALLIANCE_RACES):
             return

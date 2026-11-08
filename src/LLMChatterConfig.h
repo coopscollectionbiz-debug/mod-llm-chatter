@@ -85,6 +85,9 @@ public:
     bool _whisperChatterEnable;
     uint32 _whisperCooldownSeconds;
     uint32 _whisperExpirySeconds;
+    // Natural "who ..." questions are conversation (needs the Playerbots
+    // WhoConversation.h companion change); 0 restores command handling.
+    bool _conversationalWhoEnable;
 
     // Event system settings
     bool _useEventSystem;

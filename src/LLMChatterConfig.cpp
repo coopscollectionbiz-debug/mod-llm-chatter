@@ -398,6 +398,7 @@ void LLMChatterConfig::LoadConfig()
         GetChatterOption<uint32>("LLMChatter.Whisper.CooldownSeconds", 4), 1, 300);
     _whisperExpirySeconds = std::clamp<uint32>(
         GetChatterOption<uint32>("LLMChatter.Whisper.ExpirySeconds", 20), 5, 60);
+    _conversationalWhoEnable = GetChatterOption<bool>("LLMChatter.PlayerChat.ConversationalWho", true);
     _partyGateUrgentMinGapSeconds =
         GetChatterOption<uint32>(
             "LLMChatter.PartyGate."

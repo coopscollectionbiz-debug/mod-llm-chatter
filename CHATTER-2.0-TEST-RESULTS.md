@@ -1,6 +1,6 @@
 # Chatter 2.0: Test results
 
-All results below were measured on 2026-11-08 on the development workstation. **No gameplay test with a WoW client was performed**, and no real model was called. Every model response came from a fake provider: in-process for unit tests, loopback HTTP for the staging smoke.
+All results below were measured on 2026-11-08 on the development workstation. The original 2.0 sections had no WoW-client test; the **Full integration** sections at the end include real headless 3.3.5a client sessions on an isolated staging realm. No real model was called. Every model response came from a fake provider: in-process for unit tests, loopback HTTP for the staging smoke.
 
 ## Commands
 
@@ -115,3 +115,130 @@ All 15 requested scenarios have a deterministic replay through production code:
 - **World-thread cost at 3,000–4,000 live bots.** The capture is O(eligible bots ≤ 8) plus an optional grid search, but it was not profiled on a populated server.
 - **A Party end-to-end runtime smoke** (it needs group fixtures). Covered by mocked handler tests.
 - **Production-model compatibility** (`gpt-4o-mini` / Luna) with the new contract. See the deployment plan.
+
+
+---
+
+# Full integration (release candidate `codex/chatter-2.0-full`)
+
+## Commands
+
+```powershell
+cd C:\Azerothcore-dev\mod-llm-chatter-2.0-full
+python -m pytest tools/tests -q                                        # offline suite
+$env:CHATTER_TEST_MYSQL_PORT='3337'; python -m pytest tools/tests -q  # + disposable MySQL tests
+python tools/tests/bench_chatter2_full.py --seconds 120 --failure-rate 0.3   # and 1.0
+python tools/tests/integration/staging_e2e.py --stage C:\WHE-Staging\Chatter2 --bot 4006:Tester
+python tools/tests/integration/staging_e2e.py --stage C:\WHE-Staging\Chatter2              # Worgen companion
+python tools/tests/integration/staging_e2e.py --stage C:\WHE-Staging\Chatter2 --mode rollback --bot 4006:Tester
+python tools/tests/integration/real_model_eval.py --out eval_out     # dry run: PENDING_AUTHORIZATION
+# WSL (Release1-Build): C:\WHE-Staging\Chatter2\gcc_build.sh build ; gcc_policy_tests.sh
+```
+
+## Results
+
+| Check | Result |
+|---|---|
+| Offline suite | **567 passed**, 4 skipped (the real-MySQL tests, run below), 3 subtests, 0 failed |
+| Offline suite with the disposable MySQL on 3337 | **571 passed, 0 skipped**, 0 failed |
+| New tests | `test_who_routing.py` (23; an 18-case table run against 3 implementations), `test_chatter2_surfaces.py` (24), `test_chatter2_privacy.py` (13), `test_headless_client.py` (4) |
+| Standalone C++, MSVC `/W4 /WX` | claim/route policy, delivery batch, and who routing (both the chatter and the Playerbots header): all pass |
+| Standalone C++, GCC 15.2 `-Wall -Wextra -Werror` (WSL) | claim/route policy, delivery batch, and **all 18 who cases (both headers)**: pass |
+| Windows staging build (VS 2026, RelWithDebInfo, core `43e2449cf`, 18 modules, Playerbots pointed at the who worktree) | worldserver **exit 0** (14 min after the junction change); authserver exit 0 |
+| Linux/GCC build (WSL Ubuntu 26.04, GCC 15.2, CMake 4.2, copy of `source-next`, MODULES=static) | First attempt **failed**: `Channel::CanSpeak` is missing (see below). After the fix: **exit 0** (13 min), final incremental exit 0, no LLMChatter warnings |
+| `compileall`, `git diff --check` | pass |
+| Codestyle on the new C++ files | No findings. Pre-existing findings in `LLMChatterGroup.cpp` are unchanged (6 before, 6 after) |
+| Migration on the disposable MySQL 8.4 | Applied twice more on the migrated schema, exit 0. `claim_json` and the `bot_player_whisper` ENUM value are present |
+
+These defects were found during this task and fixed:
+
+1. **GCC build failure.** Patch 1 code used `Channel::CanSpeak`, which only the staging core patch provides. Fixed with `LLMChatterChannelCompat.h`.
+2. **Custom races excluded.** Hard-coded race lists dropped Worgen (12) and Goblin (9) bots from Party, General, guild and BG responders. **This also affects Patch 1 and production.** The rollback rehearsal reproduced it: a Worgen companion never answered Party chat on Patch 1.
+3. **Unsupported live claims.** A warrior's "mana sec" went out carrying only an `alive` claim. Fixed with `unsupported_claim`: an assertion of low power or a sighting now needs the bot's own matching evidence, otherwise the reply stays silent.
+4. **`@BotName …` conversation silenced.** The 2.0 social layer had silenced these lines. Fixed.
+
+Existing tests were updated for intended changes: the pinned race list now includes 9 and 12, and the fake provider keys off the current turn.
+
+## End-to-end on an isolated staging realm with a real client (measured)
+
+**Stack.** Everything is loopback and disposable:
+
+- a MySQL datadir copy on 3338;
+- a staging worldserver on 8097 and authserver on 3725, built from these branches;
+- the bridge from this worktree;
+- the deterministic fake provider on 11479.
+
+**Client.** `tools/tests/integration/wow_headless_client.py` is a minimal 3.3.5a client: SRP6 logon, realm list, ARC4 header crypto, CHAR_ENUM/PLAYER_LOGIN and chat. It logged in the real character `Test` (guid 2004). The bot is added with `.playerbots bot add` and invited to the party.
+
+**Pass rule.** A reply passes **only if the client session actually receives it** from the bot.
+
+**Credentials.** Test credentials are generated per run into `C:\WHE-Staging\Chatter2\state\test_account.json` and never printed.
+
+| Scenario | Human companion (`Tester`) | Worgen companion (`Worgentest`) | Patch 1 rollback (binary + bridge) on the migrated schema (`Tester`) |
+|---|---|---|---|
+| Login, bot online, party invite | PASS | PASS | PASS |
+| Whisper → bot whisper reply delivered | PASS | PASS | n/a (Patch 1 has no whisper surface) |
+| Party question → one Party reply delivered | PASS | PASS (after the race fix) | PASS |
+| `@Name …` conversation | PASS | PASS | PASS |
+| "who starts this quest?" → a Chatter Party reply and **no** Playerbots "playing with" whisper | PASS | PASS | not run (Patch 1 + unpatched Playerbots) |
+| Bare `who` → Playerbots spec/"playing with" whisper, no model call | PASS | PASS | PASS |
+| `follow` → Playerbots "Following", no Chatter line | – | – | PASS |
+| "mana sec" bait with no low-mana evidence → never sent | PASS (paladin at full mana) | PASS (warrior, no mana) | n/a |
+| Bridge restart with `Dialogue.Pipeline=1`: whisper, Party, `who` | PASS | PASS | n/a |
+| Back to `Pipeline=2` | PASS | PASS | n/a |
+
+**Database at the delivery boundary.** In the final runs, every reply has `delivered=1` and `drop_reason=NULL`, and appears in the client's received chat. The bait turn is a `silent_reply` trace, and nothing was queued for it.
+
+**Not covered end to end: reactive General.** Its candidates are random bots in the speaker's zone, never account companions, and random-bot autologin is off on this disposable realm. General is covered by mocked tests (`decide_general`, `with_public_knowledge`, General pacing, faction filters) and by Patch 1's earlier smoke.
+
+**Harness defects found and fixed along the way:**
+
+- the client must speak Common, not Universal;
+- random-bot characters cannot be controlled, so the test needs an account bot;
+- the fixture must key off the current turn;
+- turns must respect Patch 1's 12 s gap before the same bot replies again;
+- the harness must wait for bridge readiness.
+
+On that last point, bridge cold start measured **62–80 s** (4 s warm), so whispers sent sooner expired. This is relevant for production restarts too.
+
+Logs from these runs are kept in `C:\WHE-Staging\Chatter2\logs\e2e*\`: `e2e_result_human.json`, `e2e_result_worgen.json` and `e2e-rollback\e2e_result.json`.
+
+**Delivery stats during the runs:**
+
+- `fetch_ms_avg` was 1–2 ms, with spikes of 0.7–1.5 s while bridges started.
+- One 9.5 s fetch stall coincided with a bridge restart and expired one legacy Party reply (`expired_before_delivery`). It did not recur in later runs.
+- Fetches are asynchronous, so the world thread was not blocked.
+
+## Benchmarks (bridge engine, simulated realm, no network or database)
+
+`bench_chatter2_full.py` runs 120 simulated seconds per scale, with:
+
+- a mixed event stream: combat, kill, loot, quest, Party, General, guild, /say, bot-to-bot replies, BG, raid, world events and whispers;
+- ambient and idle initiation ticks;
+- simulated 2 ms knowledge lookups;
+- `call_llm` against a failing provider (circuit breaker: 5 failures / 30 s).
+
+| Bots | Events | Lifecycle-quiet (no model call) | Repeat openers dropped | Engine p50 / p95 / p99 µs | Engine CPU (one core) | Scopes | Peak mem |
+|---|---|---|---|---|---|---|---|
+| 1,500 | 897 | 1,751 | 55 | 70 / 2,176 / 2,478 | 0.22% | 432 | 2.5 MB |
+| 2,000 | 1,227 | 2,415 | 69 | 59 / 2,155 / 2,206 | 0.28% | 571 | 1.7 MB |
+| 3,000 | 1,854 | 3,641 | 118 | 63 / 2,163 / 2,225 | 0.45% | 878 | 2.3 MB |
+| 4,000 | 2,481 | 4,868 | 125 | 59 / 2,161 / 2,295 | 0.59% | 1,153 | 3.0 MB |
+
+- **Latency.** p95 and p99 are the simulated 2 ms knowledge round trip on the few events with a quest ID or intent. Without a lookup the engine costs about 60 µs.
+- **30% provider failure.** 858–1,311 requests were sent and 15–1,232 skipped by the breaker or deadline, depending on failure streaks.
+- **Provider outage (100% failure).** Only **20 requests in 120 s** at every scale (the breaker). All other events were skipped with no provider traffic.
+- **Not measured.** The world-thread cost of the C++ capture at 3–4k live bots has not been profiled on a populated server. It is unchanged from 2.0 and bounded to ≤ 8 bots per turn.
+
+## Real-model evaluation
+
+`tools/tests/integration/real_model_eval.py` covers 14 scenarios across all surfaces, 3 runs each. It scores:
+
+- assistant voice;
+- ungrounded facts;
+- unsupported live claims;
+- markdown or lists;
+- repetition;
+- latency p50/p95.
+
+**Status: PENDING AUTHORIZATION.** The dry run wrote `scenarios.json` and `report.json` and made 0 paid requests. A real run needs `--authorize-paid-requests` plus `CHATTER_EVAL_API_KEY` in the environment.

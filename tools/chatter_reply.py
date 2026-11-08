@@ -93,7 +93,8 @@ def generate_reactive_reply(*, client, config, speaker, channel, asker, message,
                             audience_note='', live=None, intents=(), deadline=None, label='reactive_reply',
                             allow_fallback=True, metadata=None):
     """Build evidence and a reply for one admitted turn. Never raises."""
-    from chatter_dialogue import build_reply_prompt, derive_claims, fallback_reply, parse_reply
+    from chatter_dialogue import (build_reply_prompt, derive_claims, fallback_reply, parse_reply,
+                                  unsupported_claim)
     from chatter_knowledge import engine
     from chatter_live import rare_question_without_sighting, speaker_evidence, world_of
     from chatter_llm import call_llm
@@ -151,6 +152,11 @@ def generate_reactive_reply(*, client, config, speaker, channel, asker, message,
             result.fallback = bool(result.message)
     else:
         result.message = parse_reply(response, speaker['name'])
+        rejected = unsupported_claim(result.message, used, guid)
+        if rejected:
+            # Never send a live-state assertion the bot cannot back up.
+            stats['rejected'] = rejected
+            result.message = ''
     if result.message:
         result.claims = derive_claims(used, guid)
     stats['total_ms'] = int((time.monotonic() - started) * 1000)

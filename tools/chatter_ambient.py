@@ -6,6 +6,7 @@ processing from the bridge.
 
 from chatter_rss import select_topic, attach_context, TOPIC_HINT
 from chatter_relationships import ambient_context
+from chatter_surfaces import initiation_gate
 from chatter_personality import willing_to_speak
 
 import json
@@ -1959,6 +1960,7 @@ def _pick_bot_gossip_target(config, cursor, zone_id, speaker_guids):
 
 
 @ambient_context
+@initiation_gate('general')
 def process_statement(
     db, cursor, client, config, request, bot: dict
 ):
@@ -2254,6 +2256,7 @@ def process_statement(
 
 
 @ambient_context
+@initiation_gate('general')
 def process_conversation(
     db, cursor, client, config,
     request, bots: List[dict]

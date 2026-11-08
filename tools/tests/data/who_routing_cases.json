@@ -1,0 +1,23 @@
+{
+  "_doc": "Shared routing table for the Playerbots 'who' collision. 'conversational' is the expected result of LLMChatterCommandPolicy::IsConversationalWhoQuestion, chatter_group.is_conversational_who_question and (for the text after 'who ') Playerbots WhoConversation::IsConversationalParam. 'command' is the expected chatter_group._is_playerbot_command result with ConversationalWho enabled.",
+  "cases": [
+    {"text": "who", "conversational": false, "command": true},
+    {"text": "who mining", "conversational": false, "command": true},
+    {"text": "who herbalism", "conversational": false, "command": true},
+    {"text": "who linen cloth", "conversational": false, "command": true},
+    {"text": "who |cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r", "conversational": false, "command": true},
+    {"text": "who starts |cffffff00|Hquest:783:1|h[A Threat Within]|h|r", "conversational": false, "command": true},
+    {"text": "who starts this quest?", "conversational": true, "command": false},
+    {"text": "Who starts this quest?", "conversational": true, "command": false},
+    {"text": "who is tanking", "conversational": true, "command": false},
+    {"text": "who   is here", "conversational": true, "command": false},
+    {"text": "Who drops the sword?", "conversational": true, "command": false},
+    {"text": "who else is coming", "conversational": true, "command": false},
+    {"text": "who can heal?", "conversational": true, "command": false},
+    {"text": "who pulled that", "conversational": true, "command": false},
+    {"text": "who sells mana potions", "conversational": true, "command": false},
+    {"text": "whoever starts", "conversational": false, "command": false},
+    {"text": "who's tanking", "conversational": false, "command": false},
+    {"text": "who isabel", "conversational": false, "command": true}
+  ]
+}

@@ -115,7 +115,8 @@ def decide_party(message, bots, other_humans=(), history=(), player_guid=0, inte
     """One responder or silence for a Party turn."""
     from chatter_group import _is_playerbot_command
     # Defence in depth: C++ ingress and the handler already drop commands.
-    if (message or '').lstrip().startswith('@') or _is_playerbot_command(message or ''):
+    # "@heal follow" is a selector command; "@Thrall how are you" is chat.
+    if _is_playerbot_command(message or ''):
         return Decision(False, reason='playerbot_command')
     history = list(history or ())
     if superseded(history, player_guid, message):
@@ -137,6 +138,24 @@ def decide_party(message, bots, other_humans=(), history=(), player_guid=0, inte
     reason = ('firsthand_evidence' if int(best['bot_guid']) in firsthand
               else 'role_relevance' if best.get('role') and best is not bot and scores else 'best_fit')
     return Decision(True, best, False, reason, scores)
+
+
+def decide_general(message, history=(), player_guid=0):
+    """Silence a General turn whose moment passed or that bots already answered.
+
+    General is zone-wide: a newer human line in the same audience, or the
+    same person repeating a question a bot just answered, means a reply now
+    would be noise. Responder choice stays with the General handler.
+    """
+    from chatter_group import _is_playerbot_command
+    if _is_playerbot_command(message or ''):
+        return Decision(False, reason='playerbot_command')
+    history = list(history or ())
+    if superseded(history, player_guid, message):
+        return Decision(False, reason='conversation_moved_on')
+    if already_answered(history, player_guid, message):
+        return Decision(False, reason='already_answered')
+    return Decision(True, reason='general_turn')
 
 
 def decide_whisper(message):

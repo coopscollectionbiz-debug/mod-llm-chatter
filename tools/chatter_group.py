@@ -27,6 +27,7 @@ and chatter_prompts.
 """
 
 from chatter_relationships import ambient_context
+from chatter_surfaces import initiation_gate
 from chatter_personality import willing_to_speak, player_prompt
 from chatter_reactive import recent_transcript, reserve_party_reply, select_party_responder
 from chatter_trace import record as trace
@@ -228,7 +229,8 @@ __all__ = [
 
 def init_group_config(config):
     """Initialize module-level config values."""
-    global _chat_history_limit, _spice_count
+    global _chat_history_limit, _spice_count, _conversational_who
+    _conversational_who = str(config.get('LLMChatter.PlayerChat.ConversationalWho', '1')) == '1'
     try:
         val = int(
             config.get('LLMChatter.ChatHistoryLimit', 10)
@@ -408,6 +410,27 @@ def _split_playerbot_selector(message: str):
     return False, False, ''
 
 
+_conversational_who = True
+_WHO_SENTENCE_WORDS = frozenset((
+    'starts', 'start', 'drops', 'drop', 'dropped', 'is', 'are', 'was', 'were', 'knows', 'know',
+    'has', 'have', 'had', 'can', 'could', 'wants', 'want', 'needs', 'need', 'got', 'gets',
+    'did', 'does', 'do', 'will', 'would', 'should', 'else', 'pulled', 'pulls', 'killed',
+    'gives', 'sells'))
+
+
+def is_conversational_who_question(message: str) -> bool:
+    """Same rule as LLMChatterCommandPolicy.h / Playerbots WhoConversation.h.
+
+    Only "who <sentence word> ..." is conversation; bare "who",
+    "who <skill>" and any item/quest link remain the Playerbots command.
+    """
+    text = (message or '').strip().lower()
+    if not text.startswith('who ') or '|hitem:' in text or '|hquest:' in text:
+        return False
+    match = re.match(r'[a-z]*', text[4:].lstrip(' \t'))
+    return bool(match and match.group(0) in _WHO_SENTENCE_WORDS)
+
+
 def _is_playerbot_command(message: str) -> bool:
     """Check if a message is a playerbot command.
     Returns True if the full message (stripped,
@@ -438,6 +461,11 @@ def _is_playerbot_command(message: str) -> bool:
             msg = msg[1:].lstrip()
         if not msg:
             return False
+
+    # "who starts this quest?" is conversation once Playerbots' WhoAction
+    # declines it (Playerbots WhoConversation.h). Mirrors the C++ filter.
+    if _conversational_who and is_conversational_who_question(msg):
+        return False
 
     # Exact match (e.g. "follow", "stay", "ss")
     if msg in PLAYERBOT_COMMANDS:
@@ -1681,7 +1709,7 @@ def _reply_party_turn_v2(db, client, config, event_id, bot, bot_guid, bot_name, 
                             lookup_failed=result.stats.get('lookup_failed'),
                             model_ms=result.stats.get('model_ms'), deadline_ms=result.stats.get('deadline_ms'),
                             claims=bool(result.claims), fallback=result.fallback,
-                            total_ms=result.stats.get('total_ms'))
+                            total_ms=result.stats.get('total_ms'), rejected=result.stats.get('rejected'))
         if not result.message:
             trace(outcome='silent_reply', **trace_fields)
             _mark_event(db, event_id, 'skipped')
@@ -4055,6 +4083,7 @@ def check_idle_group_chatter(
 
 
 @ambient_context
+@initiation_gate('party')
 def _idle_single_statement(
     db, client, config, group_id,
     all_bots, mode, chat_hist, members, now,
@@ -4334,6 +4363,7 @@ def _idle_single_statement(
 
 
 @ambient_context
+@initiation_gate('party')
 def _idle_conversation(
     db, client, config, group_id,
     bot_rows, mode, chat_hist, members, now,

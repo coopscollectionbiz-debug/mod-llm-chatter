@@ -121,7 +121,8 @@ def process_bot_player_whisper_event(db, client, config, event):
             fields = dict(event_id=event_id, surface='whisper', bot_guid=bot_guid,
                           knowledge=result.stats.get('knowledge'), evidence=result.stats.get('evidence'),
                           model_ms=result.stats.get('model_ms'), claims=bool(result.claims),
-                          fallback=result.fallback, total_ms=result.stats.get('total_ms'))
+                          fallback=result.fallback, total_ms=result.stats.get('total_ms'),
+                          rejected=result.stats.get('rejected'))
             if not result.message:
                 trace(outcome='silent_reply', **fields)
                 _mark_event(db, event_id, 'skipped')

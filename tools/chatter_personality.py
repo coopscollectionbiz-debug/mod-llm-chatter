@@ -233,7 +233,26 @@ def profile_instruction(name, guid=None):
         f'Typing: {style}. Questions about {p["question_frequency"]}% of turns, never required. '
         f'Interests: {", ".join(p["gameplay_interests"])}. '
         'Apply these tendencies to attitude, participation and wording; avoid caricature.'
+        + _voice_suffix(p)
     )
+
+
+def _voice_suffix(profile):
+    """Chatter 2.0: the same derived voice line every surface uses.
+
+    Inert under the legacy pipeline (rollback keeps prompts byte-identical).
+    The PROFILE prefix above is unchanged, so relationship enrichment still
+    recognises the speaker.
+    """
+    try:
+        from chatter_surfaces import enabled
+        if not enabled():
+            return ''
+        from chatter_dialogue import voice_line
+        line = voice_line(profile)
+        return f' {line}' if line else ''
+    except Exception:
+        return ''
 
 
 def should_speak(profile, directly_addressed=False, important=False, rng=random.random, familiarity_bonus=0):

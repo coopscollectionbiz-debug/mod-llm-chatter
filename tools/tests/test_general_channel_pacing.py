@@ -335,7 +335,7 @@ def test_player_general_recent_context_matches_faction():
     chatter_db.get_recent_zone_messages(
         db, 12, faction='Alliance'
     )
-    assert 'c.race IN (1, 3, 4, 7, 11)' in (
+    assert 'c.race IN (1, 3, 4, 7, 11, 12)' in (
         db.cursor_value.query
     )
 

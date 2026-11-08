@@ -27,6 +27,7 @@
 #include "LLMChatterConfig.h"
 #include "LLMChatterBG.h"
 #include "LLMChatterGroup.h"
+#include "LLMChatterCommandPolicy.h"
 #include "LLMChatterGroupInternal.h"
 #include "LLMChatterShared.h"
 
@@ -1104,6 +1105,12 @@ bool IsLikelyPlayerbotControlCommand(
     if (exactCommands.find(msg)
         != exactCommands.end())
         return true;
+
+    // "who starts this quest?" is conversation once Playerbots declines it
+    // (WhoConversation.h); bare "who", "who <skill>" and links stay commands.
+    if (sLLMChatterConfig && sLLMChatterConfig->_conversationalWhoEnable
+        && LLMChatterCommandPolicy::IsConversationalWhoQuestion(msg))
+        return false;
 
     size_t firstSpace = msg.find(' ');
     if (firstSpace != std::string::npos)

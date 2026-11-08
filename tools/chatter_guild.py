@@ -137,8 +137,8 @@ from chatter_prompts import (
 
 # Review #4: never insult your own faction. Derive Alliance/Horde from race so
 # the prompt can pass the speaker's side and forbid self-faction jabs.
-_ALLIANCE_RACES = {"Human", "Dwarf", "Night Elf", "Gnome", "Draenei"}
-_HORDE_RACES = {"Orc", "Undead", "Scourge", "Tauren", "Troll", "Blood Elf"}
+from chatter_constants import ALLIANCE_RACE_NAMES as _ALLIANCE_RACES  # noqa: E402
+from chatter_constants import HORDE_RACE_NAMES as _HORDE_RACES  # noqa: E402
 
 
 def _faction_of(race_name: str) -> str:

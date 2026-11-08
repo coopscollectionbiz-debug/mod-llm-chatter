@@ -102,7 +102,7 @@ def build_reply_prompt(*, speaker, profile_line, profile, channel, audience_note
         profile_line,
     ]
     voice = voice_line(profile)
-    if voice:
+    if voice and voice not in (profile_line or ''):  # profile_instruction may already carry it
         lines.append(voice)
     lines.append(f'Channel: {channel}. {audience_note}'.strip())
     if transcript:
@@ -159,6 +159,30 @@ def derive_claims(used, bot_guid):
               and int(item.observer) == int(bot_guid)):
             claims.append(f'rare;g={int(bot_guid)};s={int(item.facts["spawn"])};e={int(item.facts["entry"])}')
     return '|'.join(claims[:4]) or None
+
+
+_LOW_POWER_CLAIM = re.compile(
+    r"\b(oom|out of mana|low on mana|low mana|need (?:to )?drink|drinking|mana sec|(?:mana|drink) break)\b", re.I)
+_RARE_SEEN_CLAIM = re.compile(r"\b(i (?:can )?see (?:it|him|her|the rare)|it'?s (?:right )?(?:here|up)|"
+                              r"(?:he|she|it) is right here)\b", re.I)
+
+
+def unsupported_claim(message, used, bot_guid):
+    """Name of a live claim in ``message`` that the evidence does not support.
+
+    Delivery revalidates claims derived from evidence; a model that asserts
+    low mana without (or against) its own power evidence, or a sighting it
+    was not shown, would otherwise go out unchecked. Returns '' when fine.
+    """
+    text = message or ''
+    mine = [e for e in used if int(getattr(e, 'observer', 0) or 0) == int(bot_guid)]
+    if _LOW_POWER_CLAIM.search(text) and not any(
+            e.kind == 'live_self' and e.facts.get('power_low') for e in mine):
+        return 'unsupported_power_claim'
+    if _RARE_SEEN_CLAIM.search(text) and not any(
+            e.kind == 'rare_seen' and e.status == 'found' for e in mine):
+        return 'unsupported_sighting_claim'
+    return ''
 
 
 def fallback_reply(used, profile=None):

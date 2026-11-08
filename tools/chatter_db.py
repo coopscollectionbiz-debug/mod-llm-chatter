@@ -685,6 +685,12 @@ def insert_chat_message(
             # GroupChatter.Enable.
             owner_subsystem = 'other'
 
+    from chatter_surfaces import admit_line
+    if not admit_line(message, sequence, channel):
+        # Repeats this scope's recent chatter; the whole dispatch stays
+        # quiet (checked before any party slot is reserved).
+        return None
+
     final_delay = delay_seconds
     if (
         config is not None
@@ -816,16 +822,8 @@ def get_recent_zone_messages(
     if not zone_id:
         return []
     try:
-        if faction == 'Alliance':
-            faction_filter = (
-                'AND c.race IN (1, 3, 4, 7, 11)'
-            )
-        elif faction == 'Horde':
-            faction_filter = (
-                'AND c.race IN (2, 5, 6, 8, 10)'
-            )
-        else:
-            faction_filter = ''
+        from chatter_constants import race_sql_filter
+        faction_filter = race_sql_filter(faction)
         # Faction-scoped anti-repetition context fails closed when
         # the speaking character can no longer be identified.
         character_join = (

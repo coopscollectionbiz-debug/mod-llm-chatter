@@ -127,3 +127,16 @@ These distinctions are encoded explicitly, as the brief requires:
 - **Core and Playerbots.** No changes to core or Playerbots. Uses existing hooks (`PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT`) and APIs (`Player::Whisper`, `CanSeeOrDetect`, `PlayerSocial::HasIgnore`).
 - **Build.** The staging build includes all 18 installed modules, so symbol collisions with other custom modules would have surfaced. None did.
 - **Upstream Chatter.** Not merged. The Nov 8 audit's per-commit decisions still apply.
+
+## 6. Full-system integration (release candidate, `codex/chatter-2.0-full`)
+
+The reactive architecture above now covers every dialogue surface through one shared engine. The design is documented in `CHATTER-2.0-FULL-INTEGRATION.md`; in summary:
+
+- **Single choke points.** Every model request passes `call_llm`, so the surface engine (`chatter_surfaces.apply`) sits there, before relationship enrichment. Every message passes `insert_chat_message`, so repeat suppression sits there.
+  - Events are gated in `process_single_event`: player precedence, initiation pacing and bot reply-chain caps.
+  - Ambient queue rows and party idle ticks are gated by the `initiation_gate` decorator.
+- **Surface registry.** About 29 explicit policies, each with channel, evidence audience, knowledge mode, RSS mode, lifecycle class, dedup and a speaker cap. Every call_llm label and registered event type maps to one, and tests fail if a new label or event is unmapped. System labels (memory summaries, tone, backstory, addressed-bot detection, vision) are explicit exceptions.
+- **Lifecycle registry.** Bounded, in memory, advisory and reset on restart, keyed by audience scope. It enforces that players outrank bots, that only one conversation runs per scope, and that bot-to-bot threads end (`MaxReplyChain`).
+- **Audience invariants extended.** Public surfaces (General, /say, guild) receive only `public` evidence, whispers only `private`, and party and raid also `party`. The engine never renders memories.
+- **Rollback.** `Dialogue.Pipeline=1` or `Surfaces.Enable=0` makes the engine inert: identical prompts, no gating and no voice suffix.
+- **Playerbots `who`.** A narrow two-sided fix: Playerbots `WhoAction` declines sentence-form parameters, and Chatter treats exactly those as conversation. One shared case table covers all three implementations.

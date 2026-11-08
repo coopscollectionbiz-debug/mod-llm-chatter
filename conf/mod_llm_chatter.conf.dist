@@ -2680,6 +2680,52 @@ LLMChatter.Whisper.CooldownSeconds = 4
 LLMChatter.Whisper.ExpirySeconds = 20
 
 #
+#   LLMChatter.PlayerChat.ConversationalWho [WORLD+BRIDGE]
+#       Treat "who <sentence>" Party lines ("who starts this quest?", "who is
+#       tanking") as conversation instead of the Playerbots who command. Bare
+#       "who", "who <skill>", item names and item/quest links stay commands.
+#       Requires the matching Playerbots WhoAction change; set 0 on an
+#       unpatched Playerbots build so bots do not answer twice.
+#       Default: 1
+#
+LLMChatter.PlayerChat.ConversationalWho = 1
+
+#
+#   LLMChatter.Surfaces.Enable [BRIDGE]
+#       Chatter 2.0 shared dialogue engine for every non-reactive surface
+#       (ambient General, party idle, guild, proximity, combat, boss,
+#       dungeon, raid, battleground, quest, world events, loot, emotes):
+#       per-surface rules, audience-filtered server-data knowledge, RSS
+#       colour for social small talk, and conversation lifecycle (player
+#       precedence, pacing, bot reply-chain limits, repeat suppression).
+#       Inert when LLMChatter.Dialogue.Pipeline = 1 (rollback) or 0 here.
+#       Default: 1
+#
+#   LLMChatter.Surfaces.KnowledgeSeconds [BRIDGE]
+#       Upper bound for one surface's server-data lookups. Default: 1.2
+#
+#   LLMChatter.Lifecycle.PlayerQuietSeconds      (default 45)
+#       After a real player speaks in a scope (General zone, party, guild,
+#       /say area), bots do not start new ambient talk there for this long.
+#   LLMChatter.Lifecycle.InitiationGapSeconds    (default 20)
+#       Minimum gap between bot-initiated exchanges per scope, scaled
+#       0.5x (talkative) .. 1.5x (quiet) by the speaker's personality.
+#   LLMChatter.Lifecycle.ConversationSeconds     (default 40)
+#       A started multi-bot conversation owns its scope this long.
+#   LLMChatter.Lifecycle.MaxReplyChain           (default 3)
+#       Bot-to-bot replies per scope within 90 s before the thread ends.
+#   LLMChatter.Lifecycle.MaxScopes               (default 4096)
+#       Bounded in-memory scope table (least recently used evicted).
+#
+LLMChatter.Surfaces.Enable = 1
+LLMChatter.Surfaces.KnowledgeSeconds = 1.2
+LLMChatter.Lifecycle.PlayerQuietSeconds = 45
+LLMChatter.Lifecycle.InitiationGapSeconds = 20
+LLMChatter.Lifecycle.ConversationSeconds = 40
+LLMChatter.Lifecycle.MaxReplyChain = 3
+LLMChatter.Lifecycle.MaxScopes = 4096
+
+#
 #   LLMChatter.LLM.MinReplyBudgetSeconds [BRIDGE]
 #       Skip a reactive model call when less than this remains before the
 #       turn expires; the reply could not be delivered in time anyway.
