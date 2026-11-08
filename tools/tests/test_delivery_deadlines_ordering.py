@@ -52,13 +52,16 @@ class FetchFixture:
         self.db.create_function('TIMESTAMPDIFF', 3,
                                 lambda unit, start, end: None if start is None or end is None
                                 else round((end - start) * 1000000))
+        self.db.create_function('IF', 3, lambda cond, yes, no: yes if cond else no)
+        self.db.create_function('JSON_UNQUOTE', 1, lambda value: value)
+        sql = sql.replace('INTERVAL 1 MICROSECOND', '0.000001')
         self.sql = re.sub(r'INTERVAL (\d+) SECOND', r'\1', sql)
         self.sql = self.sql.replace('TIMESTAMPDIFF(MICROSECOND,', "TIMESTAMPDIFF('MICROSECOND',")
         self.db.executescript('''
             CREATE TABLE llm_chatter_events (
                 id INTEGER PRIMARY KEY, zone_id INTEGER, map_id INTEGER, extra_data TEXT,
                 event_type TEXT, subject_guid INTEGER, target_entry INTEGER, target_guid INTEGER,
-                priority INTEGER);
+                priority INTEGER, expires_at REAL);
             CREATE TABLE llm_chatter_messages (
                 id INTEGER PRIMARY KEY, bot_guid INTEGER, bot_name TEXT, message TEXT, channel TEXT,
                 emote TEXT, npc_spawn_id INTEGER, player_guid INTEGER, sequence INTEGER,

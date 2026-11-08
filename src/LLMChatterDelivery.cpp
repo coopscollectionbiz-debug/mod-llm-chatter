@@ -325,6 +325,8 @@ struct DeliveryRow
     uint32 prevNpcSpawnId = 0;
     bool hasLaterUndelivered = false;
     int64 remainingUs = -1;
+    std::string reactiveAudience;
+    std::string reactiveTurn;
 };
 
 enum class DeliveryOutcome
@@ -387,6 +389,17 @@ static DeliveryOutcome DeliverRow(
             eventExtraData, "instance_id");
     std::string const& eventType = row.eventType;
     uint32 const eventSubjectGuid = row.eventSubjectGuid;
+
+    using LLMChatterDeliveryPolicy::ReactiveRoute;
+    auto const route = LLMChatterDeliveryPolicy::ClassifyReactiveRoute(eventType, deliveryReason, channel,
+        eventId && eventSubjectGuid && !row.reactiveAudience.empty() && !row.reactiveTurn.empty());
+    if (route == ReactiveRoute::DropRelay || route == ReactiveRoute::DropUnscoped)
+    {
+        dropReasonOut = route == ReactiveRoute::DropRelay ? "general_party_relay_disabled" : "unscoped_reactive_reply";
+        return DeliveryOutcome::Dropped;
+    }
+    bool const reactiveParty = route == ReactiveRoute::Party;
+    bool const reactiveGeneral = route == ReactiveRoute::General;
 
     // Master General-channel toggle. If General chatter is
     // disabled, deliberately consume any already-queued General
@@ -484,6 +497,102 @@ static DeliveryOutcome DeliverRow(
                 messageId, eventId, sequence,
                 eventType, "faction_mismatch");
             return DeliveryOutcome::Handled;
+        }
+    }
+
+    if (reactiveParty || reactiveGeneral)
+    {
+        Player* source = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(eventSubjectGuid));
+        if (!bot || !IsPlayerBot(bot) || !bot->IsInWorld() || !source || IsPlayerBot(source) ||
+            !source->IsInWorld() || bot->GetTeamId() != source->GetTeamId())
+        {
+            dropReasonOut = "reactive_participant_unavailable";
+            return DeliveryOutcome::Dropped;
+        }
+
+        std::string const processedMessage = ConvertAllLinks(message);
+        if (processedMessage.empty())
+        {
+            dropReasonOut = "empty_reactive_reply";
+            return DeliveryOutcome::Dropped;
+        }
+
+        if (reactiveParty)
+        {
+            Group* group = source->GetOriginalGroup();
+            if (!group)
+                group = source->GetGroup();
+            Group* botGroup = bot->GetOriginalGroup();
+            if (!botGroup)
+                botGroup = bot->GetGroup();
+            if (!group || botGroup != group || group->GetGUID().GetCounter() != groupId ||
+                !LLMChatterDeliveryPolicy::MatchesReactiveAudience(row.reactiveAudience,
+                    PartyReactiveAudience(group, source->GetGUID()), PartyReactiveAudience(group, bot->GetGUID())))
+            {
+                dropReasonOut = "stale_party_audience";
+                return DeliveryOutcome::Dropped;
+            }
+            if (!withinDeadline())
+                return DeliveryOutcome::Expired;
+            SendPartyMessageInstant(bot, group, processedMessage, "");
+            RecordPartyChatGateActivity(groupId, deliveryPolicy, deliveryReason);
+        }
+        else
+        {
+            Channel* destination = nullptr;
+            if (ChannelMgr* manager = ChannelMgr::forTeam(bot->GetTeamId()))
+            {
+                for (auto const& [name, candidate] : manager->GetChannels())
+                {
+                    if (candidate && candidate->GetChannelId() == ChatChannelId::GENERAL &&
+                        source->IsInChannel(candidate) &&
+                        LLMChatterDeliveryPolicy::MatchesReactiveAudience(row.reactiveAudience,
+                            GeneralReactiveAudience(source, candidate->GetName()),
+                            GeneralReactiveAudience(bot, candidate->GetName())))
+                    {
+                        destination = candidate;
+                        break;
+                    }
+                }
+            }
+            if (!destination)
+            {
+                dropReasonOut = "stale_general_audience";
+                return DeliveryOutcome::Dropped;
+            }
+            if (!withinDeadline())
+                return DeliveryOutcome::Expired;
+            if (!bot->IsInChannel(destination))
+                destination->JoinChannel(bot, "");
+            if (!destination->CanSpeak(bot->GetGUID()))
+            {
+                dropReasonOut = "reactive_speaker_cannot_use_channel";
+                return DeliveryOutcome::Dropped;
+            }
+            if (!withinDeadline())
+                return DeliveryOutcome::Expired;
+            destination->Say(bot->GetGUID(), processedMessage, LANG_UNIVERSAL);
+        }
+        StoreReactiveChat(row.reactiveAudience, bot, true, message);
+        return DeliveryOutcome::Sent;
+    }
+
+    if ((deliveryReason == "group_idle" || deliveryReason == "group_idle_conv") && bot)
+    {
+        Group* group = bot->GetGroup();
+        if (!group || group->GetGUID().GetCounter() != groupId ||
+            HasRecentPartyReactiveTurn(groupId, sLLMChatterConfig->_reactivePartyExpirySeconds))
+        {
+            dropReasonOut = "party_idle_audience_busy";
+            return DeliveryOutcome::Dropped;
+        }
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            if (Player* member = ref->GetSource(); member && member->IsInCombat())
+            {
+                dropReasonOut = "party_idle_in_combat";
+                return DeliveryOutcome::Dropped;
+            }
         }
     }
 
@@ -1432,6 +1541,8 @@ std::vector<DeliveryRow> ParseDeliveryRows(QueryResult result)
         row.hasLaterUndelivered =
             FieldOr<uint32>(fields[27], 0) != 0;
         row.remainingUs = FieldOr<int64>(fields[28], -1);
+        row.reactiveAudience = FieldOr<std::string>(fields[29], "");
+        row.reactiveTurn = FieldOr<std::string>(fields[30], "");
         rows.push_back(std::move(row));
     } while (result->NextRow());
 

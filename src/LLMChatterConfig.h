@@ -77,6 +77,7 @@ public:
     uint32 _partyGateContextualMinGapSeconds;
     uint32 _partyGateResponsiveMinGapSeconds;
     uint32 _partyGateUrgentMinGapSeconds;
+    uint32 _reactivePartyExpirySeconds;
 
     // Event system settings
     bool _useEventSystem;

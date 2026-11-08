@@ -667,6 +667,9 @@ public:
     void OnAddMember(
         Group* group, ObjectGuid guid) override
     {
+        if (group)
+            InvalidatePartyReactiveAudience(group);
+
         if (!sLLMChatterConfig->IsEnabled()
             || !sLLMChatterConfig->_useGroupChatter)
             return;
@@ -701,6 +704,9 @@ public:
         RemoveMethod /*method*/, ObjectGuid /*kicker*/,
         const char* /*reason*/) override
     {
+        if (group)
+            InvalidatePartyReactiveAudience(group);
+
         if (!sLLMChatterConfig->IsEnabled()
             || !sLLMChatterConfig->_useGroupChatter)
             return;
@@ -901,6 +907,9 @@ public:
 
     void OnDisband(Group* group) override
     {
+        if (group)
+            InvalidatePartyReactiveAudience(group);
+
         if (!sLLMChatterConfig->IsEnabled()
             || !sLLMChatterConfig->_useGroupChatter)
             return;

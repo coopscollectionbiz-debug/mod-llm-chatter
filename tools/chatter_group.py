@@ -28,9 +28,11 @@ and chatter_prompts.
 
 from chatter_relationships import ambient_context
 from chatter_personality import willing_to_speak, player_prompt
+from chatter_reactive import recent_transcript, reserve_party_reply, select_party_responder
 
 import logging
 import random
+import re
 import threading
 import time
 
@@ -1651,7 +1653,11 @@ def process_group_player_msg_event(
     )
     group_id = int(extra_data.get('group_id', 0))
 
-    if not group_id or not player_message:
+    audience = extra_data.get('reactive_audience', '')
+    turn = extra_data.get('reactive_turn', '')
+    if (not group_id or not player_message or not turn
+            or not re.fullmatch(r'party:[0-9]+:[0-9]+:[0-9]+:[01]:[0-7]:(?:[0-9]+,)+', audience)
+            or int(audience.split(':')[2]) != group_id):
         _mark_event(db, event_id, 'skipped')
         return False
 
@@ -1673,10 +1679,10 @@ def process_group_player_msg_event(
     )
 
     # Get all bots in group for name matching
-    cursor = db.cursor(dictionary=True)
+    cursor = db.cursor(dictionary=True, buffered=True)
     cursor.execute("""
         SELECT t.bot_guid, t.bot_name,
-               t.trait1, t.trait2, t.trait3, t.tone,
+               t.trait1, t.trait2, t.trait3, t.tone, t.role,
                t.travel_mode, t.travel_context,
                t.is_mounted, t.is_flying,
                t.is_taxi_flying, t.is_on_transport,
@@ -1698,42 +1704,30 @@ def process_group_player_msg_event(
         player_row.get('race') if player_row else None,
     )
 
+    eligible_guids = set(extra_data.get('reactive_bots', ()))
+    all_bots = [candidate for candidate in all_bots if candidate['bot_guid'] in eligible_guids]
     if not all_bots:
         _mark_event(db, event_id, 'skipped')
         return False
 
-    # Fetch chat history early for LLM bot matching
-    history = _get_recent_chat(db, group_id)
+    history = recent_transcript(db, audience)
     chat_hist = format_chat_history(history)
+    last_spoke = {
+        line['speaker_guid']: index + 1
+        for index, line in enumerate(history) if line['is_bot']
+    }
+    for candidate in all_bots:
+        candidate['last_reply'] = last_spoke.get(candidate['bot_guid'], 0)
 
-    # Prefer addressed bot, else random
-    bot_row = None
-    all_names = [b['bot_name'] for b in all_bots]
-    addr_result = find_addressed_bot(
-        player_message, all_names,
-        client=client, config=config,
-        chat_history=chat_hist
-    )
-    addressed = addr_result.get('bot')
-    multi_addressed = addr_result.get(
-        'multi_addressed', False
-    )
-    brief_casual = bool(
-        addr_result.get('brief_casual', False)
-    )
-    if addressed:
-        for b in all_bots:
-            if b['bot_name'] == addressed:
-                bot_row = b
-                break
-    if not bot_row:
-        bot_row = random.choice(all_bots)
-
-    bot_guid = bot_row['bot_guid']
-    bot_name = bot_row['bot_name']
-    if not willing_to_speak(bot_name, bot_guid, get_chatter_mode(config), directly_addressed=bool(addressed)):
+    members = [candidate['bot_name'] for candidate in all_bots]
+    other_names = extra_data.get('reactive_humans', ())
+    selection = select_party_responder(player_message, all_bots, other_names)
+    if selection is None:
         _mark_event(db, event_id, 'skipped')
         return False
+    bot_row, addressed = selection
+    bot_guid = bot_row['bot_guid']
+    bot_name = bot_row['bot_name']
 
     traits = [
         bot_row['trait1'],
@@ -1774,386 +1768,221 @@ def process_group_player_msg_event(
     zone_id, area_id, map_id = get_group_location(
         db, group_id)
 
-    # Mark as processing
-    cursor = db.cursor()
-    cursor.execute(
-        "UPDATE llm_chatter_events "
-        "SET status = 'processing' WHERE id = %s",
-        (event_id,)
-    )
-    db.commit()
-
-    try:
-        mode = get_chatter_mode(config)
-        # history/chat_hist fetched above for
-        # bot selection — reuse here
-        members = get_group_members(db, group_id)
-
-        # Check for item links in player message
-        item_context = ""
-        items_info = []
-        linked_items = detect_item_links(
-            raw_player_message
-        )
-        if linked_items:
-            world_db = None
-            try:
-                world_db = get_db_connection(
-                    config, 'acore_world'
-                )
-                for entry, name in linked_items:
-                    details = query_item_details(
-                        world_db, entry
-                    )
-                    if details:
-                        items_info.append(details)
-            except Exception as e:
-                logger.error(
-                    "Item link query failed",
-                    exc_info=True,
-                )
-            finally:
-                if world_db:
-                    try:
-                        world_db.close()
-                    except Exception:
-                        pass
-            if items_info:
-                item_context = format_item_context(
-                    items_info, bot['class']
-                )
-
-        # -- Conversation vs single reply --
-        # Roll for multi-bot conversation when
-        # >=2 bots are available. Mutual exclusion:
-        # if conversation fires, skip second bot.
-        used_conversation = False
-        num_bots = len(all_bots)
-        conv_chance = int(config.get(
-            'LLMChatter.GroupChatter'
-            '.PlayerMsgConversationChance',
-            '30',
-        ))
-        # Dynamic scaling: divide by bot count,
-        # floor at 1% when configured > 0
-        eff_conv_chance = (
-            max(conv_chance // max(num_bots, 1), 1)
-            if conv_chance > 0 else 0
-        )
-
-        force_conv = (
-            multi_addressed
-            and num_bots >= 2
-        )
-        rng_conv = (
-            not force_conv
-            and not brief_casual
-            and num_bots >= 2
-            and eff_conv_chance > 0
-            and random.randint(1, 100)
-                <= eff_conv_chance
-        )
-
-        if force_conv or rng_conv:
-            trigger = (
-                "multi_addressed"
-                if force_conv else
-                f"RNG({eff_conv_chance}%)"
-            )
-            # Pass addressed bot with traits
-            # for reuse as first speaker
-            addr_bot = {
-                'guid': bot_guid,
-                'name': bot_name,
-                'class': bot['class'],
-                'race': bot['race'],
-                'level': bot['level'],
-                'trait1': bot_row['trait1'],
-                'trait2': bot_row['trait2'],
-                'trait3': bot_row['trait3'],
-                'travel_mode': travel_state.get('mode') or '',
-                'travel_context': travel_context,
-                'travel_state': travel_state,
-            }
-            try:
-                conv_ok = (
-                    execute_player_msg_conversation(
-                        db, client, config,
-                        event_id, group_id,
-                        addr_bot, all_bots,
-                        player_name,
-                        player_message, mode,
-                        chat_hist, members,
-                        item_context=item_context,
-                        link_context=link_context,
-                        items_info=items_info,
-                        zone_id=zone_id,
-                        area_id=area_id,
-                        map_id=map_id,
-                        brief_casual=brief_casual,
-                    )
-                )
-                if conv_ok:
-                    used_conversation = True
-                    _mark_event(
-                        db, event_id,
-                        'completed',
-                    )
-                    return True
-                # Conversation failed, fall
-                # through to single-bot path
-            except Exception as ec:
-                logger.error(
-                    "Player msg conversation "
-                    "failed, falling through",
-                    exc_info=True,
-                )
-
-        # -- Single-bot reply path --
-        speaker_talent = _maybe_talent_context(
-            config, db, bot_guid,
-            bot['class'], bot_name,
-        )
-        target_talent = None
-        player_info = get_character_info_by_name(
-            db, player_name,
-        )
-        if player_info:
-            target_talent = _maybe_talent_context(
-                config, db,
-                player_info['guid'],
-                get_class_name(
-                    player_info['class']
-                ),
-                player_name,
-                perspective='target',
-            )
-
-        # Fetch memories for player message
-        # response — RNG-gated like idle recall
-        msg_memories = None
-        memory_enabled = int(config.get(
-            'LLMChatter.Memory.Enable', 1
-        ))
-        if (
-            not brief_casual
-            and memory_enabled
-            and player_info
-        ):
-            recall_chance = int(config.get(
-                'LLMChatter.Memory'
-                '.IdleRecallChance', 30,
-            )) / 100.0
-            player_guid = int(
-                player_info['guid']
-            )
-            if (
-                player_guid
-                and random.random()
-                    < recall_chance
-            ):
-                msg_memories = get_bot_memories(
-                    db, bot_guid,
-                    player_guid, count=3,
-                    exclude_first_meeting=True,
-                )
-                if not msg_memories:
-                    msg_memories = None
-
-        prompt = build_player_response_prompt(
-            bot, traits, player_name,
-            player_message, mode,
-            chat_history=chat_hist,
-            members=members,
-            item_context=item_context,
-            link_context=link_context,
-            speaker_talent_context=speaker_talent,
-            target_talent_context=target_talent,
-            zone_id=zone_id,
-            area_id=area_id,
-            map_id=map_id,
-            stored_tone=stored_tone,
-            memories=msg_memories,
-            travel_context=travel_context,
-            brief_casual=brief_casual,
-            allow_action=not brief_casual,
-        )
-
-        max_tokens = pick_random_max_tokens(config)
-        if msg_memories:
-            max_tokens = max(max_tokens, 250)
-        _pmsg_label = (
-            'group_player_msg_memory'
-            if msg_memories
-            else 'group_player_msg'
-        )
-        _dflav_pmsg = get_dungeon_flavor(map_id)
-        pmsg_meta = build_zone_metadata(
-            zone_name=(
-                get_zone_name(zone_id) or ''
-            ),
-            zone_flavor=(
-                get_zone_flavor(zone_id) or ''
-            ),
-            subzone_name=(
-                get_subzone_name(
-                    zone_id, area_id
-                ) or ''
-            ),
-            subzone_lore=(
-                get_subzone_lore(
-                    zone_id, area_id
-                ) or ''
-            ),
-            dungeon_name=(
-                _dflav_pmsg.split(':')[0].strip()
-                if _dflav_pmsg else ''
-            ),
-            dungeon_flavor=_dflav_pmsg or '',
-        )
-        pmsg_meta.update(build_travel_metadata(
-            travel_state,
-            travel_context,
-        ))
-        response = call_llm(
-            client, prompt, config,
-            max_tokens_override=max_tokens,
-            context=(
-                f"grp-msg:#{event_id}"
-                f":{bot_name}"
-            ),
-            label=_pmsg_label,
-            metadata=pmsg_meta or None,
-        )
-
-        if not response:
+    with reserve_party_reply(db, event_id, turn, audience, bot_guid, addressed, config) as admitted:
+        if not admitted:
             _mark_event(db, event_id, 'skipped')
             return False
-
-        parsed = parse_single_response(response)
-        message = strip_speaker_prefix(
-            parsed['message'], bot_name
-        )
-        message = cleanup_message(
-            message, action=parsed.get('action')
-        )
-        emote = parsed.get('emote')
-        brief_fallback = (message, emote)
-        if (
-            brief_casual
-            and not brief_casual_response_fits(
-                message, emote
+        try:
+            mode = get_chatter_mode(config)
+            # Check for item links in player message
+            item_context = ""
+            items_info = []
+            linked_items = detect_item_links(
+                raw_player_message
             )
-        ):
-            repair_meta = dict(pmsg_meta)
-            repair_meta['brief_casual_repair'] = True
-            response = call_llm(
-                client,
-                build_brief_casual_repair_prompt(prompt),
-                config,
-                max_tokens_override=max_tokens,
-                context=f"grp-msg-brief-repair:{bot_name}",
-                label=_pmsg_label,
-                metadata=repair_meta,
-            )
-            parsed = parse_single_response(response or '')
-            message = strip_speaker_prefix(
-                parsed.get('message', ''), bot_name
-            )
-            message = cleanup_message(message)
-            emote = parsed.get('emote')
-        if brief_casual:
-            fallback_message, fallback_emote = brief_fallback
-            message, emote = bound_brief_casual_response(
-                message,
-                emote,
-                fallback_message,
-                fallback_emote,
-            )
-        if not message and not (
-            brief_casual and emote
-        ):
-            _mark_event(db, event_id, 'skipped')
-            return False
-        if message:
-            message = shorten_chat_message(message)
-        reply_delay = calculate_dynamic_delay(
-            len(message), config,
-            prev_message_length=len(
-                player_message
-            ),
-            responsive=True,
-        )
-        insert_chat_message(
-            db, bot_guid, bot_name, message,
-            channel='party',
-            delay_seconds=reply_delay,
-            event_id=event_id, emote=emote,
-            config=config,
-            group_id=group_id,
-            delivery_policy='responsive',
-            delivery_reason='bot_group_player_msg',
-        )
-
-        _store_chat(
-            db, group_id, bot_guid,
-            bot_name, True,
-            message or f"[performed /{emote}]",
-        )
-
-        # Second bot chance — MUTUAL EXCLUSION:
-        # skip if conversation path was used
-        if not used_conversation and not brief_casual:
-            second_chance = int(config.get(
-                'LLMChatter.GroupChatter'
-                '.PlayerMsgSecondBotChance',
-                '25',
-            ))
-            if random.randint(1, 100) <= (
-                second_chance
-            ):
+            if linked_items:
+                world_db = None
                 try:
-                    _try_second_bot_response(
-                        db, client, config,
-                        group_id,
-                        bot_guid, player_name,
-                        player_message, mode,
-                        event_id,
-                        link_context=link_context,
-                        items_info=items_info,
+                    world_db = get_db_connection(
+                        config, 'acore_world'
                     )
-                except Exception as e2:
+                    for entry, name in linked_items:
+                        details = query_item_details(
+                            world_db, entry
+                        )
+                        if details:
+                            items_info.append(details)
+                except Exception as e:
                     logger.error(
-                        "Second bot response failed",
+                        "Item link query failed",
                         exc_info=True,
                     )
+                finally:
+                    if world_db:
+                        try:
+                            world_db.close()
+                        except Exception:
+                            pass
+                if items_info:
+                    item_context = format_item_context(
+                        items_info, bot['class']
+                    )
 
-        # Memory: queue player_message memories
-        try:
-            if int(config.get(
-                'LLMChatter.Memory.Enable', 1
-            )):
-                _maybe_queue_player_msg_memory(
-                    config, group_id,
-                    player_message, all_bots,
-                    player_name=player_name,
+            # -- Single-bot reply path --
+            speaker_talent = _maybe_talent_context(
+                config, db, bot_guid,
+                bot['class'], bot_name,
+            )
+            target_talent = None
+            player_info = get_character_info_by_name(
+                db, player_name,
+            )
+            if player_info:
+                target_talent = _maybe_talent_context(
+                    config, db,
+                    player_info['guid'],
+                    get_class_name(
+                        player_info['class']
+                    ),
+                    player_name,
+                    perspective='target',
                 )
-        except Exception:
-            logger.error(
-                "player_message memory failed",
-                exc_info=True,
+
+            # Fetch memories for player message
+            # response — RNG-gated like idle recall
+            msg_memories = None
+            memory_enabled = int(config.get(
+                'LLMChatter.Memory.Enable', 1
+            ))
+            if (
+                memory_enabled
+                and player_info
+            ):
+                recall_chance = int(config.get(
+                    'LLMChatter.Memory'
+                    '.IdleRecallChance', 30,
+                )) / 100.0
+                player_guid = int(
+                    player_info['guid']
+                )
+                if (
+                    player_guid
+                    and random.random()
+                        < recall_chance
+                ):
+                    msg_memories = get_bot_memories(
+                        db, bot_guid,
+                        player_guid, count=3,
+                        exclude_first_meeting=True,
+                    )
+                    if not msg_memories:
+                        msg_memories = None
+
+            prompt = build_player_response_prompt(
+                bot, traits, player_name,
+                player_message, mode,
+                chat_history=chat_hist,
+                members=members,
+                item_context=item_context,
+                link_context=link_context,
+                speaker_talent_context=speaker_talent,
+                target_talent_context=target_talent,
+                zone_id=zone_id,
+                area_id=area_id,
+                map_id=map_id,
+                stored_tone=stored_tone,
+                memories=msg_memories,
+                travel_context=travel_context,
+                allow_action=False,
             )
 
-        _mark_event(db, event_id, 'completed')
-        return True
+            max_tokens = pick_random_max_tokens(config)
+            if msg_memories:
+                max_tokens = max(max_tokens, 250)
+            _pmsg_label = (
+                'group_player_msg_memory'
+                if msg_memories
+                else 'group_player_msg'
+            )
+            _dflav_pmsg = get_dungeon_flavor(map_id)
+            pmsg_meta = build_zone_metadata(
+                zone_name=(
+                    get_zone_name(zone_id) or ''
+                ),
+                zone_flavor=(
+                    get_zone_flavor(zone_id) or ''
+                ),
+                subzone_name=(
+                    get_subzone_name(
+                        zone_id, area_id
+                    ) or ''
+                ),
+                subzone_lore=(
+                    get_subzone_lore(
+                        zone_id, area_id
+                    ) or ''
+                ),
+                dungeon_name=(
+                    _dflav_pmsg.split(':')[0].strip()
+                    if _dflav_pmsg else ''
+                ),
+                dungeon_flavor=_dflav_pmsg or '',
+            )
+            pmsg_meta.update(build_travel_metadata(
+                travel_state,
+                travel_context,
+            ))
+            response = call_llm(
+                client, prompt, config,
+                max_tokens_override=max_tokens,
+                context=(
+                    f"grp-msg:#{event_id}"
+                    f":{bot_name}"
+                ),
+                label=_pmsg_label,
+                metadata=pmsg_meta or None,
+            )
 
-    except Exception as e:
-        logger.error(
-            "process_group_player_msg_event failed "
-            "event=%d", event_id, exc_info=True,
-        )
-        _mark_event(db, event_id, 'skipped')
-        return False
+            if not response:
+                _mark_event(db, event_id, 'skipped')
+                return False
+
+            parsed = parse_single_response(response)
+            message = strip_speaker_prefix(
+                parsed['message'], bot_name
+            )
+            message = cleanup_message(
+                message, action=parsed.get('action')
+            )
+            if not message:
+                _mark_event(db, event_id, 'skipped')
+                return False
+            if message:
+                message = shorten_chat_message(message)
+            reply_delay = calculate_dynamic_delay(
+                len(message), config,
+                prev_message_length=len(
+                    player_message
+                ),
+                responsive=True,
+            )
+            insert_chat_message(
+                db, bot_guid, bot_name, message,
+                channel='party',
+                delay_seconds=reply_delay,
+                event_id=event_id,
+                config=config,
+                group_id=group_id,
+                delivery_policy='responsive',
+                delivery_reason='bot_group_player_msg',
+            )
+
+            # Memory: queue player_message memories
+            try:
+                if int(config.get(
+                    'LLMChatter.Memory.Enable', 1
+                )):
+                    _maybe_queue_player_msg_memory(
+                        config, group_id,
+                        player_message, all_bots,
+                        player_name=player_name,
+                    )
+            except Exception:
+                logger.error(
+                    "player_message memory failed",
+                    exc_info=True,
+                )
+
+            _mark_event(db, event_id, 'completed')
+            return True
+
+        except Exception as e:
+            logger.error(
+                "process_group_player_msg_event failed "
+                "event=%d", event_id, exc_info=True,
+            )
+            _mark_event(db, event_id, 'skipped')
+            return False
 
 
 def _maybe_queue_player_msg_memory(
@@ -3779,10 +3608,10 @@ def check_idle_group_chatter(
     """
     # Read config values (with defaults)
     idle_chance = int(config.get(
-        'LLMChatter.GroupChatter.IdleChance', 15
+        'LLMChatter.GroupChatter.IdleChance', 5
     ))
     idle_cooldown = int(config.get(
-        'LLMChatter.GroupChatter.IdleCooldown', 40
+        'LLMChatter.GroupChatter.IdleCooldown', 120
     ))
 
     # Get all active groups from bot traits
@@ -3799,6 +3628,16 @@ def check_idle_group_chatter(
     # Pick one group at random to check
     group = random.choice(groups)
     group_id = group['group_id']
+    cursor.execute(
+        """SELECT 1 FROM llm_chatter_events
+           WHERE event_type = 'bot_group_player_msg' AND expires_at > NOW(6)
+           AND status IN ('pending', 'processing')
+           AND JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(extra_data), extra_data, '{}'), '$.group_id')) = %s
+           LIMIT 1""",
+        (str(group_id),),
+    )
+    if cursor.fetchone():
+        return False
 
     _dbg = config.get(
         'LLMChatter.DebugLog', '0') == '1'
@@ -4046,7 +3885,7 @@ def check_idle_group_chatter(
 
         conv_bias = int(config.get(
             'LLMChatter.GroupChatter.'
-            'ConversationBias', 50
+            'IdleConversationBias', 0
         ))
         use_conversation = (
             random.randint(1, 100) <= conv_bias

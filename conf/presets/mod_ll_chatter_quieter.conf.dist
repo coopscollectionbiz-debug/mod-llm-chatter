@@ -1354,7 +1354,7 @@ LLMChatter.GroupChatter.IdleCheckInterval = 30
 #       chatting during downtime.
 #       Default: 15
 #
-LLMChatter.GroupChatter.IdleChance = 7
+LLMChatter.GroupChatter.IdleChance = 5
 
 #
 #   LLMChatter.GroupChatter.ConversationBias
@@ -1371,7 +1371,10 @@ LLMChatter.GroupChatter.ConversationBias = 30
 #       for the same group.
 #       Default: 40
 #
-LLMChatter.GroupChatter.IdleCooldown = 40
+LLMChatter.GroupChatter.IdleCooldown = 120
+
+# Percent chance to use a multi-line idle scene instead of one idle line.
+LLMChatter.GroupChatter.IdleConversationBias = 0
 
 #
 #   LLMChatter.GroupChatter.KillChanceNormal
@@ -1652,7 +1655,7 @@ LLMChatter.GroupChatter.WipeCooldown = 120
 #       Enable bot-initiated questions to player.
 #       Default: 1
 #
-LLMChatter.GroupChatter.BotQuestionEnable = 1
+LLMChatter.GroupChatter.BotQuestionEnable = 0
 
 #
 #   LLMChatter.GroupChatter.BotQuestionChance
@@ -1747,7 +1750,8 @@ LLMChatter.GroupChatter.QuestConversationChance = 30
 #       a multi-bot conversation instead of a single response.
 #       Default: 30
 #
-LLMChatter.GroupChatter.PlayerMsgConversationChance = 30
+# Reactive Party replies are single-speaker. This legacy knob is ignored.
+LLMChatter.GroupChatter.PlayerMsgConversationChance = 0
 
 #
 #   LLMChatter.GroupChatter.PlayerMsgSecondBotChance
@@ -1755,7 +1759,8 @@ LLMChatter.GroupChatter.PlayerMsgConversationChance = 30
 #       after a single-bot response to a player message.
 #       Default: 25
 #
-LLMChatter.GroupChatter.PlayerMsgSecondBotChance = 25
+# This legacy knob is ignored.
+LLMChatter.GroupChatter.PlayerMsgSecondBotChance = 0
 
 #
 #   LLMChatter.GroupChatter.PlayerMsgCooldown
@@ -1772,7 +1777,8 @@ LLMChatter.GroupChatter.PlayerMsgCooldown = 15
 #       Default: 1
 #       [BRIDGE]
 #
-LLMChatter.GroupChatter.GeneralRelayEnable = 1
+# The relay is retired. This key is retained for older configs and ignored.
+LLMChatter.GroupChatter.GeneralRelayEnable = 0
 
 #
 #   LLMChatter.GroupChatter.GeneralRelayChance
@@ -2599,6 +2605,11 @@ LLMChatter.PartyGate.ResponsiveMinGapSeconds = 4
 #       Default: 0
 #
 LLMChatter.PartyGate.UrgentMinGapSeconds = 0
+
+# Reactive Party admission allows one pending reply. Addressed turns bypass these soft gaps.
+LLMChatter.PartyGate.ReactiveBotGapSeconds = 12
+LLMChatter.PartyGate.ReactivePartyGapSeconds = 6
+LLMChatter.PartyGate.ReactiveExpirySeconds = 12
 
 #
 #   LLMChatter.PartyGate.PreLLMDeferThresholdSeconds

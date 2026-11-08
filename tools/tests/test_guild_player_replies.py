@@ -451,7 +451,7 @@ def test_optional_casual_silence_excludes_party_chat():
         module_root / 'tools/chatter_group.py'
     ).read_text(encoding='utf-8')
     assert 'should_reply_to_optional_casual(' not in party_source
-    assert "addr_result.get('brief_casual', False)" in party_source
+    assert 'select_party_responder(' in party_source
 
     for relative in (
         'conf/mod_llm_chatter.conf.dist',

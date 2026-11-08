@@ -944,7 +944,7 @@ public:
                 return true;
         }
 
-        if (!player || IsPlayerBot(player))
+        if (!player || IsPlayerBot(player) || !channel->CanSpeak(player->GetGUID()))
             return true;
 
         // Ignore hidden addon traffic (DBM, Questie, ElvUI, ...);
@@ -1197,7 +1197,14 @@ public:
         botGuids += "]";
         botNames += "]";
 
+        std::string const audience = GeneralReactiveAudience(player, channel->GetName());
+        if (audience.size() > 512)
+            return true;
+        StoreReactiveChat(audience, player, false, safeMsg);
+
         std::string extraData = "{"
+            "\"reactive_audience\":\"" + JsonEscape(audience) + "\","
+            "\"reactive_turn\":\"" + NewReactiveTurn() + "\","
             "\"player_name\":\"" +
                 JsonEscape(playerName) + "\","
             "\"player_gender\":" +

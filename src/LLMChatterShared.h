@@ -13,6 +13,7 @@ class Channel;
 class Creature;
 class Group;
 class Map;
+class ObjectGuid;
 class Player;
 class Unit;
 
@@ -103,6 +104,13 @@ void RecordPartyChatGateActivity(
 Channel* EnsureBotInChatChannel(
     Player* bot, uint32 channelId);
 void EnsureBotInGeneralChannel(Player* bot);
+std::string PartyReactiveAudience(Group* group, ObjectGuid member);
+void InvalidatePartyReactiveAudience(Group* group);
+void NotePartyReactiveTurn(uint32 groupId);
+bool HasRecentPartyReactiveTurn(uint32 groupId, uint32 seconds);
+std::string GeneralReactiveAudience(Player* player, std::string const& channelName);
+std::string NewReactiveTurn();
+void StoreReactiveChat(std::string const& audience, Player* speaker, bool isBot, std::string const& message);
 bool CanSpeakInGeneralChannel(Player* bot);
 bool IsEventOnCooldown(
     std::map<std::string, time_t>& cooldownCache,

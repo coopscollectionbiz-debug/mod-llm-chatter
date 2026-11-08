@@ -68,6 +68,7 @@ from chatter_db import (
     get_character_info_by_name,
     mark_event,
 )
+from chatter_reactive import recent_transcript
 from chatter_group_general_reaction import (
     maybe_queue_group_general_reaction,
 )
@@ -294,27 +295,10 @@ def _filter_player_general_candidates(
     return visible_guids, visible_names
 
 
-def _resolve_zone_context(db, player_name, extra_data):
-    """Resolve player-centric zone for General chat.
-
-    Uses get_player_zone() as source of truth, falls
-    back to C++ event data. No subzone needed for
-    General channel (zone-wide scope).
-
-    Returns dict with zone_id, zone_name, zone_flavor,
-    zone_meta.
-    """
-    pz, _ = get_player_zone(db, player_name)
-    if pz:
-        zone_id = pz
-        zone_name = get_zone_name(pz) or 'Unknown'
-    else:
-        zone_id = int(
-            extra_data.get('zone_id', 0)
-        )
-        zone_name = extra_data.get(
-            'zone_name', 'Unknown'
-        )
+def _resolve_zone_context(extra_data):
+    """Describe the zone captured by the General ingress hook."""
+    zone_id = int(extra_data.get('zone_id', 0))
+    zone_name = extra_data.get('zone_name', 'Unknown')
     zone_flavor = get_zone_flavor(zone_id) or ''
     zone_meta = build_zone_metadata(
         zone_name=(
@@ -739,6 +723,11 @@ def process_general_player_msg_event(
         mark_event(db, event_id, 'skipped')
         return False
 
+    audience = extra_data.get('reactive_audience', '')
+    if not audience.startswith('general:') or not extra_data.get('reactive_turn'):
+        mark_event(db, event_id, 'skipped')
+        return False
+
     player_name = extra_data.get(
         'player_name', 'someone'
     )
@@ -772,9 +761,7 @@ def process_general_player_msg_event(
         )
 
     # Resolve zone from player's location
-    zctx = _resolve_zone_context(
-        db, player_name, extra_data
-    )
+    zctx = _resolve_zone_context(extra_data)
     zone_id = zctx['zone_id']
     zone_name = zctx['zone_name']
     zone_flavor = zctx['zone_flavor']
@@ -801,15 +788,8 @@ def process_general_player_msg_event(
     try:
         mode = get_chatter_mode(config)
 
-        # Fetch recent messages for anti-repetition
-        recent_msgs = get_recent_zone_messages(
-            db, zone_id, faction=player_faction
-        )
-
-        # Fetch chat history for this zone
-        history = _get_general_chat_history(
-            db, zone_id, faction=player_faction
-        )
+        history = recent_transcript(db, audience)
+        recent_msgs = [row['message'] for row in history if row['is_bot']]
         chat_hist = _format_general_history(history)
 
         # Pick primary bot and decide conv vs stmt
@@ -1006,6 +986,7 @@ def process_general_player_msg_event(
             delay_seconds=delay1,
             event_id=event_id,
             sequence=0,
+            delivery_reason="player_general_msg",
         )
         maybe_queue_group_general_reaction(
             db, config,
@@ -1016,10 +997,6 @@ def process_general_player_msg_event(
             source_delay_seconds=delay1,
         )
 
-        # Store in General chat history
-        _store_general_chat(
-            db, zone_id, bot1_name, True, msg1
-        )
 
         # Conversation mode: second bot follows up
         if is_conversation:
@@ -1046,6 +1023,7 @@ def process_general_player_msg_event(
                     brief_casual=brief_casual,
                     zone_meta=zone_meta,
                     faction=player_faction,
+                    audience=audience,
                 )
                 # Extended conversation chance
                 if (
@@ -1085,6 +1063,7 @@ def process_general_player_msg_event(
                             subzone_lore=subzone_lore,
                             zone_meta=zone_meta,
                             faction=player_faction,
+                            audience=audience,
                         )
                     except Exception as e3:
                         logger.error(
@@ -1130,6 +1109,7 @@ def _general_followup(
     zone_meta=None,
     brief_casual=False,
     faction="",
+    audience="",
 ):
     """Generate a second bot's followup response
     in General channel conversation mode.
@@ -1176,9 +1156,7 @@ def _general_followup(
         )
 
     # Get updated history (includes first response)
-    history = _get_general_chat_history(
-        db, zone_id, faction=faction
-    )
+    history = recent_transcript(db, audience)
     chat_hist = _format_general_history(history)
 
     prompt2 = _build_general_followup_prompt(
@@ -1280,6 +1258,7 @@ def _general_followup(
         delay_seconds=delay2,
         event_id=event_id,
         sequence=1,
+        delivery_reason="player_general_msg",
     )
     maybe_queue_group_general_reaction(
         db, config,
@@ -1296,9 +1275,6 @@ def _general_followup(
     _extend_zone_delivery_window(zone_id, delay2)
 
     # Store in General chat history
-    _store_general_chat(
-        db, zone_id, bot2_name, True, msg2
-    )
 
     return {
         'bot2_guid': bot2_guid,
@@ -1489,6 +1465,7 @@ def _general_extended_conversation(
     subzone_lore="",
     zone_meta=None,
     faction="",
+    audience="",
 ):
     """Generate additional messages beyond the
     initial 2-message conversation in General
@@ -1625,9 +1602,7 @@ def _general_extended_conversation(
             )
 
         # Get updated history
-        history = _get_general_chat_history(
-            db, zone_id, faction=faction
-        )
+        history = recent_transcript(db, audience)
         chat_hist = _format_general_history(history)
 
         # remaining after this message is sent
@@ -1710,6 +1685,7 @@ def _general_extended_conversation(
             delay_seconds=current_delay,
             event_id=event_id,
             sequence=msg_count - 1,
+            delivery_reason="player_general_msg",
         )
         _extend_zone_delivery_window(
             zone_id, current_delay
@@ -1723,10 +1699,6 @@ def _general_extended_conversation(
             source_delay_seconds=current_delay,
         )
 
-        _store_general_chat(
-            db, zone_id,
-            speaker['name'], True, msg
-        )
 
         # Update thread and last speaker
         thread.append({

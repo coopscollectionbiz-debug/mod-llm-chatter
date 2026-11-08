@@ -244,8 +244,33 @@ static void ClockControlledDispatch()
     CHECK(CheckDispatch(lifetimeUs, 61000000, false) == DispatchDecision::Stop);
 }
 
+static void TestReactiveRouteAndAudience()
+{
+    using namespace LLMChatterDeliveryPolicy;
+    CHECK(ClassifyReactiveRoute("bot_group_general_reaction", "", "party", false) == ReactiveRoute::DropRelay);
+    CHECK(ClassifyReactiveRoute("", "bot_group_general_reaction", "party", false) == ReactiveRoute::DropRelay);
+    CHECK(ClassifyReactiveRoute("player_general_msg", "", "party", true) == ReactiveRoute::DropUnscoped);
+    CHECK(ClassifyReactiveRoute("bot_group_player_msg", "", "party", false) == ReactiveRoute::DropUnscoped);
+    CHECK(ClassifyReactiveRoute("player_general_msg", "", "general", true) == ReactiveRoute::General);
+    CHECK(ClassifyReactiveRoute("bot_group_player_msg", "", "party", true) == ReactiveRoute::Party);
+    CHECK(ClassifyReactiveRoute("", "", "trade", false) == ReactiveRoute::Legacy);
+
+    std::string const party = "party:1:7:3:0:0:11,21,";
+    CHECK(MatchesReactiveAudience(party, party, party));
+    CHECK(!MatchesReactiveAudience(party, party, "party:1:8:3:0:0:11,21,"));
+    CHECK(!MatchesReactiveAudience(party, "party:1:7:4:0:0:11,21,", party));
+    CHECK(!MatchesReactiveAudience(party, "party:1:7:3:0:0:11,22,", party));
+
+    std::string const general = "general:1:0:0:12:General - Elwynn Forest";
+    CHECK(MatchesReactiveAudience(general, general, general));
+    CHECK(!MatchesReactiveAudience(general, general, "general:1:1:0:12:General - Elwynn Forest"));
+    CHECK(!MatchesReactiveAudience(general, general, "general:1:0:0:40:General - Westfall"));
+    CHECK(CheckDispatch(9, 10, true) == DispatchDecision::Expire);
+}
+
 int main(int argc, char** argv)
 {
+    TestReactiveRouteAndAudience();
     if (argc == 2 && std::string(argv[1]) == "--fetch-sql")
     {
         std::printf("%s\n", LLMChatterDeliveryPolicy::BuildFetchSql(true, 40).c_str());

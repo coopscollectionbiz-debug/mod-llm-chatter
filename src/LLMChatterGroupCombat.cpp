@@ -865,7 +865,9 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
     if (IsPlayerBot(player))
         return;
 
-    Group* group = player->GetGroup();
+    Group* group = player->GetOriginalGroup();
+    if (!group)
+        group = player->GetGroup();
     if (!group)
         return;
 
@@ -926,6 +928,12 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
         return;
     }
 
+    std::string const audience = PartyReactiveAudience(group, player->GetGUID());
+    if (audience.empty())
+        return;
+    StoreReactiveChat(audience, player, false, safeMsg);
+    NotePartyReactiveTurn(groupId);
+
     CharacterDatabase.Execute(
         "INSERT INTO llm_group_chat_history "
         "(group_id, speaker_guid, speaker_name,"
@@ -946,7 +954,32 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
 
     _groupPlayerMsgCooldowns[groupId] = now;
 
+    std::string botGuids;
+    std::string humanNames;
+    bool const isRaid = group->isRaidGroup();
+    uint8 const subgroup = group->GetMemberGroup(player->GetGUID());
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member || member == player || !member->IsInWorld() ||
+            (isRaid && group->GetMemberGroup(member->GetGUID()) != subgroup))
+            continue;
+        if (IsPlayerBot(member))
+        {
+            if (member->GetTeamId() == player->GetTeamId())
+                botGuids += (botGuids.empty() ? "" : ",") + std::to_string(member->GetGUID().GetCounter());
+        }
+        else
+            humanNames += (humanNames.empty() ? "\"" : ",\"") + JsonEscape(member->GetName()) + "\"";
+    }
+    if (botGuids.empty())
+        return;
+
     std::string extraData = "{"
+        "\"reactive_audience\":\"" + JsonEscape(audience) + "\","
+        "\"reactive_turn\":\"" + NewReactiveTurn() + "\","
+        "\"reactive_bots\":[" + botGuids + "],"
+        "\"reactive_humans\":[" + humanNames + "],"
         "\"player_name\":\"" +
             JsonEscape(playerName) + "\","
         "\"player_gender\":" +
@@ -975,7 +1008,7 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
         extraData,
         GetReactionDelaySeconds(
             "bot_group_player_msg"),
-        60,
+        sLLMChatterConfig->_reactivePartyExpirySeconds,
         false
     );
 }

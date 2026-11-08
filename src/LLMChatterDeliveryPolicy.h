@@ -7,9 +7,38 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace LLMChatterDeliveryPolicy
 {
+enum class ReactiveRoute
+{
+    Legacy,
+    Party,
+    General,
+    DropRelay,
+    DropUnscoped
+};
+
+inline ReactiveRoute ClassifyReactiveRoute(std::string_view event, std::string_view reason,
+    std::string_view channel, bool hasScope)
+{
+    if (event == "bot_group_general_reaction" || reason == "bot_group_general_reaction")
+        return ReactiveRoute::DropRelay;
+    bool const party = event == "bot_group_player_msg" || reason == "bot_group_player_msg";
+    bool const general = event == "player_general_msg" || reason == "player_general_msg";
+    if (!party && !general)
+        return ReactiveRoute::Legacy;
+    if (!hasScope || (party && general) || (party ? channel != "party" : channel != "general"))
+        return ReactiveRoute::DropUnscoped;
+    return party ? ReactiveRoute::Party : ReactiveRoute::General;
+}
+
+inline bool MatchesReactiveAudience(std::string_view captured, std::string_view source, std::string_view speaker)
+{
+    return !captured.empty() && captured == source && captured == speaker;
+}
+
 enum class DispatchDecision
 {
     Send,
@@ -52,8 +81,14 @@ inline std::string BuildFetchSql(bool priorityOrder, uint32_t limit, uint32_t ex
         "(m.event_id IS NOT NULL AND EXISTS (SELECT 1 FROM llm_chatter_messages lt "
         "WHERE lt.event_id = m.event_id AND lt.sequence > m.sequence "
         "AND lt.delivered = 0)) AS has_later_line, "
-        "TIMESTAMPDIFF(MICROSECOND, NOW(6), DATE_ADD(m.deliver_at, INTERVAL " + expiry +
-        " SECOND)) AS remaining_us "
+        "TIMESTAMPDIFF(MICROSECOND, NOW(6), CASE "
+        "WHEN e.event_type IN ('player_general_msg','bot_group_player_msg') "
+        "THEN DATE_SUB(e.expires_at, INTERVAL 1 MICROSECOND) "
+        "ELSE DATE_ADD(m.deliver_at, INTERVAL " + expiry + " SECOND) END) AS remaining_us, "
+        "JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(e.extra_data),e.extra_data,'{}'),"
+        "'$.reactive_audience')) AS reactive_audience, "
+        "JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(e.extra_data),e.extra_data,'{}'),"
+        "'$.reactive_turn')) AS reactive_turn "
         "FROM llm_chatter_messages m LEFT JOIN llm_chatter_events e ON m.event_id = e.id "
         "WHERE m.delivered = 0 AND m.deliver_at <= NOW(6) "
         "AND m.deliver_at >= DATE_SUB(NOW(6), INTERVAL " + expiry + " SECOND) "

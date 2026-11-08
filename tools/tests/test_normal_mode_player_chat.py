@@ -64,11 +64,6 @@ from chatter_group_prompts import (  # noqa: E402
 import chatter_group as group_chat  # noqa: E402
 import chatter_group_handlers as group_handlers  # noqa: E402
 from chatter_group import build_idle_chatter_prompt  # noqa: E402
-from chatter_group_general_reaction import (  # noqa: E402
-    _build_conversation_prompt as _general_relay_conversation_prompt,
-    _build_statement_prompt as _general_relay_prompt,
-)
-import chatter_group_general_reaction as group_relay  # noqa: E402
 import chatter_group_state as group_state  # noqa: E402
 from chatter_guild import (  # noqa: E402
     _build_guild_conversation_prompt,
@@ -129,40 +124,6 @@ def test_party_player_candidates_match_player_faction():
     assert [bot['bot_guid'] for bot in selected] == [2, 3]
 
 
-def test_general_party_relay_rechecks_faction_when_processed():
-    db = _DB(rows=[
-        {
-            'bot_guid': 2,
-            'bot_name': 'GnomeBot',
-            'race': 7,
-            'class': 8,
-            'level': 30,
-            'gender': 0,
-        },
-        {
-            'bot_guid': 3,
-            'bot_name': 'OrcBot',
-            'race': 2,
-            'class': 1,
-            'level': 30,
-            'gender': 0,
-        },
-    ])
-    with patch.object(
-        group_relay,
-        '_character_faction',
-        side_effect=lambda _db, guid: (
-            'Alliance' if guid in (100, 200) else ''
-        ),
-    ), patch.object(
-        group_relay,
-        'get_real_player_guid_for_group',
-        return_value=200,
-    ):
-        selected = group_relay._fetch_group_bots(
-            db, 42, 100,
-        )
-    assert [bot['guid'] for bot in selected] == [2]
 
 
 def test_brief_party_fallback_is_deterministically_bounded():
@@ -470,53 +431,8 @@ def test_hot_party_prompts_include_normal_contract_once():
     assert nearby.user_prompt.count('CHAT MODE: NORMAL.') == 1
 
 
-def test_general_to_party_relay_hides_rp_location_flavor():
-    bot = {
-        **BOT,
-        'trait1': 'patient',
-        'travel_context': 'riding quickly through the rain',
-    }
-    prompt = _general_relay_prompt(
-        bot,
-        {'name': 'Rytsen', 'race': 'Dwarf', 'class': 'Warrior'},
-        'anyone need this quest?',
-        'Player',
-        '',
-        'normal',
-        {
-            'dungeon_flavor': 'cold stone pressing around you',
-            'zone_flavor': 'the forest whispers to travelers',
-            'subzone_lore': 'ancient spirits linger here',
-        },
-    )
-    assert 'CHAT MODE: NORMAL' in prompt.user_prompt
-    assert 'Character gameplay travel state' in prompt.user_prompt
-    assert 'cold stone pressing' not in prompt.user_prompt
-    assert 'ancient spirits' not in prompt.user_prompt
-    assert (
-        'HARD LIMIT: Never exceed 150 characters total.'
-        in prompt.user_prompt
-    )
 
 
-def test_general_to_party_conversation_has_per_message_limit():
-    prompt = _general_relay_conversation_prompt(
-        [BOT, {**BOT, 'guid': 43, 'name': 'Borin'}],
-        {'name': 'Rytsen', 'race': 'Dwarf', 'class': 'Warrior'},
-        'anyone need this quest?',
-        'Player',
-        '',
-        'normal',
-        {
-            'dungeon_flavor': '',
-            'zone_flavor': '',
-            'subzone_lore': '',
-        },
-    )
-    assert (
-        'HARD LIMIT: Never exceed 150 characters in any message.'
-        in prompt.user_prompt
-    )
 
 
 def test_bot_question_uses_shared_length_limiter():

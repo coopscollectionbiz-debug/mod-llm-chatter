@@ -27,6 +27,9 @@
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
 
+#include <atomic>
+#include <chrono>
+#include <unordered_map>
 #include <utf8.h>
 
 #include <algorithm>
@@ -2783,6 +2786,82 @@ void SendBotTextEmote(Player* bot, uint32 textEmoteId,
                       const std::string& targetName)
 {
     SendUnitTextEmote(bot, textEmoteId, targetName);
+}
+
+namespace
+{
+std::string const ReactiveProcessEpoch = std::to_string(
+    std::chrono::system_clock::now().time_since_epoch().count());
+std::atomic<uint64> ReactiveSequence{0};
+std::mutex ReactiveGroupMutex;
+std::unordered_map<uint32, uint64> ReactiveGroupEpochs;
+std::unordered_map<uint32, std::chrono::steady_clock::time_point> LastPartyReactiveTurn;
+}
+
+std::string NewReactiveTurn()
+{
+    return ReactiveProcessEpoch + ":" + std::to_string(++ReactiveSequence);
+}
+
+void InvalidatePartyReactiveAudience(Group* group)
+{
+    std::lock_guard lock(ReactiveGroupMutex);
+    ReactiveGroupEpochs.erase(group->GetGUID().GetCounter());
+    LastPartyReactiveTurn.erase(group->GetGUID().GetCounter());
+}
+
+void NotePartyReactiveTurn(uint32 groupId)
+{
+    std::lock_guard lock(ReactiveGroupMutex);
+    LastPartyReactiveTurn[groupId] = std::chrono::steady_clock::now();
+}
+
+bool HasRecentPartyReactiveTurn(uint32 groupId, uint32 seconds)
+{
+    std::lock_guard lock(ReactiveGroupMutex);
+    auto const turn = LastPartyReactiveTurn.find(groupId);
+    return turn != LastPartyReactiveTurn.end() &&
+        std::chrono::steady_clock::now() - turn->second < std::chrono::seconds(seconds);
+}
+
+std::string PartyReactiveAudience(Group* group, ObjectGuid member)
+{
+    if (!group || !group->IsMember(member))
+        return {};
+
+    uint32 const id = group->GetGUID().GetCounter();
+    std::lock_guard lock(ReactiveGroupMutex);
+    auto [epoch, inserted] = ReactiveGroupEpochs.try_emplace(id, 0);
+    if (inserted)
+        epoch->second = ++ReactiveSequence;
+
+    // Original Party packets in a raid are delivered to the source subgroup.
+    uint32 const subgroup = group->isRaidGroup() ? group->GetMemberGroup(member) : 0;
+    std::vector<uint32> roster;
+    for (Group::MemberSlot const& slot : group->GetMemberSlots())
+        if (!group->isRaidGroup() || slot.group == subgroup)
+            roster.push_back(slot.guid.GetCounter());
+    std::sort(roster.begin(), roster.end());
+
+    std::string audience = Acore::StringFormat("party:{}:{}:{}:{}:{}:", ReactiveProcessEpoch,
+        id, epoch->second, group->isRaidGroup() ? 1 : 0, subgroup);
+    for (uint32 guid : roster)
+        audience += std::to_string(guid) + ",";
+    return audience;
+}
+
+std::string GeneralReactiveAudience(Player* player, std::string const& channelName)
+{
+    return Acore::StringFormat("general:{}:{}:{}:{}:{}", ReactiveProcessEpoch,
+        static_cast<uint32>(player->GetTeamId()), player->GetMapId(), player->GetZoneId(), channelName);
+}
+
+void StoreReactiveChat(std::string const& audience, Player* speaker, bool isBot, std::string const& message)
+{
+    CharacterDatabase.Execute(
+        "INSERT INTO llm_reactive_chat_history (audience,speaker_guid,speaker_name,is_bot,message) "
+        "VALUES ('{}',{},'{}',{},'{}')", EscapeString(audience), speaker->GetGUID().GetCounter(),
+        EscapeString(speaker->GetName()), isBot ? 1 : 0, EscapeString(message));
 }
 
 void SendPartyMessageInstant(

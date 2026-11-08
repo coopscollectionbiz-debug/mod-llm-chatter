@@ -388,6 +388,8 @@ void LLMChatterConfig::LoadConfig()
         GetChatterOption<uint32>(
             "LLMChatter.PartyGate."
             "ResponsiveMinGapSeconds", 2);
+    _reactivePartyExpirySeconds = std::clamp(
+        sConfigMgr->GetOption<uint32>("LLMChatter.PartyGate.ReactiveExpirySeconds", 12), 1u, 60u);
     _partyGateUrgentMinGapSeconds =
         GetChatterOption<uint32>(
             "LLMChatter.PartyGate."

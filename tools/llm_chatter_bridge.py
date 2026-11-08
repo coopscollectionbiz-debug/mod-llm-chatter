@@ -64,6 +64,7 @@ from chatter_events import (
     cleanup_expired_events,
     reset_stuck_processing_events,
 )
+from chatter_reactive import sweep_reactive_state
 from chatter_group import (
     init_group_config,
     check_idle_group_chatter,
@@ -775,6 +776,10 @@ def process_single_event(event, client, config):
     try:
         db = get_db_connection(config)
         cursor = db.cursor(dictionary=True)
+
+        if event_type == 'bot_group_general_reaction':
+            EVENT_HANDLERS[event_type](db, client, config, event)
+            return False
 
         # Route known events via map.
         handler = EVENT_HANDLERS.get(event_type)
@@ -2109,6 +2114,7 @@ def main():
                     # player went offline (runs
                     # regardless of UseEventSystem)
                     cleanup_stale_groups(db)
+                    sweep_reactive_state(db)
                     last_cleanup = current_time
 
                 # Optional ambient/idle generation waits while the
