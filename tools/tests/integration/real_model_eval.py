@@ -54,6 +54,62 @@ SCENARIOS = [
 ]
 
 
+BASE_CONFIG = {'LLMChatter.ChatterMode': 'normal', 'LLMChatter.Dialogue.Pipeline': '2',
+               'LLMChatter.Surfaces.Enable': '1', 'LLMChatter.Knowledge.Enable': '0',
+               'LLMChatter.Dialogue.MaxTokens': '160', 'LLMChatter.Temperature': '0.85',
+               'LLMChatter.LLM.TimeoutSeconds': '20', 'LLMChatter.LLM.MaxRetries': '0'}
+SPEAKER = {'name': 'Aldric', 'guid': 900001, 'race': 'Human', 'class': 'Priest', 'level': 30,
+           'gender': 'male', 'role': 'healer'}
+ASKER = 'Coop'
+
+# Event descriptions in the shape the specialised builders produce (the
+# shared engine then adds the surface rules exactly as in production).
+EVENT_TEXT = {
+    'bot_group_combat': 'Your group just pulled two Defias Pillagers. You are the healer.',
+    'bot_group_kill': 'Your group just killed Edwin VanCleef, the final boss of the Deadmines.',
+    'bot_group_quest_accept': 'Your group just accepted the quest "A Threat Within".',
+    'bg_score_milestone': 'Warsong Gulch: your team now leads 2-1 in flag captures.',
+    'raid_boss_pull': 'Your raid is pulling Onyxia now.',
+}
+
+
+def build_prompt(item):
+    """(prompt, evidence kinds) for one scenario, using the candidate's own builders."""
+    from chatter_dialogue import build_reply_prompt
+    from chatter_evidence import Evidence
+    from chatter_personality import profile_for, profile_instruction
+    profile = profile_for(SPEAKER['name'], SPEAKER['guid'])
+    line = profile_instruction(SPEAKER['name'], SPEAKER['guid'])
+    kind, text = item['kind'], item['input']
+    if kind in ('party', 'whisper', 'general'):
+        evidence = []
+        if 'heals ready' in text:
+            evidence.append(Evidence('live_self', 'observed', 'found',
+                                     {'power': 'mana', 'power_pct': 22, 'power_low': True},
+                                     audience='party', observer=SPEAKER['guid'], ttl=30))
+        if '|hquest:' in text.casefold():
+            evidence.append(Evidence('quest', 'server_data', 'found',
+                                     {'id': 783, 'title': 'A Threat Within',
+                                      'started_by': [{'name': 'Deputy Willem', 'zone': 'Elwynn Forest'}]}))
+        notes = {'party': 'Only your party hears this.', 'whisper': f'Private whisper between you and {ASKER}.',
+                 'general': 'Zone-wide General channel; strangers read it.'}
+        prompt, used = build_reply_prompt(
+            speaker=SPEAKER, profile_line=line, profile=profile, channel=kind if kind != 'general' else 'general',
+            audience_note=notes[kind], asker=ASKER, message=text, evidence=evidence, mode='normal')
+        return prompt, [e.kind for e in used]
+    from chatter_shared import PromptParts
+    situation = EVENT_TEXT.get(text) or {
+        'idle': 'Your party is resting between pulls in Westfall. Start a short natural exchange.',
+        'ambient': 'Say one natural line in the Elwynn Forest General channel.',
+        'guild': f'{ASKER} in guild chat: {json.dumps(text)}',
+        'say': f'{ASKER} standing next to you says: {json.dumps(text)}',
+    }.get(kind, text)
+    user = (f'{line}\nYou are {SPEAKER["name"]}, a level {SPEAKER["level"]} {SPEAKER["race"]} '
+            f'{SPEAKER["class"]} player.\n{situation}')
+    system = 'Write one short in-character chat line. Reply only as JSON: {"message": "..."}'
+    return PromptParts(user, system), []
+
+
 def score(reply, expects_data):
     text = (reply or '').strip()
     return {
@@ -89,6 +145,7 @@ def main():
     parser.add_argument('--provider', default='openai')
     parser.add_argument('--model', default='gpt-4o-mini')
     parser.add_argument('--authorize-paid-requests', action='store_true')
+    parser.add_argument('--max-requests', type=int, default=42, help='hard cap on paid requests')
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -96,6 +153,16 @@ def main():
     live = bool(args.authorize_paid_requests and key)
     plan = [{'label': l, 'kind': k, 'input': t, 'expects_data': d} for l, k, t, d in SCENARIOS]
     (out / 'scenarios.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
+    import chatter_surfaces
+    chatter_surfaces.configure(BASE_CONFIG)
+    # The exact prompts a run would send (after the shared surface engine), for review.
+    previews = []
+    for item in plan:
+        prompt, used = build_prompt(item)
+        final = chatter_surfaces.apply(prompt, item['label'], BASE_CONFIG)
+        previews.append({'label': item['label'], 'input': item['input'], 'evidence': used,
+                         'system': getattr(final, 'system_prompt', ''), 'user': getattr(final, 'user_prompt', str(final))})
+    (out / 'prompts.json').write_text(json.dumps(previews, indent=2, ensure_ascii=False), encoding='utf-8')
     if not live:
         report = {'status': 'PENDING_AUTHORIZATION', 'paid_requests': 0, 'scenarios': len(plan),
                   'runs_planned': args.runs, 'requests_planned': len(plan) * args.runs,
@@ -104,26 +171,28 @@ def main():
         print(json.dumps(report))
         return
     from chatter_llm import call_llm, get_llm_client  # only on an authorised run
+    from chatter_dialogue import parse_reply
+    key_name = {'openai': 'OpenAI', 'anthropic': 'Anthropic', 'google': 'Google',
+                'openrouter': 'OpenRouter'}[args.provider.lower()]
     config = {'LLMChatter.Provider': args.provider, 'LLMChatter.Model': args.model,
-              f'LLMChatter.{args.provider.capitalize()}.ApiKey': key, 'LLMChatter.ChatterMode': 'normal',
-              'LLMChatter.Dialogue.Pipeline': '2', 'LLMChatter.Surfaces.Enable': '1'}
+              f'LLMChatter.{key_name}.ApiKey': key, **BASE_CONFIG}
     import chatter_surfaces
     chatter_surfaces.configure(config)
     client = get_llm_client(config)
     rows = []
-    for _ in range(args.runs):
+    budget = min(args.max_requests, len(plan) * args.runs)
+    for run in range(args.runs):
         for item in plan:
-            prompt = (f"You are a level 30 human priest player named Aldric. {item['kind']} chat. "
-                      f"Respond to: {json.dumps(item['input'])}. Reply as JSON {{\"message\": ...}}.")
+            if len(rows) >= budget:
+                break
+            prompt, _ = build_prompt(item)
             start = time.monotonic()
-            reply = call_llm(client, prompt, config, label=item['label'])
+            reply = call_llm(client, prompt, config, label=item['label'],
+                             max_tokens_override=int(config.get('LLMChatter.Dialogue.MaxTokens', 160)))
             ms = round((time.monotonic() - start) * 1000)
-            try:
-                text = json.loads(reply).get('message', '') if reply else ''
-            except (ValueError, AttributeError):
-                text = reply or ''
-            rows.append({'label': item['label'], 'reply': text, 'ms': ms,
-                         'score': score(text, item['expects_data'])})
+            text = parse_reply(reply, SPEAKER['name']) if reply else ''
+            rows.append({'run': run, 'label': item['label'], 'input': item['input'], 'reply': text,
+                         'raw_ok': reply is not None, 'ms': ms, 'score': score(text, item['expects_data'])})
     (out / 'replies.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
     report = {'status': 'COMPLETED', 'paid_requests': len(rows), 'summary': summarize(rows)}
     (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
