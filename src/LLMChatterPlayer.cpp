@@ -8,6 +8,7 @@
 #include "LLMChatterGroup.h"
 #include "LLMChatterGroupInternal.h"
 #include "LLMChatterShared.h"
+#include "LLMChatterWhisper.h"
 
 #include "Battleground.h"
 #include "BattlegroundAB.h"
@@ -839,6 +840,7 @@ public:
               {PLAYERHOOK_ON_LOGIN,
                PLAYERHOOK_ON_UPDATE,
                PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
+               PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
                PLAYERHOOK_ON_UPDATE_ZONE,
                PLAYERHOOK_ON_UPDATE_AREA,
                PLAYERHOOK_ON_PVP_KILL}) {}
@@ -918,6 +920,8 @@ public:
                  time(nullptr)});
         }
     }
+
+    using PlayerScript::OnPlayerCanUseChat;
 
     bool OnPlayerCanUseChat(
         Player* player, uint32 type,
@@ -1589,6 +1593,18 @@ public:
         RefreshGroupBotTravelStates(player, true);
         HandleBotEntersEnemyTerritory(
             player, newZone);
+    }
+
+    bool OnPlayerCanUseChat(
+        Player* player, uint32 type,
+        uint32 language, std::string& msg,
+        Player* receiver) override
+    {
+        // Never consumes the whisper: Playerbots still receives every
+        // command, and the core still delivers the original packet.
+        if (type == CHAT_MSG_WHISPER && language != LANG_ADDON)
+            HandlePlayerWhisperToBot(player, receiver, msg);
+        return true;
     }
 };
 

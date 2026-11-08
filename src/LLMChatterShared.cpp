@@ -298,8 +298,9 @@ uint32 RollConfiguredDelay(
         sLLMChatterConfig->*maxMember);
 }
 
-constexpr std::array<EventPriorityRule, 39>
+constexpr std::array<EventPriorityRule, 40>
     kTierPriorityRules = {{
+        {"bot_player_whisper",      PRIORITY_HIGH_LOCAL},
         {"bot_group_combat",        PRIORITY_CRITICAL},
         {"bot_group_spell_cast",    PRIORITY_CRITICAL},
         {"bot_group_nearby_object", PRIORITY_CRITICAL},
@@ -2796,6 +2797,16 @@ std::atomic<uint64> ReactiveSequence{0};
 std::mutex ReactiveGroupMutex;
 std::unordered_map<uint32, uint64> ReactiveGroupEpochs;
 std::unordered_map<uint32, std::chrono::steady_clock::time_point> LastPartyReactiveTurn;
+}
+
+std::string const& ReactiveProcessEpochId()
+{
+    return ReactiveProcessEpoch;
+}
+
+std::string GetChatterBotRoleName(Player* player)
+{
+    return GetBotRoleName(player);
 }
 
 std::string NewReactiveTurn()

@@ -79,6 +79,13 @@ public:
     uint32 _partyGateUrgentMinGapSeconds;
     uint32 _reactivePartyExpirySeconds;
 
+    // Chatter 2.0 live context and whispers
+    bool _liveContextEnable;
+    uint32 _liveRareScanRadius;
+    bool _whisperChatterEnable;
+    uint32 _whisperCooldownSeconds;
+    uint32 _whisperExpirySeconds;
+
     // Event system settings
     bool _useEventSystem;
     bool _prioritySystemEnable;

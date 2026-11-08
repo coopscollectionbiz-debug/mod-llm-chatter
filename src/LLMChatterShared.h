@@ -110,6 +110,9 @@ void NotePartyReactiveTurn(uint32 groupId);
 bool HasRecentPartyReactiveTurn(uint32 groupId, uint32 seconds);
 std::string GeneralReactiveAudience(Player* player, std::string const& channelName);
 std::string NewReactiveTurn();
+// Worldserver process identity embedded in every reactive audience/turn.
+std::string const& ReactiveProcessEpochId();
+std::string GetChatterBotRoleName(Player* player);
 void StoreReactiveChat(std::string const& audience, Player* speaker, bool isBot, std::string const& message);
 bool CanSpeakInGeneralChannel(Player* bot);
 bool IsEventOnCooldown(

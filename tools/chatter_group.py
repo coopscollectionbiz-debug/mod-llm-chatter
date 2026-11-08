@@ -29,6 +29,7 @@ and chatter_prompts.
 from chatter_relationships import ambient_context
 from chatter_personality import willing_to_speak, player_prompt
 from chatter_reactive import recent_transcript, reserve_party_reply, select_party_responder
+from chatter_trace import record as trace
 
 import logging
 import random
@@ -1625,6 +1626,91 @@ def _batch_welcome(
     )
 
 
+def _relationship_familiarity(bots, player_guid):
+    """Read-only familiarity of each bot toward the asker (Phase 2 store)."""
+    try:
+        import chatter_relationships
+        store = chatter_relationships._store
+        if store is None or not player_guid:
+            return {}
+        return {int(b['bot_guid']): store.relationship(int(b['bot_guid']), int(player_guid))['familiarity']
+                for b in bots}
+    except Exception:
+        return {}
+
+
+def _decide_party_turn(config, event, extra_data, player_message, raw_player_message,
+                       bots, other_names, history):
+    """Chatter 2.0 social decision for one Party turn, before any lookup or model call."""
+    from chatter_knowledge import detect_intents
+    from chatter_live import parse_live
+    from chatter_personality import profile_for
+    from chatter_social import decide_party
+    live = parse_live(extra_data)
+    intents = (detect_intents(raw_player_message)
+               if str(config.get('LLMChatter.Knowledge.Enable', '1')) == '1' else [])
+    profiles = {}
+    for candidate in bots:
+        try:
+            profiles[int(candidate['bot_guid'])] = profile_for(candidate['bot_name'], candidate['bot_guid'])
+        except Exception:
+            pass
+    player_guid = int(event.get('subject_guid') or 0)
+    decision = decide_party(player_message, bots, other_names, history, player_guid, intents, live,
+                            _relationship_familiarity(bots, player_guid), profiles)
+    return decision, live, intents
+
+
+def _reply_party_turn_v2(db, client, config, event_id, bot, bot_guid, bot_name, player_name,
+                         player_message, history, members, live, intents, addressed, group_id, all_bots):
+    """Generate, validate and queue one admitted Party reply (Chatter 2.0)."""
+    from chatter_reply import event_deadline, generate_reactive_reply
+    try:
+        speaker = {key: bot[key] for key in ('guid', 'name', 'class', 'race', 'level', 'gender')}
+        others = [name for name in members if name != bot_name]
+        audience_note = (f'Only your party can read this: {player_name}'
+                         + (f', {", ".join(others)}' if others else '') + '.')
+        result = generate_reactive_reply(
+            client=client, config=config, speaker=speaker, channel='party', asker=player_name,
+            message=player_message, transcript=history, audience_note=audience_note, live=live,
+            intents=intents, deadline=event_deadline(db, event_id),
+            label='group_player_msg', allow_fallback=addressed or '?' in player_message)
+        trace_fields = dict(event_id=event_id, surface='party', bot_guid=bot_guid,
+                            knowledge=result.stats.get('knowledge'), evidence=result.stats.get('evidence'),
+                            fresh=result.stats.get('fresh'), lookup_ms=result.stats.get('lookup_ms'),
+                            lookup_failed=result.stats.get('lookup_failed'),
+                            model_ms=result.stats.get('model_ms'), deadline_ms=result.stats.get('deadline_ms'),
+                            claims=bool(result.claims), fallback=result.fallback,
+                            total_ms=result.stats.get('total_ms'))
+        if not result.message:
+            trace(outcome='silent_reply', **trace_fields)
+            _mark_event(db, event_id, 'skipped')
+            return False
+        reply_delay = calculate_dynamic_delay(
+            len(result.message), config, prev_message_length=len(player_message), responsive=True)
+        inserted = insert_chat_message(
+            db, bot_guid, bot_name, result.message, channel='party', delay_seconds=reply_delay,
+            event_id=event_id, config=config, group_id=group_id, delivery_policy='responsive',
+            delivery_reason='bot_group_player_msg', claim_json=result.claims)
+        if inserted is None:
+            trace(outcome='not_queued', **trace_fields)
+            _mark_event(db, event_id, 'skipped')
+            return False
+        try:
+            if int(config.get('LLMChatter.Memory.Enable', 1)):
+                _maybe_queue_player_msg_memory(config, group_id, player_message, all_bots,
+                                               player_name=player_name)
+        except Exception:
+            logger.error("player_message memory failed", exc_info=True)
+        trace(outcome='queued', **trace_fields)
+        _mark_event(db, event_id, 'completed')
+        return True
+    except Exception:
+        logger.error("party reply v2 failed event=%d", event_id, exc_info=True)
+        _mark_event(db, event_id, 'skipped')
+        return False
+
+
 def process_group_player_msg_event(
     db, client, config, event
 ):
@@ -1721,11 +1807,27 @@ def process_group_player_msg_event(
 
     members = [candidate['bot_name'] for candidate in all_bots]
     other_names = extra_data.get('reactive_humans', ())
-    selection = select_party_responder(player_message, all_bots, other_names)
-    if selection is None:
-        _mark_event(db, event_id, 'skipped')
-        return False
-    bot_row, addressed = selection
+    pipeline2 = str(config.get('LLMChatter.Dialogue.Pipeline', '2')) == '2'
+    live, intents = None, []
+    if pipeline2:
+        decision, live, intents = _decide_party_turn(
+            config, event, extra_data, player_message, raw_player_message,
+            all_bots, other_names, history)
+        if not decision.respond:
+            trace(event_id=event_id, surface='party', decision='silent', reason=decision.reason,
+                  intents=[i.kind for i in intents])
+            _mark_event(db, event_id, 'skipped')
+            return False
+        bot_row, addressed = decision.bot, decision.addressed
+        trace(event_id=event_id, surface='party', decision='respond', reason=decision.reason,
+              bot_guid=bot_row['bot_guid'], addressed=addressed, scores=decision.scores,
+              intents=[i.kind for i in intents])
+    else:
+        selection = select_party_responder(player_message, all_bots, other_names)
+        if selection is None:
+            _mark_event(db, event_id, 'skipped')
+            return False
+        bot_row, addressed = selection
     bot_guid = bot_row['bot_guid']
     bot_name = bot_row['bot_name']
 
@@ -1770,8 +1872,16 @@ def process_group_player_msg_event(
 
     with reserve_party_reply(db, event_id, turn, audience, bot_guid, addressed, config) as admitted:
         if not admitted:
+            if pipeline2:
+                trace(event_id=event_id, surface='party', decision='silent', reason='not_admitted',
+                      bot_guid=bot_guid)
             _mark_event(db, event_id, 'skipped')
             return False
+        if pipeline2:
+            return _reply_party_turn_v2(
+                db, client, config, event_id, bot, bot_guid, bot_name, player_name,
+                player_message, history, members, live, intents, addressed, group_id,
+                all_bots)
         try:
             mode = get_chatter_mode(config)
             # Check for item links in player message

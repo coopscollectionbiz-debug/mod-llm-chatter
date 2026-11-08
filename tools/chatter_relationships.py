@@ -32,6 +32,7 @@ PLAYER_EVENTS = {
     'player_general_msg': 'general', 'bot_group_player_msg': 'party',
     'guild_player_message': 'guild', 'proximity_player_say': 'say',
     'proximity_player_conversation': 'say',
+    'bot_player_whisper': 'whisper',
 }
 GAME_EVENTS = {'bot_group_kill': 'boss_kill', 'raid_boss_kill': 'boss_kill',
                'bot_group_wipe': 'wipe', 'raid_boss_wipe': 'wipe'}
@@ -405,6 +406,10 @@ def _audience(db, extra, actor):
     channel = extra.get('_channel', 'general')
     if channel in PUBLIC:
         return set()
+    if channel == 'whisper':
+        # Exactly the bound sender/recipient pair; nobody else heard it.
+        bot = int(extra.get('bot_guid') or 0)
+        return {actor, bot} if actor and bot else set()
     if channel in ('party', 'raid') and extra.get('group_id'):
         sql, param = 'SELECT memberGuid AS guid FROM group_member WHERE guid=%s LIMIT 41', extra['group_id']
     elif channel == 'guild' and extra.get('guild_id'):

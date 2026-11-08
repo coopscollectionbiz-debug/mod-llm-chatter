@@ -599,6 +599,27 @@ def validate_emote(emote_str: Optional[str]) -> Optional[str]:
     return None
 
 
+_claim_column_present = None
+
+
+def has_claim_column(db):
+    """Whether the Chatter 2.0 claim column exists (probed once)."""
+    global _claim_column_present
+    if _claim_column_present is None:
+        cursor = db.cursor()
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'llm_chatter_messages' "
+                "AND COLUMN_NAME = 'claim_json'")
+            row = cursor.fetchone()
+            _claim_column_present = bool(row and row[0])
+        finally:
+            cursor.close()
+    return _claim_column_present
+
+
 def insert_chat_message(
     db,
     bot_guid: int,
@@ -620,8 +641,13 @@ def insert_chat_message(
     addressee_player_guid: int = None,
     addressee_bot_guid: int = None,
     addressee_npc_spawn_id: int = None,
+    claim_json: str = None,
 ):
     """Insert a message into llm_chatter_messages.
+
+    claim_json carries volatile observations the reply relied on, for
+    delivery-time revalidation (Chatter 2.0). A claim-bearing reply is not
+    queued on a schema without the column: it could not be revalidated.
 
     Centralised helper replacing individual INSERT
     statements across the codebase. Handles the emote
@@ -674,22 +700,15 @@ def insert_chat_message(
             delivery_reason,
         )
 
-    cursor = db.cursor()
-    cursor.execute("""
-        INSERT INTO llm_chatter_messages
-        (event_id, queue_id, sequence, bot_guid,
-         bot_name, message, emote, npc_spawn_id,
-         player_guid, channel, owner_subsystem,
-         delivered, deliver_at,
-         group_id, delivery_policy, delivery_reason,
-         addressee_player_guid, addressee_bot_guid,
-         addressee_npc_spawn_id)
-        VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0,
-            DATE_ADD(NOW(), INTERVAL %s SECOND),
-            %s, %s, %s, %s, %s, %s
-        )
-    """, (
+    if claim_json and not has_claim_column(db):
+        logger.warning(
+            "llm_chatter_messages.claim_json missing; apply the Chatter 2.0 "
+            "migration. Dropping claim-bearing reply for event %s", event_id)
+        return None
+
+    claim_column = ', claim_json' if claim_json else ''
+    claim_value = ', %s' if claim_json else ''
+    params = [
         event_id, queue_id, sequence,
         bot_guid, bot_name, message,
         validate_emote(emote), npc_spawn_id,
@@ -698,12 +717,31 @@ def insert_chat_message(
         group_id, delivery_policy, delivery_reason,
         addressee_player_guid, addressee_bot_guid,
         addressee_npc_spawn_id,
-    ))
+    ]
+    if claim_json:
+        params.append(claim_json)
+    cursor = db.cursor()
+    cursor.execute(f"""
+        INSERT INTO llm_chatter_messages
+        (event_id, queue_id, sequence, bot_guid,
+         bot_name, message, emote, npc_spawn_id,
+         player_guid, channel, owner_subsystem,
+         delivered, deliver_at,
+         group_id, delivery_policy, delivery_reason,
+         addressee_player_guid, addressee_bot_guid,
+         addressee_npc_spawn_id{claim_column})
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0,
+            DATE_ADD(NOW(), INTERVAL %s SECOND),
+            %s, %s, %s, %s, %s, %s{claim_value}
+        )
+    """, tuple(params))
     db.commit()
     from chatter_metrics import record_generated
     record_generated(channel)
     from chatter_relationships import note_output, safe
     safe(lambda: note_output(cursor.lastrowid, bot_guid, bot_name, message))
+    return getattr(cursor, "lastrowid", None) or True
 
 
 def query_item_details(

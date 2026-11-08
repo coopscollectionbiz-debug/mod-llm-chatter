@@ -457,6 +457,59 @@ def get_llm_client(config):
         return _main_client
 
 
+class CircuitBreaker:
+    """Stops provider traffic briefly after consecutive failures.
+
+    Opens after ``LLM.CircuitFailures`` consecutive failed requests and
+    stays open for ``LLM.CircuitOpenSeconds``; the first request after that
+    is a probe. Chatter then degrades to silence or deterministic fallback
+    lines instead of piling timed-out requests onto every worker.
+    """
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self.failures = 0
+        self.open_until = 0.0
+
+    def allow(self, config):
+        with self._lock:
+            return self._clock() >= self.open_until
+
+    def is_open(self):
+        with self._lock:
+            return self._clock() < self.open_until
+
+    def record(self, ok, config):
+        threshold = max(1, int(config.get('LLMChatter.LLM.CircuitFailures', 5)))
+        seconds = max(1.0, float(config.get('LLMChatter.LLM.CircuitOpenSeconds', 30)))
+        with self._lock:
+            if ok:
+                self.failures = 0
+                return
+            self.failures += 1
+            if self.failures >= threshold:
+                self.open_until = self._clock() + seconds
+                self.failures = 0
+                logger.warning('LLM circuit open for %.0fs after %d consecutive failures', seconds, threshold)
+
+
+_breaker = CircuitBreaker()
+
+
+def provider_available(config):
+    """False while the circuit breaker is open."""
+    return _breaker.allow(config)
+
+
+def _note_skip(reason):
+    try:
+        from chatter_metrics import record_skip
+        record_skip(f'llm.{reason}')
+    except Exception:
+        pass
+
+
 def call_llm(
     client: Any,
     prompt: str,
@@ -466,11 +519,25 @@ def call_llm(
     *,
     label: str = '',
     metadata: dict = None,
+    deadline: float = None,
 ) -> str:
     """Call LLM API.
 
     Supports Anthropic, OpenAI, Google, OpenRouter, and Ollama.
+
+    ``deadline`` (``time.monotonic()`` value) skips the request when too
+    little of the reply window remains for the line to be delivered. An
+    open circuit breaker also skips it. Both return None without any
+    provider traffic, exactly like an ordinary failure.
     """
+    if not _breaker.allow(config):
+        _note_skip('circuit_open')
+        return None
+    if deadline is not None:
+        budget = float(config.get('LLMChatter.LLM.MinReplyBudgetSeconds', 1.5))
+        if deadline - time.monotonic() < budget:
+            _note_skip('deadline')
+            return None
     from chatter_relationships import enrich_prompt
     prompt = enrich_prompt(prompt, label)
     provider = config.get(
@@ -559,6 +626,7 @@ def call_llm(
         duration_ms = int(
             (time.monotonic() - t0) * 1000
         )
+        _breaker.record(not failed, config)
         try:
             from chatter_metrics import record_provider_call
             record_provider_call(

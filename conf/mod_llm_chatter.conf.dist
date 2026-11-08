@@ -2537,6 +2537,176 @@ LLMChatter.LLM.MaxRetries = 1
 #
 LLMChatter.Diagnostics.IntervalSeconds = 0
 
+###################################################################################################
+# CHATTER 2.0 — CONTEXT, KNOWLEDGE, DIALOGUE, WHISPERS, RESILIENCE AND TRACING
+#
+#   Normal mode only. All settings below apply to player-directed (reactive)
+#   replies: Party, General and whispers. Ambient chatter is unchanged.
+#   [WORLD] keys are read by the worldserver, [BRIDGE] keys by the Python
+#   bridge. Every [WORLD] key is reload-safe.
+###################################################################################################
+
+#
+#   LLMChatter.Dialogue.Pipeline [BRIDGE]
+#       2 = Chatter 2.0: social decision layer (one best-fit responder or
+#           silence), verified knowledge and live evidence, compact prompt,
+#           delivery-time claim revalidation.
+#       1 = legacy Patch 1 reactive Party prompt path (rollback switch).
+#       Default: 2
+#
+LLMChatter.Dialogue.Pipeline = 2
+
+#
+#   LLMChatter.Dialogue.MaxTokens [BRIDGE]
+#       Output budget for one reactive reply line.
+#       Default: 160
+#
+LLMChatter.Dialogue.MaxTokens = 160
+
+#
+#   LLMChatter.Dialogue.FallbackEnable [BRIDGE]
+#       When the model is unavailable (failure, open circuit, or no time left
+#       before the turn expires), answer a direct question with a short,
+#       deterministic line ONLY if it is fully backed by evidence ("mana sec",
+#       "<npc> starts it"). Otherwise stay silent.
+#       Default: 1
+#
+LLMChatter.Dialogue.FallbackEnable = 1
+
+#
+#   LLMChatter.Context.LiveStateEnable [WORLD][BRIDGE]
+#       Capture Party-visible live state (alive, combat, health, power, map,
+#       instance, phase) of the turn's eligible responders at ingress, and
+#       revalidate any claim derived from it before delivery.
+#       Default: 1
+#
+LLMChatter.Context.LiveStateEnable = 1
+
+#
+#   LLMChatter.Context.RareScanRadius [WORLD]
+#       Radius (yards) of the single grid search for VISIBLE rare creatures,
+#       performed only when the turn mentions rares. A rare counts as seen
+#       only if a responder can currently see it (alive, same map/instance/
+#       phase, within 100 yards). 0 disables rare observation. Max 150.
+#       Default: 80
+#
+LLMChatter.Context.RareScanRadius = 80
+
+#
+#   LLMChatter.Context.LiveTTLSeconds / RareTTLSeconds [BRIDGE]
+#       Maximum age of a live observation for it to be shown to the model.
+#       Delivery revalidates claims independently of these values.
+#       Defaults: 6 / 8
+#
+LLMChatter.Context.LiveTTLSeconds = 6
+LLMChatter.Context.RareTTLSeconds = 8
+
+#
+#   LLMChatter.Context.BudgetChars [BRIDGE]
+#       Character budget for the DATA block; highest-priority evidence wins.
+#       Default: 900
+#
+LLMChatter.Context.BudgetChars = 900
+
+#
+#   LLMChatter.Knowledge.Enable [BRIDGE]
+#       Deterministic, read-only world-database lookups for quest, item, loot,
+#       boss and NPC-service questions in normal conversation. Native links
+#       identify entities by exact ID; plain-text titles are never resolved.
+#       Default: 1
+#
+LLMChatter.Knowledge.Enable = 1
+
+#
+#   LLMChatter.Knowledge.WorldDatabase [BRIDGE]
+#       World database name on the same server as LLMChatter.Database.*.
+#       Default: acore_world
+#
+LLMChatter.Knowledge.WorldDatabase = acore_world
+
+#
+#   LLMChatter.Knowledge.User / Password [BRIDGE]
+#       Optional least-privilege account with SELECT on the world database.
+#       Empty = reuse LLMChatter.Database.User/Password. Sessions are always
+#       set READ ONLY regardless.
+#       Default: (empty)
+#
+LLMChatter.Knowledge.User =
+LLMChatter.Knowledge.Password =
+
+#
+#   LLMChatter.Knowledge.QueryTimeoutMs / ConnectTimeoutSeconds [BRIDGE]
+#       Server-side statement cap (MAX_EXECUTION_TIME) and connect timeout.
+#       Lookups also stop at the turn's own expiry.
+#       Defaults: 300 / 2
+#
+LLMChatter.Knowledge.QueryTimeoutMs = 300
+LLMChatter.Knowledge.ConnectTimeoutSeconds = 2
+
+#
+#   LLMChatter.Knowledge.PoolSize / CacheSize / CacheSeconds [BRIDGE]
+#       Pooled read-only connections, and an LRU of results keyed by world
+#       data revision (applied update count + latest timestamp), so a world
+#       DB update invalidates cached answers.
+#       Defaults: 2 / 2048 / 900
+#
+LLMChatter.Knowledge.PoolSize = 2
+LLMChatter.Knowledge.CacheSize = 2048
+LLMChatter.Knowledge.CacheSeconds = 900
+
+#
+#   LLMChatter.Knowledge.MaxLookupsPerTurn [BRIDGE]
+#       Default: 2
+#
+LLMChatter.Knowledge.MaxLookupsPerTurn = 2
+
+#
+#   LLMChatter.Whisper.Enable [WORLD][BRIDGE]
+#       Normal-mode replies to real players' whispers. Every Playerbots
+#       command and '@' selector stays with Playerbots and never reaches the
+#       bridge. Replies are bound to the exact sender/recipient pair and use
+#       only that pair's history. Disabled by default for staged rollout.
+#       Default: 0
+#
+LLMChatter.Whisper.Enable = 0
+
+#
+#   LLMChatter.Whisper.CooldownSeconds / ExpirySeconds [WORLD]
+#       Minimum gap between admitted whisper turns per pair, and how long a
+#       whisper turn may wait for its reply before it is abandoned.
+#       Defaults: 4 / 20
+#
+LLMChatter.Whisper.CooldownSeconds = 4
+LLMChatter.Whisper.ExpirySeconds = 20
+
+#
+#   LLMChatter.LLM.MinReplyBudgetSeconds [BRIDGE]
+#       Skip a reactive model call when less than this remains before the
+#       turn expires; the reply could not be delivered in time anyway.
+#       Default: 1.5
+#
+LLMChatter.LLM.MinReplyBudgetSeconds = 1.5
+
+#
+#   LLMChatter.LLM.CircuitFailures / CircuitOpenSeconds [BRIDGE]
+#       After this many consecutive provider failures, stop calling the
+#       provider for CircuitOpenSeconds. Chatter degrades to silence or
+#       evidence-backed fallback lines; gameplay is never blocked.
+#       Defaults: 5 / 30
+#
+LLMChatter.LLM.CircuitFailures = 5
+LLMChatter.LLM.CircuitOpenSeconds = 30
+
+#
+#   LLMChatter.Trace.Enable [BRIDGE]
+#       One JSON line per reactive decision on the "chatter.trace" logger:
+#       why a bot was selected or a turn suppressed, knowledge categories,
+#       evidence freshness, lookup failures, claims and timings. Never logs
+#       message text, prompts or private character data.
+#       Default: 0
+#
+LLMChatter.Trace.Enable = 0
+
 #
 #   LLMChatter.MaxMessageLength
 #       Maximum character length for chat messages.

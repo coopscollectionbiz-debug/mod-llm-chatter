@@ -11,6 +11,7 @@
 #include "LLMChatterBG.h"
 #include "LLMChatterGroup.h"
 #include "LLMChatterGroupInternal.h"
+#include "LLMChatterLiveContext.h"
 #include "LLMChatterProximity.h"
 #include "LLMChatterShared.h"
 
@@ -956,6 +957,7 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
 
     std::string botGuids;
     std::string humanNames;
+    std::vector<Player*> reactiveBots;
     bool const isRaid = group->isRaidGroup();
     uint8 const subgroup = group->GetMemberGroup(player->GetGUID());
     for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
@@ -967,7 +969,10 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
         if (IsPlayerBot(member))
         {
             if (member->GetTeamId() == player->GetTeamId())
+            {
                 botGuids += (botGuids.empty() ? "" : ",") + std::to_string(member->GetGUID().GetCounter());
+                reactiveBots.push_back(member);
+            }
         }
         else
             humanNames += (humanNames.empty() ? "\"" : ",\"") + JsonEscape(member->GetName()) + "\"";
@@ -987,8 +992,13 @@ void HandleGroupPlayerBeforeSendChatMessageImpl(
         "\"player_message\":\"" +
             JsonEscape(safeMsg) + "\","
         "\"group_id\":" +
-            std::to_string(groupId) +
-        "}";
+            std::to_string(groupId);
+    // Party-visible live state of the eligible responders only, captured
+    // now and revalidated at send for any claim a reply relies on.
+    std::string const live = BuildReactiveLiveJson(player, reactiveBots, MessageMentionsRare(safeMsg));
+    if (!live.empty())
+        extraData += "," + live;
+    extraData += "}";
 
     extraData = EscapeString(extraData);
 

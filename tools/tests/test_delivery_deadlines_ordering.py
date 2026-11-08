@@ -67,7 +67,7 @@ class FetchFixture:
                 emote TEXT, npc_spawn_id INTEGER, player_guid INTEGER, sequence INTEGER,
                 event_id INTEGER, group_id INTEGER, delivery_policy TEXT, delivery_reason TEXT,
                 owner_subsystem TEXT, addressee_player_guid INTEGER, addressee_bot_guid INTEGER,
-                addressee_npc_spawn_id INTEGER, queue_id INTEGER, delivered INTEGER,
+                addressee_npc_spawn_id INTEGER, claim_json TEXT, queue_id INTEGER, delivered INTEGER,
                 delivered_at REAL, deliver_at REAL, drop_reason TEXT);
             CREATE INDEX idx_event ON llm_chatter_messages(event_id);
             CREATE INDEX idx_queue ON llm_chatter_messages(queue_id);

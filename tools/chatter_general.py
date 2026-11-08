@@ -775,6 +775,7 @@ def process_general_player_msg_event(
 
     # Parse and resolve WoW links in message
     link_context = ""
+    raw_player_message = player_message
     player_message, link_context = (
         resolve_and_format_links(
             config, player_message
@@ -891,6 +892,14 @@ def process_general_player_msg_event(
             subzone_lore=subzone_lore,
             brief_casual=brief_casual,
         )
+        # Chatter 2.0: verified public server-data facts for linked quests
+        # and items. Never live state or private/party facts in General.
+        if str(config.get('LLMChatter.Dialogue.Pipeline', '2')) == '2':
+            from chatter_reply import event_deadline, with_public_knowledge
+            prompt1, general_knowledge = with_public_knowledge(
+                config, prompt1, raw_player_message, event_deadline(db, event_id))
+            if general_knowledge:
+                zone_meta['knowledge'] = general_knowledge
 
         max_tokens = int(config.get(
             'LLMChatter.MaxTokens', 200

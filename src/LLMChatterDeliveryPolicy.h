@@ -16,6 +16,7 @@ enum class ReactiveRoute
     Legacy,
     Party,
     General,
+    Whisper,
     DropRelay,
     DropUnscoped
 };
@@ -27,11 +28,17 @@ inline ReactiveRoute ClassifyReactiveRoute(std::string_view event, std::string_v
         return ReactiveRoute::DropRelay;
     bool const party = event == "bot_group_player_msg" || reason == "bot_group_player_msg";
     bool const general = event == "player_general_msg" || reason == "player_general_msg";
-    if (!party && !general)
-        return ReactiveRoute::Legacy;
-    if (!hasScope || (party && general) || (party ? channel != "party" : channel != "general"))
+    bool const whisper = event == "bot_player_whisper" || reason == "bot_player_whisper";
+    // A whisper row must never fall into the legacy General catch-all.
+    if (!party && !general && !whisper)
+        return channel == "whisper" ? ReactiveRoute::DropUnscoped : ReactiveRoute::Legacy;
+    if (!hasScope || int(party) + int(general) + int(whisper) != 1)
         return ReactiveRoute::DropUnscoped;
-    return party ? ReactiveRoute::Party : ReactiveRoute::General;
+    if (party)
+        return channel == "party" ? ReactiveRoute::Party : ReactiveRoute::DropUnscoped;
+    if (general)
+        return channel == "general" ? ReactiveRoute::General : ReactiveRoute::DropUnscoped;
+    return channel == "whisper" ? ReactiveRoute::Whisper : ReactiveRoute::DropUnscoped;
 }
 
 inline bool MatchesReactiveAudience(std::string_view captured, std::string_view source, std::string_view speaker)
@@ -88,7 +95,9 @@ inline std::string BuildFetchSql(bool priorityOrder, uint32_t limit, uint32_t ex
         "JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(e.extra_data),e.extra_data,'{}'),"
         "'$.reactive_audience')) AS reactive_audience, "
         "JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(e.extra_data),e.extra_data,'{}'),"
-        "'$.reactive_turn')) AS reactive_turn "
+        "'$.reactive_turn')) AS reactive_turn, "
+        // Volatile claims a reply relied on, revalidated before send.
+        "m.claim_json "
         "FROM llm_chatter_messages m LEFT JOIN llm_chatter_events e ON m.event_id = e.id "
         "WHERE m.delivered = 0 AND m.deliver_at <= NOW(6) "
         "AND m.deliver_at >= DATE_SUB(NOW(6), INTERVAL " + expiry + " SECOND) "

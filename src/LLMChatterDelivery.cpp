@@ -9,8 +9,10 @@
 #include "LLMChatterDeliveryBatch.h"
 #include "LLMChatterDeliveryPolicy.h"
 #include "LLMChatterGuild.h"
+#include "LLMChatterLiveContext.h"
 #include "LLMChatterProximity.h"
 #include "LLMChatterShared.h"
+#include "LLMChatterWhisper.h"
 
 #include "Channel.h"
 #include "ChannelMgr.h"
@@ -24,6 +26,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "SocialMgr.h"
 #include "StringFormat.h"
 #include "Timer.h"
 #include "World.h"
@@ -327,6 +330,7 @@ struct DeliveryRow
     int64 remainingUs = -1;
     std::string reactiveAudience;
     std::string reactiveTurn;
+    std::string claimJson;
 };
 
 enum class DeliveryOutcome
@@ -400,6 +404,7 @@ static DeliveryOutcome DeliverRow(
     }
     bool const reactiveParty = route == ReactiveRoute::Party;
     bool const reactiveGeneral = route == ReactiveRoute::General;
+    bool const reactiveWhisper = route == ReactiveRoute::Whisper;
 
     // Master General-channel toggle. If General chatter is
     // disabled, deliberately consume any already-queued General
@@ -500,7 +505,7 @@ static DeliveryOutcome DeliverRow(
         }
     }
 
-    if (reactiveParty || reactiveGeneral)
+    if (reactiveParty || reactiveGeneral || reactiveWhisper)
     {
         Player* source = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(eventSubjectGuid));
         if (!bot || !IsPlayerBot(bot) || !bot->IsInWorld() || !source || IsPlayerBot(source) ||
@@ -517,7 +522,28 @@ static DeliveryOutcome DeliverRow(
             return DeliveryOutcome::Dropped;
         }
 
-        if (reactiveParty)
+        // A reply generated from a live observation ("mana sec", "I can see
+        // the rare") is dropped if that observation stopped being true.
+        if (std::string claimReason; !ReactiveClaimsHold(row.claimJson, bot, claimReason))
+        {
+            dropReasonOut = claimReason;
+            return DeliveryOutcome::Dropped;
+        }
+
+        if (reactiveWhisper)
+        {
+            PlayerSocial* social = source->GetSocial();
+            if (row.reactiveAudience != WhisperReactiveAudience(source, bot) ||
+                (social && social->HasIgnore(bot->GetGUID())))
+            {
+                dropReasonOut = "stale_whisper_audience";
+                return DeliveryOutcome::Dropped;
+            }
+            if (!withinDeadline())
+                return DeliveryOutcome::Expired;
+            bot->Whisper(processedMessage, LANG_UNIVERSAL, source);
+        }
+        else if (reactiveParty)
         {
             Group* group = source->GetOriginalGroup();
             if (!group)
@@ -1543,6 +1569,7 @@ std::vector<DeliveryRow> ParseDeliveryRows(QueryResult result)
         row.remainingUs = FieldOr<int64>(fields[28], -1);
         row.reactiveAudience = FieldOr<std::string>(fields[29], "");
         row.reactiveTurn = FieldOr<std::string>(fields[30], "");
+        row.claimJson = FieldOr<std::string>(fields[31], "");
         rows.push_back(std::move(row));
     } while (result->NextRow());
 
@@ -1560,6 +1587,8 @@ std::string DeliveryDestinationKey(DeliveryRow const& row)
         // Local scenes are anchored to one real player.
         return "local:" + std::to_string(row.playerGuid);
     }
+    if (channel == "whisper")
+        return "whisper:" + std::to_string(row.eventSubjectGuid) + ":" + std::to_string(row.botGuid);
 
     Player* bot = row.botGuid
         ? ObjectAccessor::FindPlayer(

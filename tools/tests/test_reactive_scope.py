@@ -107,7 +107,7 @@ def test_party_handler_calls_only_the_addressed_bot_and_defers_transcript_to_del
         history = stack.enter_context(patch.object(group, "_store_chat"))
         stack.enter_context(patch.object(group, "_mark_event"))
         assert group.process_group_player_msg_event(
-            db, None, {"LLMChatter.Memory.Enable": 0}, party_event("Ash, ready to pull?"),
+            db, None, {"LLMChatter.Memory.Enable": 0, "LLMChatter.Dialogue.Pipeline": "1"}, party_event("Ash, ready to pull?"),
         )
     call.assert_called_once()
     queue.assert_called_once()

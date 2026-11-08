@@ -390,6 +390,14 @@ void LLMChatterConfig::LoadConfig()
             "ResponsiveMinGapSeconds", 2);
     _reactivePartyExpirySeconds = std::clamp(
         sConfigMgr->GetOption<uint32>("LLMChatter.PartyGate.ReactiveExpirySeconds", 12), 1u, 60u);
+    _liveContextEnable = GetChatterOption<bool>("LLMChatter.Context.LiveStateEnable", true);
+    _liveRareScanRadius = std::min<uint32>(
+        GetChatterOption<uint32>("LLMChatter.Context.RareScanRadius", 80), 150);
+    _whisperChatterEnable = GetChatterOption<bool>("LLMChatter.Whisper.Enable", false);
+    _whisperCooldownSeconds = std::clamp<uint32>(
+        GetChatterOption<uint32>("LLMChatter.Whisper.CooldownSeconds", 4), 1, 300);
+    _whisperExpirySeconds = std::clamp<uint32>(
+        GetChatterOption<uint32>("LLMChatter.Whisper.ExpirySeconds", 20), 5, 60);
     _partyGateUrgentMinGapSeconds =
         GetChatterOption<uint32>(
             "LLMChatter.PartyGate."

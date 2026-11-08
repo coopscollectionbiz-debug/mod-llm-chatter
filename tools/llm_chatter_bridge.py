@@ -372,6 +372,9 @@ def fetch_pending_events(db, config, max_count):
               OR e.event_type LIKE 'bg_%%'
               OR e.event_type LIKE 'raid_%%'
               OR e.event_type = 'player_general_msg'
+              -- Whispers cross zones: the bound pair is checked by the
+              -- handler and again at delivery, not by zone presence.
+              OR e.event_type = 'bot_player_whisper'
               OR e.event_type = 'player_enters_zone'
               OR e.event_type LIKE 'proximity_%%'
               OR e.event_type LIKE 'guild_%%'
@@ -1276,6 +1279,12 @@ def main():
     configure_relationships(config)
     from chatter_rss import configure as configure_rss, schedule_refresh
     configure_rss(config)
+    # Chatter 2.0: read-only world knowledge (lazy pooled connections, no
+    # startup query) and content-free decision tracing.
+    from chatter_knowledge import configure as configure_knowledge
+    configure_knowledge(config)
+    from chatter_trace import configure as configure_trace
+    configure_trace(config)
     init_group_config(config)
     init_general_config(config)
 
